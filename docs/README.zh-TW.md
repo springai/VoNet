@@ -5,7 +5,7 @@
 <h1 align="center">VoNet</h1>
 
 <p align="center">
-  <img alt="Go" src="https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go&logoColor=white">
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.27.3-00ADD8?style=flat-square&logo=go&logoColor=white">
   <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=111111">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.8-3178C6?style=flat-square&logo=typescript&logoColor=white">
   <img alt="Vite" src="https://img.shields.io/badge/Vite-7-646CFF?style=flat-square&logo=vite&logoColor=white">
@@ -254,7 +254,7 @@ docker pull ghcr.io/mengmengcode/vonet:latest
 
 依賴要求：
 
-- Go 1.25 或更新版本
+- Go 1.27.3 或更新版本
 - Node.js 20 或更新版本
 - npm
 

@@ -12,7 +12,7 @@ COPY web/ ./
 RUN npm run build
 
 # ---- Stage 2: cross-compile the Go binary on the native builder ----
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS go-builder
 RUN apk add --no-cache git
 WORKDIR /src
 

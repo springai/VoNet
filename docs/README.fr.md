@@ -5,7 +5,7 @@
 <h1 align="center">VoNet</h1>
 
 <p align="center">
-  <img alt="Go" src="https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go&logoColor=white">
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.27.3-00ADD8?style=flat-square&logo=go&logoColor=white">
   <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=111111">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.8-3178C6?style=flat-square&logo=typescript&logoColor=white">
   <img alt="Vite" src="https://img.shields.io/badge/Vite-7-646CFF?style=flat-square&logo=vite&logoColor=white">
@@ -262,7 +262,7 @@ Recréez le conteneur après avoir tiré la nouvelle image.
 
 Prérequis :
 
-- Go 1.25 ou plus récent
+- Go 1.27.3 ou plus récent
 - Node.js 20 ou plus récent
 - npm
 
