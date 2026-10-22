@@ -69,25 +69,25 @@ Available features depend on the module firmware, USB composition, SIM/eSIM capa
 As root (including OpenWrt/Kwrt, where `sudo` is normally absent):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | bash
 ```
 
 From a normal user on a distribution with sudo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | sudo bash
 ```
 
 Check the host's VoWiFi/XFRM prerequisites without installing VoNet:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | bash -s -- --check-env
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | bash -s -- --check-env
 ```
 
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh -o install.sh
 sudo bash install.sh 0.0.2
 ```
 
@@ -101,7 +101,7 @@ If your kernel cannot provide XFRM/IPsec and you only need non-VoWiFi features
 such as cellular SMS or data, install with `--skip-vowifi-check`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh -o install.sh
 sudo bash install.sh --skip-vowifi-check
 ```
 
@@ -251,7 +251,7 @@ VoNet reads an optional JSON configuration file from `VONET_CONFIG`, then applie
 | `VONET_SECURE_COOKIES` | `false` | Marks session cookies as secure when HTTPS is used. |
 | `VONET_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown timeout. |
 | `VONET_MAX_REQUEST_BODY_BYTES` | `1048576` | Maximum API request body size. |
-| `VONET_REPO` | `MengMengCode/VoNet` | Trusted GitHub repository used by the self-updater, in `owner/name` form. |
+| `VONET_REPO` | `springai/VoNet` | Trusted GitHub repository used by the self-updater, in `owner/name` form. |
 | `GITHUB_TOKEN` | empty | Optional GitHub token for private repositories or higher API limits. |
 
 User-supplied Apple carrier bundles can be converted into reviewable,
@@ -290,13 +290,13 @@ USSI dialog handling follows [3GPP TS 24.390](https://www.etsi.org/deliver/etsi_
 Check for a newer GitHub Release:
 
 ```bash
-vonet update --check --repo MengMengCode/VoNet
+vonet update --check --repo springai/VoNet
 ```
 
 Install the latest release:
 
 ```bash
-sudo vonet update --repo MengMengCode/VoNet
+sudo vonet update --repo springai/VoNet
 ```
 
 The updater downloads the binary matching the current Linux architecture, verifies it with the published `SHA256SUMS`, replaces the executable atomically, and restarts the `vonet` systemd service when available.
@@ -419,6 +419,7 @@ cd web && npm run build
 ## Thanks
 - [Nodeseek.com](https://www.nodeseek.com) — A community dedicated to servers
 - [Linux.do](https://linux.do) — An inspiring tech community
+- [VoCat](https://github.com/MengMengCode/VoCat) — A cellular modem testing and control toolkit
 - [iniwex5](https://github.com/iniwex5) — Style and Functionality Guidelines
 
 ## License

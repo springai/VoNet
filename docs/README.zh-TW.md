@@ -68,25 +68,25 @@ VoNet 面向基於高通晶片、並暴露相容 AT、QMI、序列埠與 USB 網
 已是 root（包括預設沒有 `sudo` 的 OpenWrt/Kwrt）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | bash
 ```
 
 一般 Linux 使用者且系統裝有 sudo：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | sudo bash
 ```
 
 只檢查 VoWiFi/XFRM 環境，不安裝 VoNet：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | bash -s -- --check-env
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | bash -s -- --check-env
 ```
 
 安裝指定版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh -o install.sh
 sudo bash install.sh 0.0.2
 ```
 
@@ -95,7 +95,7 @@ VoWiFi IMS 必須使用 Linux XFRM/IPsec。OpenWrt/Kwrt 上安裝腳本會從目
 如果核心無法提供 XFRM/IPsec，而你只需要行動通訊簡訊或數據等非 VoWiFi 功能，可使用 `--skip-vowifi-check` 安裝：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh -o install.sh
 sudo bash install.sh --skip-vowifi-check
 ```
 
@@ -203,7 +203,7 @@ VoNet 先從 `VONET_CONFIG` 讀取可選的 JSON 配置檔，再套用 `VONET_*`
 | `VONET_SECURE_COOKIES` | `false` | 在使用 HTTPS 時將工作階段 Cookie 標記為安全。 |
 | `VONET_SHUTDOWN_TIMEOUT` | `10s` | 優雅關閉逾時時間。 |
 | `VONET_MAX_REQUEST_BODY_BYTES` | `1048576` | API 請求主體最大位元組數。 |
-| `VONET_REPO` | `MengMengCode/VoNet` | 自我更新器使用的受信任 GitHub 倉庫，格式為 `owner/name`。 |
+| `VONET_REPO` | `springai/VoNet` | 自我更新器使用的受信任 GitHub 倉庫，格式為 `owner/name`。 |
 | `GITHUB_TOKEN` | 空 | 可選的 GitHub token，用於私有倉庫或更高的 API 限額。 |
 
 使用者提供的 Apple 電信業者設定套件可透過 `vonet carrier import-ipcc` 轉換為可供審查、符合允許清單的電信業者設定檔；請參閱 [docs/CARRIER_IPCC_IMPORT.md](CARRIER_IPCC_IMPORT.md)。
@@ -231,13 +231,13 @@ VoNet 先從 `VONET_CONFIG` 讀取可選的 JSON 配置檔，再套用 `VONET_*`
 檢查是否有更新的 GitHub Release：
 
 ```bash
-vonet update --check --repo MengMengCode/VoNet
+vonet update --check --repo springai/VoNet
 ```
 
 安裝最新發佈版：
 
 ```bash
-sudo vonet update --repo MengMengCode/VoNet
+sudo vonet update --repo springai/VoNet
 ```
 
 更新器會下載與目前 Linux 架構匹配的二進位檔，使用已發佈的 `SHA256SUMS` 進行校驗，原子性地替換可執行檔，並在可用時重新啟動 `vonet` systemd 服務。
@@ -340,10 +340,10 @@ cd web && npm run build
 
 參見 [LICENSE](../LICENSE)。
 
-<a href="https://star-history.dera.page/#MengMengCode/VoNet">
+<a href="https://star-history.dera.page/#springai/VoNet">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=MengMengCode/VoNet&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=MengMengCode/VoNet" />
-   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=MengMengCode/VoNet" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=springai/VoNet&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=springai/VoNet" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=springai/VoNet" />
  </picture>
 </a>

@@ -24,7 +24,7 @@ set -euo pipefail
 # --- Publisher configuration -------------------------------------------------
 # Default GitHub repository in owner/name form. Publishers: set this to your
 # own repo, or override per-run with VONET_REPO.
-REPO="${VONET_REPO:-MengMengCode/VoNet}"
+REPO="${VONET_REPO:-springai/VoNet}"
 
 INSTALL_DIR="/opt/vonet/bin"
 BINARY_PATH="${INSTALL_DIR}/vonet"

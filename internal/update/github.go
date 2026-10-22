@@ -40,7 +40,7 @@ type CheckResult struct {
 
 const (
 	githubAPI         = "https://api.github.com"
-	DefaultRepository = "MengMengCode/VoNet"
+	DefaultRepository = "springai/VoNet"
 )
 
 var githubHTTPClient = &http.Client{

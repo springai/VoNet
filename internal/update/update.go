@@ -429,7 +429,7 @@ Fetch the latest release from GitHub and replace this binary in place.
 Flags:
   --check            Report whether an update is available, then exit.
   --force            Reinstall even when already at the latest version.
-  --repo owner/name  GitHub repository (default: $VONET_REPO or MengMengCode/VoNet).
+  --repo owner/name  GitHub repository (default: $VONET_REPO or springai/VoNet).
   --target path      Binary to replace (default: /opt/vonet/bin/vonet if
                      present, otherwise the running executable).
   --token token      GitHub bearer token (default: $GITHUB_TOKEN).

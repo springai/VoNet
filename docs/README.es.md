@@ -68,25 +68,25 @@ Las funciones disponibles dependen del firmware del módulo, la composición USB
 Como root (incluyendo OpenWrt/Kwrt, donde `sudo` normalmente está ausente):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | bash
 ```
 
 Desde un usuario normal en una distribución con sudo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | sudo bash
 ```
 
 Comprobar los prerrequisitos de VoWiFi/XFRM del host sin instalar VoNet:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | bash -s -- --check-env
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | bash -s -- --check-env
 ```
 
 Instalar una versión específica:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh -o install.sh
 sudo bash install.sh 0.0.2
 ```
 
@@ -99,7 +99,7 @@ nunca fuerce la instalación de kmods compilados para un kernel diferente.
 Si su kernel no puede proporcionar XFRM/IPsec y solo necesita funciones que no utilicen VoWiFi, como SMS celulares o datos, instale con `--skip-vowifi-check`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh -o install.sh
 sudo bash install.sh --skip-vowifi-check
 ```
 
@@ -211,7 +211,7 @@ VoNet lee un archivo de configuración JSON opcional desde `VONET_CONFIG` y lueg
 | `VONET_SECURE_COOKIES` | `false` | Marca las cookies de sesión como seguras cuando se usa HTTPS. |
 | `VONET_SHUTDOWN_TIMEOUT` | `10s` | Tiempo de espera de apagado ordenado. |
 | `VONET_MAX_REQUEST_BODY_BYTES` | `1048576` | Tamaño máximo del cuerpo de solicitud de la API. |
-| `VONET_REPO` | `MengMengCode/VoNet` | Repositorio de GitHub de confianza usado por el autoactualizador, en formato `owner/name`. |
+| `VONET_REPO` | `springai/VoNet` | Repositorio de GitHub de confianza usado por el autoactualizador, en formato `owner/name`. |
 | `GITHUB_TOKEN` | vacío | Token de GitHub opcional para repositorios privados o límites de API más altos. |
 
 Los paquetes de operador de Apple proporcionados por el usuario pueden convertirse con `vonet carrier import-ipcc` en perfiles de operador revisables y limitados a una lista de elementos permitidos; consulte [docs/CARRIER_IPCC_IMPORT.md](CARRIER_IPCC_IMPORT.md).
@@ -239,13 +239,13 @@ El cambio de perfil y el envío de SMS usan botones de confirmación de un solo 
 Comprobar si hay una GitHub Release más reciente:
 
 ```bash
-vonet update --check --repo MengMengCode/VoNet
+vonet update --check --repo springai/VoNet
 ```
 
 Instalar la última versión:
 
 ```bash
-sudo vonet update --repo MengMengCode/VoNet
+sudo vonet update --repo springai/VoNet
 ```
 
 El actualizador descarga el binario que coincide con la arquitectura Linux actual, lo verifica con el `SHA256SUMS` publicado, reemplaza el ejecutable de forma atómica y reinicia el servicio systemd `vonet` cuando está disponible.
@@ -348,10 +348,10 @@ cd web && npm run build
 
 Consulte [LICENSE](../LICENSE).
 
-<a href="https://star-history.dera.page/#MengMengCode/VoNet">
+<a href="https://star-history.dera.page/#springai/VoNet">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=MengMengCode/VoNet&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=MengMengCode/VoNet" />
-   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=MengMengCode/VoNet" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=springai/VoNet&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=springai/VoNet" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=springai/VoNet" />
  </picture>
 </a>

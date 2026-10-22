@@ -68,25 +68,25 @@ VoNet は、互換性のある AT、QMI、シリアル、USB ネットワーク�
 root として(`sudo` が通常存在しない OpenWrt/Kwrt を含む):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | bash
 ```
 
 sudo を持つディストリビューションの一般ユーザーから:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | sudo bash
 ```
 
 VoNet をインストールせずに、ホストの VoWiFi/XFRM 前提条件を確認する:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | bash -s -- --check-env
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | bash -s -- --check-env
 ```
 
 特定のバージョンをインストールする:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh -o install.sh
 sudo bash install.sh 0.0.2
 ```
 
@@ -95,7 +95,7 @@ VoWiFi IMS には Linux XFRM/IPsec が必要です。OpenWrt/Kwrt では、イ�
 カーネルが XFRM/IPsec を提供できず、セルラー SMS やデータ通信など VoWiFi 以外の機能のみが必要な場合は、`--skip-vowifi-check` を指定してインストールしてください：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh -o install.sh
 sudo bash install.sh --skip-vowifi-check
 ```
 
@@ -203,7 +203,7 @@ VoNet は `VONET_CONFIG` からオプションの JSON 設定ファイルを読�
 | `VONET_SECURE_COOKIES` | `false` | HTTPS 使用時にセッション Cookie をセキュアとしてマークします。 |
 | `VONET_SHUTDOWN_TIMEOUT` | `10s` | グレースフルシャットダウンのタイムアウト。 |
 | `VONET_MAX_REQUEST_BODY_BYTES` | `1048576` | API リクエストボディの最大サイズ。 |
-| `VONET_REPO` | `MengMengCode/VoNet` | 自己更新機能が使用する信頼された GitHub リポジトリ(`owner/name` 形式)。 |
+| `VONET_REPO` | `springai/VoNet` | 自己更新機能が使用する信頼された GitHub リポジトリ(`owner/name` 形式)。 |
 | `GITHUB_TOKEN` | 空 | プライベートリポジトリやより高い API レート制限のためのオプションの GitHub トークン。 |
 
 ユーザーが提供する Apple キャリアバンドルは、`vonet carrier import-ipcc` で、内容を確認可能で許可リストに準拠したキャリアプロファイルに変換できます。[docs/CARRIER_IPCC_IMPORT.md](CARRIER_IPCC_IMPORT.md) を参照してください。
@@ -231,13 +231,13 @@ Telegram 通知が有効で、Chat ID と Admin ID の両方が設定されて�
 より新しい GitHub Release を確認する:
 
 ```bash
-vonet update --check --repo MengMengCode/VoNet
+vonet update --check --repo springai/VoNet
 ```
 
 最新リリースをインストールする:
 
 ```bash
-sudo vonet update --repo MengMengCode/VoNet
+sudo vonet update --repo springai/VoNet
 ```
 
 アップデーターは、現在の Linux アーキテクチャに一致するバイナリをダウンロードし、公開された `SHA256SUMS` で検証し、実行ファイルをアトミックに置き換え、利用可能な場合は `vonet` systemd サービスを再起動します。
@@ -340,10 +340,10 @@ cd web && npm run build
 
 [LICENSE](../LICENSE) を参照してください。
 
-<a href="https://star-history.dera.page/#MengMengCode/VoNet">
+<a href="https://star-history.dera.page/#springai/VoNet">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=MengMengCode/VoNet&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=MengMengCode/VoNet" />
-   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=MengMengCode/VoNet" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=springai/VoNet&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=springai/VoNet" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=springai/VoNet" />
  </picture>
 </a>

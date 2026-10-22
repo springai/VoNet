@@ -68,25 +68,25 @@ VoNet هي لوحة تحكم ويب مفتوحة المصدر ومجموعة أ�
 بصفتك root (بما في ذلك OpenWrt/Kwrt، حيث يكون `sudo` غير موجود عادةً):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | bash
 ```
 
 من مستخدم عادي على توزيعة تحتوي على sudo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | sudo bash
 ```
 
 تحقق من متطلبات VoWiFi/XFRM على المضيف دون تثبيت VoNet:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh | bash -s -- --check-env
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh | bash -s -- --check-env
 ```
 
 تثبيت إصدار محدد:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh -o install.sh
 sudo bash install.sh 0.0.2
 ```
 
@@ -99,7 +99,7 @@ sudo bash install.sh 0.0.2
 إذا كانت النواة لا تستطيع توفير XFRM/IPsec وكنت تحتاج فقط إلى ميزات لا تعتمد على VoWiFi، مثل الرسائل القصيرة الخلوية أو البيانات، فثبّت باستخدام `--skip-vowifi-check`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MengMengCode/VoNet/master/scripts/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/springai/VoNet/master/scripts/install.sh -o install.sh
 sudo bash install.sh --skip-vowifi-check
 ```
 
@@ -211,7 +211,7 @@ docker run -d \
 | `VONET_SECURE_COOKIES` | `false` | يضع علامة آمنة على ملفات تعريف ارتباط الجلسة عند استخدام HTTPS. |
 | `VONET_SHUTDOWN_TIMEOUT` | `10s` | مهلة الإيقاف السلس. |
 | `VONET_MAX_REQUEST_BODY_BYTES` | `1048576` | الحد الأقصى لحجم جسم طلب API. |
-| `VONET_REPO` | `MengMengCode/VoNet` | مستودع GitHub الموثوق الذي يستخدمه المحدّث الذاتي، بصيغة `owner/name`. |
+| `VONET_REPO` | `springai/VoNet` | مستودع GitHub الموثوق الذي يستخدمه المحدّث الذاتي، بصيغة `owner/name`. |
 | `GITHUB_TOKEN` | فارغ | رمز GitHub اختياري للمستودعات الخاصة أو حدود API أعلى. |
 
 يمكن تحويل حزم إعدادات مشغّلي Apple التي يوفّرها المستخدم باستخدام `vonet carrier import-ipcc` إلى ملفات إعداد مشغّلين قابلة للمراجعة ومقيّدة بقائمة عناصر مسموح بها؛ انظر [docs/CARRIER_IPCC_IMPORT.md](CARRIER_IPCC_IMPORT.md).
@@ -239,13 +239,13 @@ docker run -d \
 تحقق من وجود GitHub Release أحدث:
 
 ```bash
-vonet update --check --repo MengMengCode/VoNet
+vonet update --check --repo springai/VoNet
 ```
 
 ثبّت أحدث إصدار:
 
 ```bash
-sudo vonet update --repo MengMengCode/VoNet
+sudo vonet update --repo springai/VoNet
 ```
 
 ينزّل المحدّث الملف الثنائي المطابق لبنية Linux الحالية، ويتحقق منه باستخدام `SHA256SUMS` المنشور، ويستبدل الملف التنفيذي بشكل ذري، ويعيد تشغيل خدمة systemd `vonet` عند توفرها.
@@ -348,10 +348,10 @@ cd web && npm run build
 
 انظر [LICENSE](../LICENSE).
 
-<a href="https://star-history.dera.page/#MengMengCode/VoNet">
+<a href="https://star-history.dera.page/#springai/VoNet">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=MengMengCode/VoNet&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=MengMengCode/VoNet" />
-   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=MengMengCode/VoNet" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=springai/VoNet&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=springai/VoNet" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=springai/VoNet" />
  </picture>
 </a>
