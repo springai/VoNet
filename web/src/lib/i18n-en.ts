@@ -391,7 +391,6 @@ export const EN_DICT: Record<string, string> = {
   "请输入用户名和密码": "Please enter your username and password",
   欢迎回来: "Welcome back",
   "登录失败，请检查凭证": "Sign-in failed. Check your credentials.",
-  "高通模块专业测试工具": "Qualcomm Module Professional Test Tool",
   "高通模块测试工具": "Qualcomm Module Test Tool",
   用户名: "Username",
   密码: "Password",

@@ -188,11 +188,17 @@ export function AuthenticatedShell({
         <aside
           className={cx(
             "ui-glass sidebar-shell relative h-full transition-[width] duration-200",
-            collapsed ? "w-[52px]" : "w-[232px]",
+            collapsed ? "w-[64px]" : "w-[260px]",
           )}
         >
-          <div className={cx("flex h-14 items-center px-4", collapsed && "justify-center px-0")}>
+          <div className={cx("flex h-20 items-center gap-3 px-4", collapsed && "justify-center px-0")}>
             <BrandLogo className={cx("sidebar-brand-logo", collapsed && "is-collapsed")} />
+            {!collapsed && (
+              <div className="min-w-0">
+                <div className="sidebar-brand-title">VoNet</div>
+                <div className="sidebar-brand-description">MODEM · PC/SC · PANEL</div>
+              </div>
+            )}
           </div>
           {menuList(collapsed)}
           {!collapsed && <div className="absolute bottom-4 w-full px-3">{userCard()}</div>}
@@ -201,8 +207,12 @@ export function AuthenticatedShell({
 
       <Drawer open={isMobile && mobileOpen} onClose={() => setMobileOpen(false)} className="mobile-drawer">
         <div className="sidebar-shell relative h-full bg-white/95 backdrop-blur-md dark:bg-[#141418]/95">
-          <div className="flex h-16 items-center px-4">
+          <div className="flex h-20 items-center gap-3 px-4">
             <BrandLogo className="sidebar-brand-logo" />
+            <div className="min-w-0">
+              <div className="sidebar-brand-title">VoNet</div>
+              <div className="sidebar-brand-description">MODEM · PC/SC · PANEL</div>
+            </div>
           </div>
           {menuList(false)}
           <div className="absolute bottom-4 w-full px-3">{userCard()}</div>

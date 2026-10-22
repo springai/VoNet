@@ -45,13 +45,9 @@ export default function LoginPage() {
         <div className="group relative overflow-hidden rounded-2xl border border-gray-100 bg-white/70 p-8 shadow-2xl backdrop-blur-xl dark:border-white/10 dark:bg-[#141418]/70">
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-indigo-500/8 to-transparent opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
           <div className="relative z-10 mb-10 text-center">
-            <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-white shadow-lg shadow-indigo-500/20 ring-1 ring-black/5 transition-transform duration-300 group-hover:scale-105 dark:bg-white/10 dark:ring-white/10">
-              <BrandLogo className="h-12 w-48 object-contain" />
-            </div>
-            <h2 className="bg-gradient-to-r from-gray-900 to-gray-600 bg-clip-text text-3xl font-bold text-transparent dark:from-white dark:to-gray-400">
-              vonet
-            </h2>
-            <p className="mt-3 text-sm tracking-wide text-gray-500 dark:text-gray-400">{t("高通模块专业测试工具")}</p>
+            <BrandLogo className="mx-auto mb-5 h-32 w-32 object-contain transition-transform duration-300 group-hover:scale-105" />
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">VoNet</h1>
+            <p className="mt-2 text-sm font-medium text-gray-500 dark:text-gray-400">MODEM · PC/SC · PANEL</p>
           </div>
           <form onSubmit={submit} className="relative z-10 space-y-6">
             <div className="space-y-2">
@@ -99,7 +95,7 @@ export default function LoginPage() {
           </form>
         </div>
         <div className="mt-6 text-center">
-          <p className="text-xs text-gray-500">vonet © 2026</p>
+          <p className="text-xs text-gray-500">VoNet © 2026</p>
         </div>
       </div>
     </div>

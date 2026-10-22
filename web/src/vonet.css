@@ -78,6 +78,7 @@ html.dark body {
   inset: 0;
   z-index: 9999;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   overflow: hidden;
@@ -86,35 +87,36 @@ html.dark body {
 .dark .vonet-boot-loader { background: #101014; }
 .vonet-boot-logo {
   display: block;
-  width: min(80vw, 480px);
-  height: auto;
-  aspect-ratio: 240 / 64;
-  object-fit: contain;
+  width: 144px;
+  height: 144px;
+  object-fit: cover;
+  border-radius: 8px;
+  box-shadow: 0 18px 50px rgb(180 83 9 / 16%);
 }
-.vonet-boot-logo path {
-  fill: transparent;
-  stroke: #1296db;
-  stroke-width: 7;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-dasharray: 10000;
-  stroke-dashoffset: 10000;
-  animation-duration: 1.9s;
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
+.vonet-boot-copy {
+  display: grid;
+  gap: 6px;
+  margin-top: 22px;
+  text-align: center;
 }
-.vonet-boot-logo path:nth-child(1) { animation-name: vonet-logo-draw-left; }
-.vonet-boot-logo path:nth-child(2) { animation-name: vonet-logo-draw-main; }
-.vonet-boot-logo path:nth-child(3) { animation-name: vonet-logo-draw-middle; }
-.vonet-boot-logo path:nth-child(4) { animation-name: vonet-logo-draw-right; }
-@media (prefers-reduced-motion: reduce) {
-  .vonet-boot-logo path {
-    animation: none;
-    fill: #1296db;
-    stroke: transparent;
-    stroke-dashoffset: 0;
-  }
+.vonet-boot-title {
+  color: #111827;
+  font-family: "Space Grotesk", Inter, sans-serif;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
 }
+.vonet-boot-description {
+  color: #6b7280;
+  font-family: Inter, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+.dark .vonet-boot-title { color: #f9fafb; }
+.dark .vonet-boot-description { color: #9ca3af; }
 
 ::selection {
   background: rgb(14 165 233 / 1);
@@ -271,33 +273,43 @@ html.dark .sidebar-shell {
 }
 .sidebar-brand-title {
   font-family: "Space Grotesk", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 1.62rem;
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  min-height: 1.75rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.05;
+  display: block;
   background: #1f2430;
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   filter: none;
   white-space: nowrap;
-  padding-right: 4px;
 }
 html.dark .sidebar-brand-title { background: #f3f4f6; background-clip: text; -webkit-background-clip: text; }
+.sidebar-brand-description {
+  margin-top: 5px;
+  overflow: hidden;
+  color: #7c8491;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html.dark .sidebar-brand-description { color: #9ca3af; }
 .sidebar-brand-logo {
-  width: min(9.5rem, 42vw);
-  height: auto;
-  aspect-ratio: 240 / 64;
+  width: 3.75rem;
+  height: 3.75rem;
   object-fit: contain;
   flex-shrink: 0;
   display: block;
 }
 .sidebar-brand-logo.is-collapsed {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 6px;
 }
 .sidebar-menu-label {
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;

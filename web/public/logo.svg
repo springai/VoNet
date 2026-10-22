@@ -1,60 +1,34 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 64" width="240" height="64" role="img" aria-label="VoNet logo">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="100%" height="100%" style="display: block; margin: auto;">
   <defs>
-    <!-- 左侧图标金色渐变 -->
+    <!-- 图标金色渐变 -->
     <linearGradient id="vnGoldLine" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#FDE047"/>
       <stop offset="50%" stop-color="#EAB308"/>
       <stop offset="100%" stop-color="#B45309"/>
     </linearGradient>
 
-    <!-- 文字金色渐变（精调金属质感） -->
-    <linearGradient id="vnGoldText" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#FEF08A"/>
-      <stop offset="40%" stop-color="#FDE047"/>
-      <stop offset="60%" stop-color="#EAB308"/>
-      <stop offset="100%" stop-color="#B45309"/>
-    </linearGradient>
-
-    <!-- 仅用于左侧图标的金色发光模糊滤镜 -->
+    <!-- 图标金色发光模糊滤镜 -->
     <filter id="vnIconGlow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="2.5" result="blur" />
+      <feGaussianBlur stdDeviation="24" result="blur" />
       <feComposite in="SourceGraphic" in2="blur" operator="over" />
     </filter>
   </defs>
 
-  <!-- 纯白背景 -->
-  <rect width="240" height="64" fill="#FFFFFF"/>
-
-  <!-- ================= 左侧图标：带模糊发光 ================= -->
-  <g fill="none" stroke="url(#vnGoldLine)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" filter="url(#vnIconGlow)">
-    <path d="M14 22 L22 38 L26 28 L30 38 L38 22"/>
-    <path d="M18 40 Q26 45 34 40" stroke-width="2"/>
-    <path d="M10 32 L14 34" stroke-width="1.6"/>
-    <path d="M42 32 L38 34" stroke-width="1.6"/>
-    <circle cx="22" cy="30" r="1.2" fill="url(#vnGoldLine)" stroke="none"/>
-    <circle cx="30" cy="30" r="1.2" fill="url(#vnGoldLine)" stroke="none"/>
+  <!-- 精准居中组：将原图形中心点精准对齐到 512, 512，并放大到画布边界 -->
+  <g transform="translate(512, 512) scale(2) translate(-512, -512)">
+    <g transform="translate(512, 512)">
+      <g transform="translate(-416, -520)" fill="none" stroke="url(#vnGoldLine)" stroke-width="35.2" stroke-linecap="round" stroke-linejoin="round" filter="url(#vnIconGlow)">
+        <!-- 主 V 形线框 -->
+        <path d="M224 352 L352 608 L416 448 L480 608 L608 352"/>
+        <!-- 底部圆弧 -->
+        <path d="M288 640 Q416 720 544 640" stroke-width="32"/>
+        <!-- 信号弧线 -->
+        <path d="M160 512 L224 544" stroke-width="25.6"/>
+        <path d="M672 512 L608 544" stroke-width="25.6"/>
+        <!-- 两个点 -->
+        <circle cx="352" cy="480" r="19.2" fill="url(#vnGoldLine)" stroke="none"/>
+        <circle cx="480" cy="480" r="19.2" fill="url(#vnGoldLine)" stroke="none"/>
+      </g>
+    </g>
   </g>
-
-  <!-- ================= 右侧文字：绝对清晰锐利（单层） ================= -->
-  <text x="54" y="37"
-        font-family="'Helvetica Neue', 'Segoe UI', Arial, sans-serif"
-        font-size="26"
-        font-weight="900"
-        fill="url(#vnGoldText)"
-        stroke="#78350F"
-        stroke-width="0.5"
-        letter-spacing="-1"
-        text-rendering="geometricPrecision">VoNet</text>
-
-  <!-- 下方的金色下划线 -->
-  <path d="M 54 42 L 138 42" fill="none" stroke="#EAB308" stroke-width="2.5" stroke-linecap="round" />
-
-  <!-- 副标题 -->
-  <text x="55" y="52"
-        font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
-        font-size="7.5"
-        font-weight="700"
-        fill="#B45309"
-        letter-spacing="1.2"
-        text-rendering="geometricPrecision">MODEM · PC/SC · PANEL</text>
 </svg>
