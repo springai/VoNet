@@ -608,7 +608,7 @@ func (manager *Manager) runOperations(
 		manager.mu.Lock()
 		item.lastErrorClass = state.LastErrorClass
 		item.operationCancel = nil
-		if manager.closed {
+		if manager.closed || manager.entries[deviceID] != item {
 			item.busy = false
 			manager.mu.Unlock()
 			return
@@ -870,6 +870,11 @@ func (manager *Manager) Remove(ctx context.Context, deviceID string) {
 		return
 	}
 	delete(manager.entries, deviceID)
+	item.desiredEnabled = false
+	item.autoRetryPending = false
+	item.reconnectPending = false
+	item.disablePending = false
+	item.provisioning = false
 	if item.provisioningCancel != nil {
 		item.provisioningCancel()
 	}

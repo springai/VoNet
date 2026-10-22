@@ -517,3 +517,56 @@ func TestManagerWithSIMBlocksLifecycleAndRemoveCancelsIt(t *testing.T) {
 		t.Fatalf("WithSIM error = %v, want context.Canceled", err)
 	}
 }
+
+func TestManagerRemovedEntryStopsAfterActiveOperation(t *testing.T) {
+	manager := New(Options{OperationTimeout: time.Second})
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	item := &entry{
+		orchestrator:   testOrchestrator(t, "removed-while-busy"),
+		desiredEnabled: true,
+	}
+	calls := 0
+	done := make(chan struct{})
+	manager.wg.Add(1)
+	go func() {
+		defer close(done)
+		manager.runOperations("removed-while-busy", item, func(context.Context, *vowifi.Orchestrator) error {
+			calls++
+			return nil
+		})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("removed entry worker continued after its operation")
+	}
+	if calls != 1 {
+		t.Fatalf("operation calls = %d, want 1", calls)
+	}
+}
+
+func TestManagerRemoveClearsPendingIntent(t *testing.T) {
+	manager := New(Options{OperationTimeout: time.Second})
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	if err := manager.Register(testOrchestrator(t, "remove-clears-intent")); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	item := manager.entries["remove-clears-intent"]
+	item.desiredEnabled = true
+	item.autoRetryPending = true
+	item.reconnectPending = true
+	item.disablePending = true
+	item.provisioning = true
+	manager.mu.Unlock()
+
+	manager.Remove(context.Background(), "remove-clears-intent")
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if item.desiredEnabled || item.autoRetryPending || item.reconnectPending ||
+		item.disablePending || item.provisioning {
+		t.Fatalf("removed entry retained pending state: %+v", item)
+	}
+}

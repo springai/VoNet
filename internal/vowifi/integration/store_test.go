@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -433,4 +434,35 @@ func (reader staticDeviceReader) Get(string) (device.Device, error) {
 			IMSI:  reader.imsi,
 		},
 	}, nil
+}
+
+func TestStateProjectorSaveIgnoresDeletedDevice(t *testing.T) {
+	database := testStore(t)
+	projector := StateProjector{Store: database}
+
+	err := projector.Save(context.Background(), vowifi.State{
+		DeviceID:  "deleted-device-id",
+		Phase:     vowifi.PhaseFailed,
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("expected nil error for deleted device, got %v", err)
+	}
+}
+
+func TestStateProjectorSaveReturnsRealStoreErrors(t *testing.T) {
+	database := testStore(t)
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	projector := StateProjector{Store: database}
+
+	err := projector.Save(context.Background(), vowifi.State{
+		DeviceID:  "ec20",
+		Phase:     vowifi.PhaseFailed,
+		UpdatedAt: time.Now().UTC(),
+	})
+	if err == nil || errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected a real store error, got %v", err)
+	}
 }

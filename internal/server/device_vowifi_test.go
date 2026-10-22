@@ -18,6 +18,7 @@ type fakeVoWiFiController struct {
 	state      vowifi.State
 	enabled    []bool
 	reconnects int
+	removed    []string
 	err        error
 }
 
@@ -36,6 +37,10 @@ func (controller *fakeVoWiFiController) RequestEnabled(
 func (controller *fakeVoWiFiController) RequestReconnect(string) (vowifi.State, error) {
 	controller.reconnects++
 	return controller.state, controller.err
+}
+
+func (controller *fakeVoWiFiController) Remove(_ context.Context, id string) {
+	controller.removed = append(controller.removed, id)
 }
 
 func TestShouldDeferModemSMSSync(t *testing.T) {
@@ -197,5 +202,31 @@ func TestVoWiFiReconnectRequiresEnabledPolicy(t *testing.T) {
 	}
 	if controller.reconnects != 0 {
 		t.Fatalf("reconnects = %d", controller.reconnects)
+	}
+}
+
+func TestDeleteDeviceRemovesVoWiFiRuntime(t *testing.T) {
+	database, err := store.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.UpsertDevice(context.Background(), store.Device{ID: "ec20", Name: "EC20"}); err != nil {
+		t.Fatal(err)
+	}
+	controller := &fakeVoWiFiController{}
+	server := &Server{
+		store:  database,
+		vowifi: controller,
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodDelete, "/api/devices/ec20", nil)
+	handled := server.handleDevicePath(recorder, request, "ec20", nil)
+	if !handled || recorder.Code != http.StatusOK {
+		t.Fatalf("handled = %v, code = %d, body = %s", handled, recorder.Code, recorder.Body.String())
+	}
+	if len(controller.removed) != 1 || controller.removed[0] != "ec20" {
+		t.Fatalf("removed = %#v, want ['ec20']", controller.removed)
 	}
 }

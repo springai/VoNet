@@ -1427,3 +1427,31 @@ ike: IKE_AUTH EAP round 1: ike: responder reported fatal notification 10500
 - 本文不包含真实 IMSI、ICCID、IMEI、设备序列号、电话号码、内部 IP 或密钥。
 
 ---
+
+### 53. 完善设备删除后的 VoWiFi 生命周期清理
+
+本次在同步上游 `4859412 FIX #181` 时保留了 VoNet 自有的 `VoWiFiDeviceRemover + Remove`
+等价实现，没有引入上游的 `Unregister` 双轨接口。
+
+**修改内容**:
+
+- `Remove` 删除 runtime entry 时同步清除 desired enable、自动重试、重连、禁用和
+  provisioning 等 pending 意图。
+- `runOperations` 在活动操作结束后检查 `manager.entries[deviceID] != item`，防止已经
+  删除或替换设备的旧 worker继续执行后续 enable、disable 或 reconnect。
+- `StateProjector.Save` 在 runtime 写入失败后确认设备是否已经删除；仅当设备返回
+  `store.ErrNotFound` 时忽略迟到状态写入，其他数据库错误继续返回。
+- 保留原有 `watchDone` 等待、`WithSIM` provisioning 取消、按需 `Ensure`、重试退避和
+  多设备启动错开逻辑。
+
+**测试覆盖**:
+
+- 异常设备和无 AT 口的非 PCSC 设备不会自动建档。
+- PCSC reader 没有 AT 口时仍会创建设备和 IMEI Lease。
+- PCIe/MHI WWAN 无 AT 口会标记 `at_port_missing`，有 AT 口不会误标记。
+- 删除设备会调用现有 `Remove` 生命周期清理。
+- 删除设备后的迟到状态保存返回成功，真实数据库错误不会被吞掉。
+- 已删除 entry 的 worker只执行当前活动操作，不再继续后续操作。
+- `Remove` 会清除 entry 中所有 pending 意图。
+
+---

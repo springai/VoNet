@@ -133,6 +133,63 @@ func TestProvisionDiscoveredDevicesCreatesPCSCLeaseAndIdentity(t *testing.T) {
 	}
 }
 
+func TestProvisionDiscoveredDevicesSkipsIssueAndNoAT(t *testing.T) {
+	ctx := context.Background()
+	database := newRegionTestStore(t)
+	manager := newProvisioningManager(t, []modem.Candidate{
+		{
+			ID:             "mhi-wwan0",
+			HardwareKind:   "wwan",
+			DiscoveryIssue: "at_port_missing",
+		},
+		{
+			ID:           "mhi-wwan1",
+			HardwareKind: "wwan",
+		},
+		{
+			ID:           "valid-modem",
+			HardwareKind: "usb",
+			Product:      "EC20",
+			ATPort:       modem.Port{Path: "/dev/ttyUSB2", Role: modem.PortRoleAT},
+		},
+	}, nil)
+
+	if err := provisionDiscoveredDevices(ctx, database, manager); err != nil {
+		t.Fatal(err)
+	}
+	devices, err := database.ListDevices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].ID != "valid-modem" {
+		t.Fatalf("provisioned devices = %#v, want only valid-modem", devices)
+	}
+}
+
+func TestProvisionDiscoveredDevicesAllowsPCSCWithoutATPort(t *testing.T) {
+	ctx := context.Background()
+	database := newRegionTestStore(t)
+	manager := newProvisioningManager(t, nil, []pcsc.Reader{{
+		Name: "NOAT000000010100", ReaderName: "NOAT000000010100", USBSerial: "NOAT00000001",
+		USBPath: "1-6", VendorID: "0bda", ProductID: "0165", Product: "USB CCID Reader",
+	}})
+
+	entries := manager.List()
+	if len(entries) != 1 || entries[0].Candidate.HasATPort() {
+		t.Fatalf("PCSC candidates = %#v, want one candidate without an AT port", entries)
+	}
+	if err := provisionDiscoveredDevices(ctx, database, manager); err != nil {
+		t.Fatal(err)
+	}
+	config, err := database.Device(ctx, "Reader-NOAT00000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.DeviceType != store.DeviceTypeUSBSIMReader || config.DeviceBackend != "pcsc" {
+		t.Fatalf("PCSC config = %+v, want USB SIM reader using pcsc", config)
+	}
+}
+
 func TestProvisionDiscoveredDevicesSkipsExhaustedReaderAndContinues(t *testing.T) {
 	ctx := context.Background()
 	database := newRegionTestStore(t)

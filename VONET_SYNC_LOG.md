@@ -20,6 +20,7 @@
 - **已同步版本**: 484cd23 (fix(vowifi): support DITO roaming subscriber identities #136)
 - **已同步版本**: 12ce8f0 (feat(sms): decode WAP Push MMS notification subjects #141)
 - **已同步版本**: 2d023a7 (Delete docs/E911.zh-CN.md；本地有意保留该文档)
+- **已同步版本**: 4859412 (FIX #181；选择性同步，保留 VoNet 本地等价实现)
 ---
 
 ## 待同步提交列表（96a1233 → 4760e33）
@@ -1167,3 +1168,50 @@ Ultra Mobile (ipcc-ultramint-mobile-310026):
 - `git diff --check` 通过，无冲突标记。
 
 本次同步内容提交目标为 GitHub `master`。
+
+---
+
+## 2026-10-22 同步上游 06e94ed → 4859412（FIX #181，选择性同步）
+
+**同步决策**:
+
+- 合入 `4859412` 中仍缺失的设备发现过滤、WWAN 异常标记、迟到状态写入保护和旧
+  worker entry 防护。
+- 等价接口和等价实现采用 VoNet 本地方案：保留 `VoWiFiDeviceRemover`、`Remove`、
+  `watchDone`、`WithSIM` 和按需 `Ensure`，不新增 `VoWiFiUnregisterController` 或
+  `Manager.Unregister`。
+- `d8951f5 feat: initialize web frontend project with Vite, React, and Tailwind CSS
+  dependencies` 有意跳过。该提交会将 Tailwind 4 临时降级为 Tailwind 3，与 VoNet
+  当前 `@tailwindcss/postcss` 和 Tailwind 4 CSS 配置不兼容。
+- `adcd478 build(deps): bump postcss-selector-parser (#182)` 不产生文件修改。它用于
+  清理 `d8951f5` 引入的 Tailwind 3 间接依赖；VoNet 当前已经是 Tailwind `4.3.3`、
+  Vite `7.3.7`，且两个 lockfile 均不包含 `postcss-selector-parser`。
+
+**逐文件同步结果**:
+
+| 文件 | 操作 | 说明 |
+|---|---|---|
+| `cmd/vonet/main.go` | 人工合并 | 自动建档和快照轮询跳过异常、无 AT 的非 PCSC 设备；保留 PCSC Lease、HardwareKind、IMEI 和后端重绑定逻辑 |
+| `internal/modem/discovery.go` | 合入 | WWAN 无 AT 口设置 `at_port_missing`；保留 USB、ML307、DJI/Baiwang 本地发现逻辑 |
+| `internal/vowifi/integration/store.go` | 合入 | 仅忽略设备已删除导致的迟到 runtime 写入 |
+| `internal/vowifi/runtime/manager.go` | 人工合并 | 保留本地 `Remove`，补 pending 状态清理和旧 entry worker 防护 |
+| `internal/server/device_api.go` | 无代码修改 | 本地 `Remove` 调用与上游删除前清理等价 |
+| `internal/server/server.go` | 无代码修改 | 保留本地 `VoWiFiDeviceRemover` 接口 |
+| `web/package*.json`、`web/*lock*` | 无代码修改 | 跳过 `d8951f5`，`adcd478` 目标状态已满足 |
+| 相关 `_test.go` | 补充 | 覆盖 PCSC 豁免、WWAN 标记、删除清理、迟到保存、真实保存错误和旧 worker 停止 |
+
+**本地功能保护确认**:
+
+- PCSC HardwareKind、随机 IMEI、IMEI 池/Lease、`Reset`、`Remove` 和 `WithSIM` 保留。
+- EAP/AUTH_FAILED 重试间隔、首次启动错开和重试 jitter 保留。
+- O2 VoWiFi、SIP/RTP、音频、代理、诊断页面和开发者模式 UI 不在本次改动范围内。
+- `@tailwindcss/postcss`、Tailwind 4 `@import "tailwindcss"` 配置和 `vonet-web` 项目名称保留。
+
+**验证**:
+
+- `go test -p 1 -count=1 ./...` 全部通过。
+- `npm test` 29 项全部通过。
+- `npm run build` 通过。
+- `git diff --check` 通过，无冲突标记。
+
+本次仅完成本地同步和记录更新，不提交、不推送 GitHub。
