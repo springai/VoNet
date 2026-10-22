@@ -1,0 +1,866 @@
+package store
+
+func migrationStatements(version int) []string {
+	switch version {
+	case 1:
+		return []string{
+			`CREATE TABLE IF NOT EXISTS admins (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				username TEXT NOT NULL UNIQUE,
+				password_hash BLOB NOT NULL,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			)`,
+			`CREATE TABLE IF NOT EXISTS sessions (
+				token_hash BLOB PRIMARY KEY,
+				admin_id INTEGER NOT NULL,
+				csrf_hash BLOB NOT NULL,
+				expires_at INTEGER NOT NULL,
+				created_at INTEGER NOT NULL,
+				FOREIGN KEY (admin_id) REFERENCES admins(id) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS sessions_expires_at_idx ON sessions(expires_at)`,
+		}
+	case 2:
+		return domainSchemaV2
+	case 3:
+		return []string{
+			`CREATE TABLE phone_associations (
+				iccid TEXT PRIMARY KEY,
+				device_id TEXT NOT NULL DEFAULT '',
+				number TEXT NOT NULL,
+				source TEXT NOT NULL,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			)`,
+			`CREATE INDEX phone_associations_device_idx
+				ON phone_associations(device_id, updated_at DESC)`,
+		}
+	case 4:
+		return []string{
+			// The conversation UI is a received-message view. Keep the SMSC
+			// timestamp for diagnostics, but display the first local receipt time.
+			`UPDATE sms_messages
+			SET extra_json = json_set(
+					extra_json,
+					'$.service_center_timestamp_unix', message_time,
+					'$.received_at_unix', created_at
+				),
+				message_time = created_at,
+				updated_at = CAST(strftime('%s', 'now') AS INTEGER)
+			WHERE source = 'ims'
+				AND json_valid(extra_json)
+				AND COALESCE(json_extract(extra_json, '$.raw_tpdu'), '') <> ''`,
+		}
+	case 5:
+		return []string{
+			// Earlier IMS persistence labelled every non-delivered submission as
+			// accepted_by_ims, including explicit SIP/RP rejection evidence.
+			`UPDATE sms_messages
+			SET delivery_state = 'failed',
+				updated_at = CAST(strftime('%s', 'now') AS INTEGER)
+			WHERE source = 'ims'
+				AND direction IN ('outbound', 'sent')
+				AND delivery_state = 'accepted_by_ims'
+				AND (
+					LOWER(status) LIKE '%reject%'
+					OR LOWER(status) LIKE '%fail%'
+					OR LOWER(status) LIKE '%partial%'
+				)`,
+		}
+	case 6:
+		return []string{
+			`CREATE TABLE IF NOT EXISTS device_proxy_bindings (
+				device_id TEXT PRIMARY KEY,
+				upstream_proxy_id TEXT NOT NULL,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+				FOREIGN KEY (upstream_proxy_id) REFERENCES upstream_proxies(id) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS device_proxy_bindings_proxy_idx
+				ON device_proxy_bindings(upstream_proxy_id)`,
+		}
+	case 7:
+		return []string{
+			`ALTER TABLE sms_messages
+				ADD COLUMN modem_imei TEXT NOT NULL DEFAULT ''`,
+			`UPDATE sms_messages
+			SET modem_imei = COALESCE((
+				SELECT NULLIF(d.modem_imei, '')
+				FROM devices d
+				WHERE d.id = sms_messages.device_id
+			), '')
+			WHERE modem_imei = ''`,
+			`DELETE FROM sms_messages
+			WHERE modem_imei <> '' AND message_id <> ''
+				AND id NOT IN (
+					SELECT MIN(id)
+					FROM sms_messages
+					WHERE modem_imei <> '' AND message_id <> ''
+					GROUP BY modem_imei, message_id
+				)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS sms_messages_hardware_external_id_idx
+				ON sms_messages(modem_imei, message_id)
+				WHERE modem_imei <> '' AND message_id <> ''`,
+			`CREATE INDEX IF NOT EXISTS sms_messages_hardware_thread_idx
+				ON sms_messages(modem_imei, imsi, peer, message_time DESC, id DESC)`,
+		}
+	case 8:
+		return []string{
+			`ALTER TABLE devices
+				ADD COLUMN device_type TEXT NOT NULL DEFAULT 'pcie_ec20_ec25'`,
+		}
+	case 9:
+		return []string{
+			// VoWiFi deliberately owns airplane mode. Earlier schemas treated
+			// these flags as mutually exclusive, which made the RF-safe state
+			// impossible to persist. Rebuild the table without changing rows.
+			`ALTER TABLE card_policies RENAME TO card_policies_v8`,
+			`CREATE TABLE card_policies (
+				iccid TEXT PRIMARY KEY,
+				network_enabled INTEGER NOT NULL DEFAULT 0 CHECK (network_enabled IN (0, 1)),
+				vowifi_enabled INTEGER NOT NULL DEFAULT 0 CHECK (vowifi_enabled IN (0, 1)),
+				airplane_enabled INTEGER NOT NULL DEFAULT 0 CHECK (airplane_enabled IN (0, 1)),
+				apn TEXT NOT NULL DEFAULT '',
+				ip_version TEXT NOT NULL DEFAULT '',
+				source TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			)`,
+			`INSERT INTO card_policies (
+				iccid, network_enabled, vowifi_enabled, airplane_enabled,
+				apn, ip_version, source, created_at, updated_at
+			) SELECT
+				iccid, network_enabled, vowifi_enabled, airplane_enabled,
+				apn, ip_version, source, created_at, updated_at
+			FROM card_policies_v8`,
+			`UPDATE card_policies
+			SET airplane_enabled = 1, network_enabled = 0
+			WHERE vowifi_enabled = 1`,
+			`DROP TABLE card_policies_v8`,
+		}
+	case 10:
+		return []string{
+			`CREATE TABLE IF NOT EXISTS automatic_tasks (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name TEXT NOT NULL,
+				enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+				device_id TEXT NOT NULL,
+				profile_iccid TEXT NOT NULL,
+				profile_aid TEXT NOT NULL DEFAULT '',
+				task_type TEXT NOT NULL CHECK (task_type IN ('sms', 'call', 'public_ip')),
+				environment TEXT NOT NULL CHECK (environment IN ('vowifi', 'cellular')),
+				interval_days INTEGER NOT NULL CHECK (interval_days BETWEEN 1 AND 365),
+				start_date TEXT NOT NULL,
+				run_time TEXT NOT NULL,
+				timezone TEXT NOT NULL DEFAULT 'Local',
+				payload_json TEXT NOT NULL DEFAULT '{}',
+				retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count BETWEEN 0 AND 10),
+				notify INTEGER NOT NULL DEFAULT 0 CHECK (notify IN (0, 1)),
+				next_run_at INTEGER NOT NULL,
+				last_run_at INTEGER NOT NULL DEFAULT 0,
+				last_status TEXT NOT NULL DEFAULT '',
+				last_error TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS automatic_tasks_due_idx ON automatic_tasks(enabled, next_run_at, id)`,
+			`CREATE INDEX IF NOT EXISTS automatic_tasks_device_idx ON automatic_tasks(device_id, next_run_at, id)`,
+			`CREATE TABLE IF NOT EXISTS automatic_task_runs (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				task_id INTEGER NOT NULL,
+				device_id TEXT NOT NULL,
+				scheduled_at INTEGER NOT NULL,
+				started_at INTEGER NOT NULL DEFAULT 0,
+				finished_at INTEGER NOT NULL DEFAULT 0,
+				status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'success', 'failed')),
+				attempts INTEGER NOT NULL DEFAULT 0,
+				output TEXT NOT NULL DEFAULT '',
+				error TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (task_id) REFERENCES automatic_tasks(id) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS automatic_task_runs_task_idx ON automatic_task_runs(task_id, id DESC)`,
+			`CREATE INDEX IF NOT EXISTS automatic_task_runs_status_idx ON automatic_task_runs(status, id)`,
+		}
+	case 11:
+		return []string{
+			`CREATE TABLE IF NOT EXISTS sms_send_attempts (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				device_id TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL
+			)`,
+			`CREATE INDEX IF NOT EXISTS sms_send_attempts_created_idx
+				ON sms_send_attempts(created_at, id)`,
+		}
+	case 12:
+		return []string{
+			`ALTER TABLE device_proxy_bindings RENAME TO device_proxy_bindings_v11`,
+			`CREATE TABLE device_proxy_bindings (
+				iccid TEXT PRIMARY KEY,
+				device_id TEXT NOT NULL,
+				profile_name TEXT NOT NULL DEFAULT '',
+				upstream_proxy_id TEXT NOT NULL,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+				FOREIGN KEY (upstream_proxy_id) REFERENCES upstream_proxies(id) ON DELETE CASCADE
+			)`,
+			// A legacy device-wide binding is safe to preserve only when the
+			// currently observed ICCID is known. It then becomes one profile binding
+			// instead of leaking onto every future profile used by that device.
+			`INSERT OR IGNORE INTO device_proxy_bindings (
+				iccid, device_id, profile_name, upstream_proxy_id, created_at, updated_at
+			)
+			SELECT COALESCE(NULLIF(v.iccid, ''), NULLIF(d.iccid, '')),
+				b.device_id, '', b.upstream_proxy_id, b.created_at, b.updated_at
+			FROM device_proxy_bindings_v11 b
+			LEFT JOIN vowifi_runtime v ON v.device_id = b.device_id
+			LEFT JOIN device_runtime d ON d.device_id = b.device_id
+			WHERE COALESCE(NULLIF(v.iccid, ''), NULLIF(d.iccid, '')) IS NOT NULL`,
+			`DROP TABLE device_proxy_bindings_v11`,
+			`CREATE INDEX device_proxy_bindings_proxy_idx
+				ON device_proxy_bindings(upstream_proxy_id)`,
+			`CREATE INDEX device_proxy_bindings_device_idx
+				ON device_proxy_bindings(device_id, iccid)`,
+		}
+	case 13:
+		return []string{
+			`CREATE TABLE IF NOT EXISTS card_apn_profiles (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				iccid TEXT NOT NULL,
+				apn TEXT NOT NULL,
+				ip_version TEXT NOT NULL DEFAULT 'IPV4V6'
+					CHECK (ip_version IN ('IP', 'IPV6', 'IPV4V6')),
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				UNIQUE (iccid, apn, ip_version),
+				FOREIGN KEY (iccid) REFERENCES card_policies(iccid) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS card_apn_profiles_iccid_idx
+				ON card_apn_profiles(iccid, id)`,
+		}
+	case 14:
+		return []string{
+			`ALTER TABLE card_apn_profiles ADD COLUMN username TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE card_apn_profiles ADD COLUMN password TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE card_apn_profiles ADD COLUMN proxy TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE card_apn_profiles ADD COLUMN mcc TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE card_apn_profiles ADD COLUMN mnc TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE card_apn_profiles ADD COLUMN roaming_ip_version TEXT NOT NULL DEFAULT 'IP'
+				CHECK (roaming_ip_version IN ('IP', 'IPV6', 'IPV4V6'))`,
+			`ALTER TABLE card_apn_profiles ADD COLUMN auth_type TEXT NOT NULL DEFAULT 'NONE'
+				CHECK (auth_type IN ('NONE', 'PAP', 'CHAP', 'PAP_OR_CHAP'))`,
+		}
+	case 15:
+		return []string{
+			`ALTER TABLE card_policies
+				ADD COLUMN custom_phone_number TEXT NOT NULL DEFAULT ''`,
+		}
+	case 16:
+		return []string{
+			`ALTER TABLE devices ADD COLUMN sim_pin TEXT NOT NULL DEFAULT ''`,
+		}
+	case 17:
+		// Some development builds recorded automatic-task support in an older
+		// migration. Recreate the objects idempotently so databases from either
+		// history converge before later migrations run.
+		return []string{
+			`CREATE TABLE IF NOT EXISTS automatic_tasks (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name TEXT NOT NULL,
+				enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+				device_id TEXT NOT NULL,
+				profile_iccid TEXT NOT NULL,
+				profile_aid TEXT NOT NULL DEFAULT '',
+				task_type TEXT NOT NULL CHECK (task_type IN ('sms', 'call', 'public_ip')),
+				environment TEXT NOT NULL CHECK (environment IN ('vowifi', 'cellular')),
+				interval_days INTEGER NOT NULL CHECK (interval_days BETWEEN 1 AND 365),
+				start_date TEXT NOT NULL,
+				run_time TEXT NOT NULL,
+				timezone TEXT NOT NULL DEFAULT 'Local',
+				payload_json TEXT NOT NULL DEFAULT '{}',
+				retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count BETWEEN 0 AND 10),
+				notify INTEGER NOT NULL DEFAULT 0 CHECK (notify IN (0, 1)),
+				next_run_at INTEGER NOT NULL,
+				last_run_at INTEGER NOT NULL DEFAULT 0,
+				last_status TEXT NOT NULL DEFAULT '',
+				last_error TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS automatic_tasks_due_idx ON automatic_tasks(enabled, next_run_at, id)`,
+			`CREATE INDEX IF NOT EXISTS automatic_tasks_device_idx ON automatic_tasks(device_id, next_run_at, id)`,
+			`CREATE TABLE IF NOT EXISTS automatic_task_runs (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				task_id INTEGER NOT NULL,
+				device_id TEXT NOT NULL,
+				scheduled_at INTEGER NOT NULL,
+				started_at INTEGER NOT NULL DEFAULT 0,
+				finished_at INTEGER NOT NULL DEFAULT 0,
+				status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'success', 'failed')),
+				attempts INTEGER NOT NULL DEFAULT 0,
+				output TEXT NOT NULL DEFAULT '',
+				error TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (task_id) REFERENCES automatic_tasks(id) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS automatic_task_runs_task_idx ON automatic_task_runs(task_id, id DESC)`,
+			`CREATE INDEX IF NOT EXISTS automatic_task_runs_status_idx ON automatic_task_runs(status, id)`,
+		}
+	case 18:
+		// A short-lived schema lineage kept the original card-policy CHECK,
+		// which rejected the supported VoWiFi + airplane-mode state. Rebuild
+		// both related tables so all released and development databases converge
+		// without dropping policies or custom APNs.
+		return []string{
+			`ALTER TABLE card_apn_profiles RENAME TO card_apn_profiles_v17`,
+			`ALTER TABLE card_policies RENAME TO card_policies_v17`,
+			`CREATE TABLE card_policies (
+				iccid TEXT PRIMARY KEY,
+				network_enabled INTEGER NOT NULL DEFAULT 0 CHECK (network_enabled IN (0, 1)),
+				vowifi_enabled INTEGER NOT NULL DEFAULT 0 CHECK (vowifi_enabled IN (0, 1)),
+				airplane_enabled INTEGER NOT NULL DEFAULT 0 CHECK (airplane_enabled IN (0, 1)),
+				apn TEXT NOT NULL DEFAULT '',
+				ip_version TEXT NOT NULL DEFAULT '',
+				source TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				custom_phone_number TEXT NOT NULL DEFAULT ''
+			)`,
+			`INSERT INTO card_policies (
+				iccid, network_enabled, vowifi_enabled, airplane_enabled,
+				apn, ip_version, source, created_at, updated_at, custom_phone_number
+			) SELECT
+				iccid, network_enabled, vowifi_enabled, airplane_enabled,
+				apn, ip_version, source, created_at, updated_at, custom_phone_number
+			FROM card_policies_v17`,
+			`CREATE TABLE card_apn_profiles_new (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				iccid TEXT NOT NULL,
+				apn TEXT NOT NULL,
+				ip_version TEXT NOT NULL DEFAULT 'IPV4V6' CHECK (ip_version IN ('IP', 'IPV6', 'IPV4V6')),
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				username TEXT NOT NULL DEFAULT '',
+				password TEXT NOT NULL DEFAULT '',
+				proxy TEXT NOT NULL DEFAULT '',
+				mcc TEXT NOT NULL DEFAULT '',
+				mnc TEXT NOT NULL DEFAULT '',
+				roaming_ip_version TEXT NOT NULL DEFAULT 'IP' CHECK (roaming_ip_version IN ('IP', 'IPV6', 'IPV4V6')),
+				auth_type TEXT NOT NULL DEFAULT 'NONE' CHECK (auth_type IN ('NONE', 'PAP', 'CHAP', 'PAP_OR_CHAP')),
+				UNIQUE (iccid, apn, ip_version),
+				FOREIGN KEY (iccid) REFERENCES card_policies(iccid) ON DELETE CASCADE
+			)`,
+			`INSERT INTO card_apn_profiles_new
+				SELECT id, iccid, apn, ip_version, created_at, updated_at,
+					username, password, proxy, mcc, mnc, roaming_ip_version, auth_type
+				FROM card_apn_profiles_v17`,
+			`DROP TABLE card_apn_profiles_v17`,
+			`DROP TABLE card_policies_v17`,
+			`ALTER TABLE card_apn_profiles_new RENAME TO card_apn_profiles`,
+			`CREATE INDEX card_apn_profiles_iccid_idx ON card_apn_profiles(iccid, id)`,
+		}
+	case 19:
+		// Compatibility columns written by the Qualcomm/IMS development build.
+		// The stable server may leave them unused, but retaining them makes a
+		// database created by that build safely readable after an upgrade.
+		return []string{
+			`ALTER TABLE devices ADD COLUMN ims_apn TEXT NOT NULL DEFAULT 'ims'`,
+			`ALTER TABLE devices ADD COLUMN ims_private_identity TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE devices ADD COLUMN ims_public_identity TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE devices ADD COLUMN ims_sms_center TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE devices ADD COLUMN ims_transport TEXT NOT NULL DEFAULT 'tcp'`,
+			`ALTER TABLE devices ADD COLUMN ims_allow_imsi_derived_identity INTEGER NOT NULL DEFAULT 1 CHECK (ims_allow_imsi_derived_identity IN (0, 1))`,
+			`ALTER TABLE devices ADD COLUMN vowifi_eap_method TEXT NOT NULL DEFAULT 'aka'`,
+			`ALTER TABLE devices ADD COLUMN vowifi_allow_sha1 INTEGER NOT NULL DEFAULT 0 CHECK (vowifi_allow_sha1 IN (0, 1))`,
+			`ALTER TABLE devices ADD COLUMN vowifi_use_modp1024 INTEGER NOT NULL DEFAULT 0 CHECK (vowifi_use_modp1024 IN (0, 1))`,
+		}
+	case 20:
+		return []string{
+			`ALTER TABLE card_policies
+				ADD COLUMN cellular_ims_enabled INTEGER NOT NULL DEFAULT 0
+				CHECK (cellular_ims_enabled IN (0, 1))`,
+			`ALTER TABLE card_policies
+				ADD COLUMN cellular_ims_managed INTEGER NOT NULL DEFAULT 0
+				CHECK (cellular_ims_managed IN (0, 1))`,
+		}
+	case 21:
+		return []string{
+			// IMS is a persistent module-global QCFG setting. Stop all legacy
+			// per-card ownership without changing the modem itself during migration.
+			`UPDATE card_policies SET cellular_ims_managed = 0
+			WHERE cellular_ims_managed <> 0`,
+		}
+	case 22:
+		return []string{
+			// vsmartcard exposes VMware's software endpoints as four PC/SC
+			// readers named "Virtual PCD 00 00" ... "00 03". Older builds
+			// auto-provisioned them on an empty database, so they remained in
+			// the configured-device quota after discovery was corrected. Match
+			// the exact generated shape and leave physical or manually named
+			// readers untouched.
+			`DELETE FROM devices
+			WHERE id GLOB 'reader-[0-9a-f]*'
+				AND device_type = 'usb_sim_reader'
+				AND LOWER(TRIM(control_device)) GLOB 'virtual pcd [0-9][0-9] [0-9][0-9]'
+				AND LOWER(TRIM(usb_path)) = 'pcsc:' || LOWER(TRIM(control_device))
+				AND TRIM(interface) = ''
+				AND TRIM(at_port) = ''
+				AND TRIM(modem_imei) = ''`,
+		}
+	case 23:
+		return []string{
+			// SMS subscription identity is historical data. It must live on the
+			// message instead of being reconstructed from the device's current SIM.
+			`ALTER TABLE sms_messages
+				ADD COLUMN iccid TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE sms_messages
+				ADD COLUMN local_phone TEXT NOT NULL DEFAULT ''`,
+			`CREATE INDEX IF NOT EXISTS sms_messages_subscription_thread_idx
+				ON sms_messages(modem_imei, iccid, imsi, peer, message_time DESC, id DESC)`,
+		}
+	case 24:
+		return []string{
+			`CREATE TABLE call_history (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				device_id TEXT NOT NULL,
+				number TEXT NOT NULL DEFAULT '',
+				direction TEXT NOT NULL DEFAULT 'outgoing',
+				status TEXT NOT NULL DEFAULT 'unknown',
+				transport TEXT NOT NULL DEFAULT 'cellular',
+				duration_seconds INTEGER NOT NULL DEFAULT 0,
+				started_at INTEGER NOT NULL,
+				ended_at INTEGER NOT NULL DEFAULT 0,
+				created_at INTEGER NOT NULL
+			)`,
+			`CREATE INDEX call_history_device_idx ON call_history(device_id, started_at DESC)`,
+			`CREATE INDEX call_history_number_idx ON call_history(number, started_at DESC)`,
+		}
+	case 25:
+		return []string{
+			// Optional per-ICCID MBN override. Empty keeps the HPLMN heuristic
+			// (ROW_Generic_3GPP when a known operator MBN does not match).
+			`ALTER TABLE card_policies
+				ADD COLUMN mbn_profile TEXT NOT NULL DEFAULT ''`,
+		}
+	case 26:
+		return []string{
+			`CREATE TABLE IF NOT EXISTS pcsc_imei_pool (
+				imei TEXT PRIMARY KEY CHECK (length(imei) = 15 AND imei NOT GLOB '*[^0-9]*'),
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			)`,
+			`CREATE TABLE IF NOT EXISTS pcsc_imei_leases (
+				device_id TEXT PRIMARY KEY,
+				imei TEXT NOT NULL UNIQUE,
+				mode TEXT NOT NULL CHECK (mode IN ('random', 'fixed')),
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+				FOREIGN KEY (imei) REFERENCES pcsc_imei_pool(imei) ON DELETE RESTRICT
+			)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069053659148', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069052438940', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069053083133', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069053222707', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069051202057', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069054181407', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069050999893', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069051190162', 0, 0)`,
+		}
+	case 28:
+		return []string{
+			`UPDATE devices
+			SET modem_imei = ''
+			WHERE device_type = 'usb_sim_reader' AND TRIM(modem_imei) <> ''`,
+			`UPDATE devices
+			SET extra_json = json_set(
+				CASE WHEN json_valid(extra_json) THEN extra_json ELSE '{}' END,
+				'$.usb_serial_number', TRIM(control_device)
+			)
+			WHERE device_type = 'usb_sim_reader'
+				AND TRIM(control_device) <> ''
+				AND (
+					NOT json_valid(extra_json)
+					OR COALESCE(json_extract(extra_json, '$.usb_serial_number'), '') = ''
+				)`,
+			`WITH missing_devices AS (
+				SELECT d.id, ROW_NUMBER() OVER (ORDER BY d.id) AS allocation_rank
+				FROM devices d
+				WHERE d.device_type = 'usb_sim_reader'
+					AND NOT EXISTS (
+						SELECT 1 FROM pcsc_imei_leases l WHERE l.device_id = d.id
+					)
+			), available_imeis AS (
+				SELECT p.imei, ROW_NUMBER() OVER (ORDER BY p.imei) AS allocation_rank
+				FROM pcsc_imei_pool p
+				WHERE NOT EXISTS (SELECT 1 FROM pcsc_imei_leases l WHERE l.imei = p.imei)
+					AND NOT EXISTS (
+						SELECT 1 FROM devices d
+						WHERE TRIM(d.modem_imei) = p.imei
+							AND d.device_type <> 'usb_sim_reader'
+					)
+			)
+			INSERT INTO pcsc_imei_leases (device_id, imei, mode, updated_at)
+			SELECT m.id, a.imei, 'random', CAST(strftime('%s', 'now') AS INTEGER)
+			FROM missing_devices m
+			JOIN available_imeis a ON a.allocation_rank = m.allocation_rank`,
+		}
+	case 29:
+		return []string{
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069053452247', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069053461198', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('863285069344664', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('863212061358591', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069051772448', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069053101505', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069052517214', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('863212061734262', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('863212060607550', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('866069052477120', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('863212060571335', 0, 0)`,
+			`INSERT OR IGNORE INTO pcsc_imei_pool (imei, created_at, updated_at) VALUES ('863285068498933', 0, 0)`,
+		}
+	case 30:
+		// Rebuild both tables to widen the task-type CHECK while preserving
+		// run history, foreign keys, and AUTOINCREMENT high-water marks.
+		return []string{
+			`ALTER TABLE automatic_task_runs RENAME TO automatic_task_runs_v24`,
+			`ALTER TABLE automatic_tasks RENAME TO automatic_tasks_v24`,
+			`CREATE TABLE automatic_tasks (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name TEXT NOT NULL,
+				enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+				device_id TEXT NOT NULL,
+				profile_iccid TEXT NOT NULL,
+				profile_aid TEXT NOT NULL DEFAULT '',
+				task_type TEXT NOT NULL CHECK (task_type IN ('sms', 'call', 'public_ip', 'cellular_attach')),
+				environment TEXT NOT NULL CHECK (environment IN ('vowifi', 'cellular')),
+				interval_days INTEGER NOT NULL CHECK (interval_days BETWEEN 1 AND 365),
+				start_date TEXT NOT NULL,
+				run_time TEXT NOT NULL,
+				timezone TEXT NOT NULL DEFAULT 'Local',
+				payload_json TEXT NOT NULL DEFAULT '{}',
+				retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count BETWEEN 0 AND 10),
+				notify INTEGER NOT NULL DEFAULT 0 CHECK (notify IN (0, 1)),
+				next_run_at INTEGER NOT NULL,
+				last_run_at INTEGER NOT NULL DEFAULT 0,
+				last_status TEXT NOT NULL DEFAULT '',
+				last_error TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+			)`,
+			`INSERT INTO automatic_tasks (
+				id, name, enabled, device_id, profile_iccid, profile_aid, task_type,
+				environment, interval_days, start_date, run_time, timezone, payload_json,
+				retry_count, notify, next_run_at, last_run_at, last_status,
+				last_error, created_at, updated_at
+			) SELECT
+				id, name, enabled, device_id, profile_iccid, profile_aid, task_type,
+				environment, interval_days, start_date, run_time, timezone, payload_json,
+				retry_count, notify, next_run_at, last_run_at, last_status,
+				last_error, created_at, updated_at
+			FROM automatic_tasks_v24`,
+			`CREATE TABLE automatic_task_runs (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				task_id INTEGER NOT NULL,
+				device_id TEXT NOT NULL,
+				scheduled_at INTEGER NOT NULL,
+				started_at INTEGER NOT NULL DEFAULT 0,
+				finished_at INTEGER NOT NULL DEFAULT 0,
+				status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'success', 'failed')),
+				attempts INTEGER NOT NULL DEFAULT 0,
+				output TEXT NOT NULL DEFAULT '',
+				error TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (task_id) REFERENCES automatic_tasks(id) ON DELETE CASCADE
+			)`,
+			`INSERT INTO automatic_task_runs SELECT * FROM automatic_task_runs_v24`,
+			`UPDATE sqlite_sequence SET seq = MAX(seq, COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'automatic_tasks_v24'), 0)) WHERE name = 'automatic_tasks'`,
+			`UPDATE sqlite_sequence SET seq = MAX(seq, COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'automatic_task_runs_v24'), 0)) WHERE name = 'automatic_task_runs'`,
+			`DROP TABLE automatic_task_runs_v24`,
+			`DROP TABLE automatic_tasks_v24`,
+			`CREATE INDEX automatic_tasks_due_idx ON automatic_tasks(enabled, next_run_at, id)`,
+			`CREATE INDEX automatic_tasks_device_idx ON automatic_tasks(device_id, next_run_at, id)`,
+			`CREATE INDEX automatic_task_runs_task_idx ON automatic_task_runs(task_id, id DESC)`,
+			`CREATE INDEX automatic_task_runs_status_idx ON automatic_task_runs(status, id)`,
+		}
+	case 31:
+		return []string{
+			`ALTER TABLE automatic_tasks
+				ADD COLUMN revert_profile INTEGER NOT NULL DEFAULT 1
+				CHECK (revert_profile IN (0, 1))`,
+		}
+	case 32:
+		return []string{
+			// Physical records are independent of decoded messages: even an
+			// unreadable sender or a failed multipart merge must remain recoverable.
+			`CREATE TABLE IF NOT EXISTS sms_raw_records (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				hardware_key TEXT NOT NULL,
+				device_id TEXT NOT NULL,
+				modem_imei TEXT NOT NULL DEFAULT '',
+				iccid TEXT NOT NULL DEFAULT '',
+				imsi TEXT NOT NULL DEFAULT '',
+				storage TEXT NOT NULL,
+				slot INTEGER NOT NULL,
+				pdu_hash TEXT NOT NULL,
+				raw_pdu TEXT NOT NULL,
+				raw_user_data TEXT NOT NULL DEFAULT '',
+				encoding TEXT NOT NULL DEFAULT '',
+				decode_error TEXT NOT NULL DEFAULT '',
+				first_seen INTEGER NOT NULL,
+				last_seen INTEGER NOT NULL,
+				UNIQUE(hardware_key, storage, slot, pdu_hash)
+			)`,
+			`CREATE INDEX IF NOT EXISTS sms_raw_records_device_idx ON sms_raw_records(device_id, id DESC)`,
+		}
+	default:
+		return nil
+	}
+}
+
+var domainSchemaV2 = []string{
+	`CREATE TABLE devices (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		interface TEXT NOT NULL DEFAULT '',
+		control_device TEXT NOT NULL DEFAULT '',
+		at_port TEXT NOT NULL DEFAULT '',
+		usb_path TEXT NOT NULL DEFAULT '',
+		audio_device TEXT NOT NULL DEFAULT '',
+		modem_imei TEXT NOT NULL DEFAULT '',
+		apn TEXT NOT NULL DEFAULT '',
+		proxy_port INTEGER NOT NULL DEFAULT 0 CHECK (proxy_port BETWEEN 0 AND 65535),
+		baud_rate INTEGER NOT NULL DEFAULT 115200 CHECK (baud_rate > 0),
+		data_bits INTEGER NOT NULL DEFAULT 8,
+		stop_bits INTEGER NOT NULL DEFAULT 1,
+		parity TEXT NOT NULL DEFAULT 'none',
+		device_backend TEXT NOT NULL DEFAULT 'at',
+		esim_transport TEXT NOT NULL DEFAULT 'at',
+		qmi_use_proxy INTEGER NOT NULL DEFAULT 1 CHECK (qmi_use_proxy IN (0, 1)),
+		qmi_proxy_path TEXT NOT NULL DEFAULT '',
+		qmi_proxy_executable TEXT NOT NULL DEFAULT '',
+		network_enabled INTEGER NOT NULL DEFAULT 0 CHECK (network_enabled IN (0, 1)),
+		sms_enabled INTEGER NOT NULL DEFAULT 1 CHECK (sms_enabled IN (0, 1)),
+		vowifi_enabled INTEGER NOT NULL DEFAULT 0 CHECK (vowifi_enabled IN (0, 1)),
+		extra_json TEXT NOT NULL DEFAULT '{}',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	)`,
+	`CREATE INDEX devices_interface_idx ON devices(interface)`,
+	`CREATE INDEX devices_imei_idx ON devices(modem_imei)`,
+
+	`CREATE TABLE device_runtime (
+		device_id TEXT PRIMARY KEY,
+		running INTEGER NOT NULL DEFAULT 0 CHECK (running IN (0, 1)),
+		healthy INTEGER NOT NULL DEFAULT 0 CHECK (healthy IN (0, 1)),
+		control_online INTEGER NOT NULL DEFAULT 0 CHECK (control_online IN (0, 1)),
+		physical_present INTEGER NOT NULL DEFAULT 0 CHECK (physical_present IN (0, 1)),
+		worker_running INTEGER NOT NULL DEFAULT 0 CHECK (worker_running IN (0, 1)),
+		data_connected INTEGER NOT NULL DEFAULT 0 CHECK (data_connected IN (0, 1)),
+		radio_registered INTEGER NOT NULL DEFAULT 0 CHECK (radio_registered IN (0, 1)),
+		network_connected INTEGER NOT NULL DEFAULT 0 CHECK (network_connected IN (0, 1)),
+		flight_mode INTEGER NOT NULL DEFAULT 0 CHECK (flight_mode IN (0, 1)),
+		lifecycle_phase TEXT NOT NULL DEFAULT '',
+		lifecycle_reason TEXT NOT NULL DEFAULT '',
+		public_ip TEXT NOT NULL DEFAULT '',
+		private_ip TEXT NOT NULL DEFAULT '',
+		operator TEXT NOT NULL DEFAULT '',
+		native_mcc TEXT NOT NULL DEFAULT '',
+		native_mnc TEXT NOT NULL DEFAULT '',
+		native_spn TEXT NOT NULL DEFAULT '',
+		network_mode TEXT NOT NULL DEFAULT '',
+		network_duplex TEXT NOT NULL DEFAULT '',
+		radio_band TEXT NOT NULL DEFAULT '',
+		radio_channel INTEGER NOT NULL DEFAULT 0,
+		signal_dbm INTEGER NOT NULL DEFAULT 0,
+		signal_rsrp INTEGER,
+		signal_rsrq INTEGER,
+		signal_sinr INTEGER,
+		imei TEXT NOT NULL DEFAULT '',
+		iccid TEXT NOT NULL DEFAULT '',
+		imsi TEXT NOT NULL DEFAULT '',
+		firmware TEXT NOT NULL DEFAULT '',
+		reg_status INTEGER NOT NULL DEFAULT 0,
+		reg_status_text TEXT NOT NULL DEFAULT '',
+		ps_attached INTEGER CHECK (ps_attached IN (0, 1)),
+		sim_inserted INTEGER CHECK (sim_inserted IN (0, 1)),
+		operating_mode INTEGER,
+		phone_number TEXT NOT NULL DEFAULT '',
+		phone_number_source TEXT NOT NULL DEFAULT '',
+		traffic_json TEXT NOT NULL DEFAULT '{}',
+		extra_json TEXT NOT NULL DEFAULT '{}',
+		updated_at INTEGER NOT NULL,
+		FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+	)`,
+	`CREATE INDEX device_runtime_iccid_idx ON device_runtime(iccid)`,
+	`CREATE INDEX device_runtime_imsi_idx ON device_runtime(imsi)`,
+
+	`CREATE TABLE vowifi_runtime (
+		device_id TEXT PRIMARY KEY,
+		phase TEXT NOT NULL DEFAULT '',
+		dataplane_mode TEXT NOT NULL DEFAULT '',
+		iccid TEXT NOT NULL DEFAULT '',
+		imsi TEXT NOT NULL DEFAULT '',
+		sim_ready INTEGER NOT NULL DEFAULT 0 CHECK (sim_ready IN (0, 1)),
+		access_ready INTEGER NOT NULL DEFAULT 0 CHECK (access_ready IN (0, 1)),
+		tunnel_ready INTEGER NOT NULL DEFAULT 0 CHECK (tunnel_ready IN (0, 1)),
+		ims_ready INTEGER NOT NULL DEFAULT 0 CHECK (ims_ready IN (0, 1)),
+		sms_ready INTEGER NOT NULL DEFAULT 0 CHECK (sms_ready IN (0, 1)),
+		reg_status INTEGER NOT NULL DEFAULT 0,
+		reg_status_text TEXT NOT NULL DEFAULT '',
+		network_mode TEXT NOT NULL DEFAULT '',
+		local_phone TEXT NOT NULL DEFAULT '',
+		phone_number_source TEXT NOT NULL DEFAULT '',
+		last_error_class TEXT NOT NULL DEFAULT '',
+		last_error TEXT NOT NULL DEFAULT '',
+		last_reason TEXT NOT NULL DEFAULT '',
+		tunnel_json TEXT NOT NULL DEFAULT '{}',
+		imscore_json TEXT NOT NULL DEFAULT '{}',
+		smsip_json TEXT NOT NULL DEFAULT '{}',
+		extra_json TEXT NOT NULL DEFAULT '{}',
+		updated_at INTEGER NOT NULL,
+		FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+	)`,
+	`CREATE INDEX vowifi_runtime_ims_ready_idx ON vowifi_runtime(ims_ready)`,
+
+	`CREATE TABLE sms_messages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		message_id TEXT NOT NULL DEFAULT '',
+		device_id TEXT NOT NULL,
+		imsi TEXT NOT NULL DEFAULT '',
+		peer TEXT NOT NULL,
+		direction TEXT NOT NULL,
+		body TEXT NOT NULL DEFAULT '',
+		message_time INTEGER NOT NULL,
+		status TEXT NOT NULL DEFAULT '',
+		source TEXT NOT NULL DEFAULT '',
+		parts_total INTEGER NOT NULL DEFAULT 1 CHECK (parts_total > 0),
+		delivery_state TEXT NOT NULL DEFAULT '',
+		is_read INTEGER NOT NULL DEFAULT 0 CHECK (is_read IN (0, 1)),
+		extra_json TEXT NOT NULL DEFAULT '{}',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	)`,
+	`CREATE UNIQUE INDEX sms_messages_external_id_idx
+		ON sms_messages(device_id, message_id)
+		WHERE message_id <> ''`,
+	`CREATE INDEX sms_messages_thread_idx
+		ON sms_messages(device_id, imsi, peer, message_time DESC, id DESC)`,
+	`CREATE INDEX sms_messages_time_idx ON sms_messages(message_time DESC)`,
+
+	`CREATE TABLE local_proxy_config (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		mode TEXT NOT NULL CHECK (mode IN ('socks5', 'http')),
+		device_id TEXT NOT NULL,
+		listen_addr TEXT NOT NULL,
+		listen_port INTEGER NOT NULL CHECK (listen_port BETWEEN 1 AND 65535),
+		enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+		auth_enabled INTEGER NOT NULL DEFAULT 0 CHECK (auth_enabled IN (0, 1)),
+		username TEXT NOT NULL DEFAULT '',
+		password TEXT NOT NULL DEFAULT '',
+		extra_json TEXT NOT NULL DEFAULT '{}',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL,
+		FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+	)`,
+	`CREATE INDEX local_proxy_device_idx ON local_proxy_config(device_id)`,
+
+	`CREATE TABLE upstream_proxies (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		addr TEXT NOT NULL,
+		username TEXT NOT NULL DEFAULT '',
+		password TEXT NOT NULL DEFAULT '',
+		enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+		extra_json TEXT NOT NULL DEFAULT '{}',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	)`,
+
+	`CREATE TABLE country_rules (
+		country_code TEXT PRIMARY KEY,
+		country_name TEXT NOT NULL DEFAULT '',
+		upstream_proxy_id TEXT NOT NULL,
+		enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+		extra_json TEXT NOT NULL DEFAULT '{}',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL,
+		FOREIGN KEY (upstream_proxy_id) REFERENCES upstream_proxies(id) ON DELETE CASCADE
+	)`,
+	`CREATE INDEX country_rules_proxy_idx ON country_rules(upstream_proxy_id)`,
+
+	`CREATE TABLE notification_settings (
+		channel TEXT PRIMARY KEY,
+		enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+		config_json TEXT NOT NULL DEFAULT '{}',
+		sensitive_fields_json TEXT NOT NULL DEFAULT '[]',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	)`,
+
+	`CREATE TABLE app_settings (
+		key TEXT PRIMARY KEY,
+		value_json TEXT NOT NULL,
+		sensitive INTEGER NOT NULL DEFAULT 0 CHECK (sensitive IN (0, 1)),
+		updated_at INTEGER NOT NULL
+	)`,
+
+	`CREATE TABLE audit_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		actor TEXT NOT NULL DEFAULT '',
+		action TEXT NOT NULL,
+		entity_type TEXT NOT NULL DEFAULT '',
+		entity_id TEXT NOT NULL DEFAULT '',
+		outcome TEXT NOT NULL DEFAULT '',
+		remote_addr TEXT NOT NULL DEFAULT '',
+		details_json TEXT NOT NULL DEFAULT '{}',
+		created_at INTEGER NOT NULL
+	)`,
+	`CREATE INDEX audit_events_created_idx ON audit_events(created_at DESC, id DESC)`,
+	`CREATE INDEX audit_events_entity_idx ON audit_events(entity_type, entity_id, created_at DESC)`,
+
+	`CREATE TABLE log_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		event_time INTEGER NOT NULL,
+		level TEXT NOT NULL,
+		message TEXT NOT NULL,
+		caller TEXT NOT NULL DEFAULT '',
+		fields_json TEXT NOT NULL DEFAULT '{}'
+	)`,
+	`CREATE INDEX log_events_time_idx ON log_events(event_time DESC, id DESC)`,
+	`CREATE INDEX log_events_level_idx ON log_events(level, event_time DESC)`,
+
+	`CREATE TABLE card_policies (
+		iccid TEXT PRIMARY KEY,
+		network_enabled INTEGER NOT NULL DEFAULT 0 CHECK (network_enabled IN (0, 1)),
+		vowifi_enabled INTEGER NOT NULL DEFAULT 0 CHECK (vowifi_enabled IN (0, 1)),
+		airplane_enabled INTEGER NOT NULL DEFAULT 0 CHECK (airplane_enabled IN (0, 1)),
+		apn TEXT NOT NULL DEFAULT '',
+		ip_version TEXT NOT NULL DEFAULT '',
+		source TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL,
+		CHECK (NOT (vowifi_enabled = 1 AND airplane_enabled = 1))
+	)`,
+
+	`CREATE TABLE traffic_buckets (
+		device_id TEXT NOT NULL,
+		bucket TEXT NOT NULL,
+		period_start INTEGER NOT NULL,
+		rx_bytes INTEGER NOT NULL DEFAULT 0 CHECK (rx_bytes >= 0),
+		tx_bytes INTEGER NOT NULL DEFAULT 0 CHECK (tx_bytes >= 0),
+		PRIMARY KEY (device_id, bucket, period_start)
+	)`,
+	`CREATE INDEX traffic_buckets_period_idx
+		ON traffic_buckets(bucket, period_start DESC)`,
+}

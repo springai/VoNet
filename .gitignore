@@ -1,0 +1,69 @@
+# ---- Binaries / build outputs ----
+/vonet
+/vonet.exe
+/build/
+/release.py
+/build/vonet
+/build/vonet-linux-amd64
+/build/vonet-linux-amd64.exe
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+/fix
+
+# ---- Cookie / secret files (NEVER commit) ----
+vc.jar
+*.cookies
+*.session
+.env
+.env.*
+!.env.example
+
+# ---- Frontend build products ----
+web/dist/
+web/build/
+web/node_modules/
+
+# ---- Go build ----
+*.test
+*.out
+
+# ---- Python (build/ helpers) ----
+build/__pycache__/
+__pycache__/
+*.pyc
+# Local-only helpers carry internal hostnames/credentials and must never be
+# committed. The whole build directory and the root release.py are ignored.
+build/*.py
+
+/extension/
+
+# ---- Local capture data and diagnostic helpers ----
+/captures/
+/scripts/capture-*
+/scripts/decrypt-o2-esp.go
+/scripts/vonet_remote.py
+
+# ---- Docs / scratch ----
+*.md
+!README.md
+!UPDATE.md
+!VONET_SYNC_LOG.md
+!docs/**/*.md
+*.txt
+build/lists/
+
+# ---- Editor / IDE ----
+.vscode/
+.idea/
+
+# ---- OS junk ----
+.DS_Store
+Thumbs.db
+
+# ---- Claude Code / agent ----
+.claude/
+.worktrees/
+_sync_provider.js

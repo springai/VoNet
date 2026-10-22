@@ -1,0 +1,215 @@
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"vonet/internal/store"
+)
+
+var wecomTemplateVariableNames = []string{
+	"event",
+	"title",
+	"message",
+	"timestamp",
+	"content",
+	"number",
+	"local_phone",
+	"iccid",
+	"recipient",
+	"device_id",
+	"device_name",
+	"device_label",
+	"time",
+}
+
+var wecomWebhookHosts = map[string]struct{}{
+	"qyapi.weixin.qq.com": {},
+}
+
+type wecomTemplateValues map[string]string
+
+func renderWecomPayload(template string, values wecomTemplateValues) ([]byte, error) {
+	for _, name := range wecomTemplateVariableNames {
+		encoded, err := json.Marshal(values[name])
+		if err != nil {
+			return nil, fmt.Errorf("encode WeCom template value %q: %w", name, err)
+		}
+		template = strings.ReplaceAll(template, "{{"+name+"}}", string(encoded))
+	}
+	if strings.Contains(template, "{{") {
+		return nil, errors.New("wecom.payload_template contains an unsupported variable")
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(template), &payload); err != nil || len(payload) == 0 {
+		return nil, errors.New("wecom.payload_template must render to a non-empty JSON object")
+	}
+	return []byte(template), nil
+}
+
+func parseWecomWebhookURL(raw string) (*url.URL, error) {
+	parsed, err := parseOutboundURL(raw, true)
+	if err != nil {
+		return nil, err
+	}
+	canonicalHost := strings.ToLower(parsed.Hostname())
+	if canonicalHost != "qyapi.weixin.qq.com" {
+		return nil, errors.New("WeCom bot webhook must use qyapi.weixin.qq.com")
+	}
+	if parsed.Port() != "" && parsed.Port() != "443" {
+		return nil, errors.New("WeCom bot webhook must use the default HTTPS port")
+	}
+	if parsed.Path != "/cgi-bin/webhook/send" {
+		return nil, errors.New("WeCom bot webhook path must be /cgi-bin/webhook/send")
+	}
+	key := parsed.Query().Get("key")
+	if key == "" || strings.ContainsAny(key, " \t\r\n/") {
+		return nil, errors.New("WeCom bot webhook key parameter is missing or invalid")
+	}
+	query := url.Values{}
+	query.Set("key", key)
+	safeURL, _ := url.Parse("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?" + query.Encode())
+	return safeURL, nil
+}
+
+func validateWecomWebhookURL(ctx context.Context, raw string) (*url.URL, error) {
+	parsed, err := parseWecomWebhookURL(raw)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := resolvePublicAddresses(ctx, parsed.Hostname()); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func validateWecomResponse(status int, body []byte) error {
+	var result struct {
+		ErrCode *int `json:"errcode"`
+	}
+	if status < http.StatusOK || status >= http.StatusMultipleChoices ||
+		json.Unmarshal(body, &result) != nil || result.ErrCode == nil || *result.ErrCode != 0 {
+		return fmt.Errorf("%w: WeCom response was not successful", errProviderRejected)
+	}
+	return nil
+}
+
+func wecomTestValues(now time.Time) wecomTemplateValues {
+	return wecomTemplateValues{
+		"event": "test", "title": "VoNet", "message": "VoNet notification test",
+		"timestamp": now.UTC().Format(time.RFC3339),
+	}
+}
+
+func wecomSMSValues(message smsNotification) wecomTemplateValues {
+	return wecomTemplateValues{
+		"event":        "sms.received",
+		"title":        "收到新短信",
+		"message":      message.Text(),
+		"timestamp":    message.Time.UTC().Format(time.RFC3339),
+		"content":      message.Content,
+		"number":       message.Number,
+		"local_phone":  message.LocalPhone,
+		"iccid":        message.ICCID,
+		"recipient":    message.Recipient(),
+		"device_id":    message.DeviceID,
+		"device_name":  message.DeviceName,
+		"device_label": message.DeviceLabel,
+		"time":         message.Time.Local().Format("2006-01-02 15:04:05"),
+	}
+}
+
+func wecomAutomaticTaskValues(message automaticTaskNotification) wecomTemplateValues {
+	return wecomTemplateValues{
+		"event":        "automatic_task.completed",
+		"title":        message.Title,
+		"message":      message.Text,
+		"timestamp":    message.Time.UTC().Format(time.RFC3339),
+		"content":      "",
+		"number":       "",
+		"device_id":    "",
+		"device_name":  "",
+		"device_label": "",
+		"time":         "",
+	}
+}
+
+func validateWecomNotificationConfig(config map[string]any) error {
+	urls := configStrings(config, "urls")
+	if len(urls) == 0 {
+		return errors.New("wecom.urls must contain at least one URL")
+	}
+	if len(urls) > 8 {
+		return errors.New("wecom.urls cannot contain more than 8 URLs")
+	}
+	for _, rawURL := range urls {
+		if rawURL != store.SecretMask {
+			if _, err := parseWecomWebhookURL(rawURL); err != nil {
+				return err
+			}
+		}
+	}
+	template := configString(config, "payload_template")
+	if template == "" {
+		return errors.New("wecom.payload_template is required")
+	}
+	_, err := renderWecomPayload(template, wecomTestValues(time.Unix(0, 0)))
+	return err
+}
+
+func sendWecomNotification(ctx context.Context, config map[string]any, deviceID *string, values wecomTemplateValues) error {
+	if deviceID != nil && !notificationMatchesDevice(configStrings(config, "device_ids"), *deviceID) {
+		return nil
+	}
+	payload, err := renderWecomPayload(configString(config, "payload_template"), values)
+	if err != nil {
+		return err
+	}
+	client, err := restrictedHTTPClient(ctx, 8*time.Second, "")
+	if err != nil {
+		return err
+	}
+	for _, destination := range configStrings(config, "urls") {
+		parsed, err := validateWecomWebhookURL(ctx, destination)
+		if err != nil {
+			return err
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), bytes.NewReader(payload))
+		if err != nil {
+			return fmt.Errorf("create WeCom notification request: %w", err)
+		}
+		request.Header.Set("Content-Type", "application/json; charset=utf-8")
+		request.Header.Set("User-Agent", "vonet-wecom-notification/1")
+		// Target host is restricted to the WeCom webhook domain whitelist.
+		// CodeQL [go/uncontrolled-data-in-network-request] Endpoint is verified against qyapi.weixin.qq.com.
+		response, err := client.Do(request)
+		if err != nil {
+			return fmt.Errorf("send WeCom notification: %w", err)
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+		closeErr := response.Body.Close()
+		if readErr != nil {
+			return fmt.Errorf("read WeCom response: %w", readErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close WeCom response: %w", closeErr)
+		}
+		if err := validateWecomResponse(response.StatusCode, body); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sendWecomNotificationTest(ctx context.Context, config map[string]any) error {
+	return sendWecomNotification(ctx, config, nil, wecomTestValues(time.Now()))
+}
