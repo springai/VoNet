@@ -51,9 +51,25 @@ jobs:
             fi
           done < <(git tag --merged "${HEAD_SHA}" --sort=-version:refname)
 
-          if [[ -z "${BASE_TAG}" ]]; then
-            echo "::error::No stable vMAJOR.MINOR.PATCH tag is reachable from ${HEAD_SHA}."
-            exit 1
+          BASE_REF=""
+          BASE_LABEL=""
+          NEXT_TAG="v0.0.1"
+          if [[ -n "${BASE_TAG}" ]]; then
+            BASE_REF="${BASE_TAG}"
+            BASE_LABEL="${BASE_TAG}"
+            VERSION="${BASE_TAG#v}"
+            IFS=. read -r MAJOR MINOR PATCH <<< "${VERSION}"
+            NEXT_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          else
+            # A brand-new repository has no stable tag yet. Its root commit is
+            # the release baseline, and the root commit itself must not create
+            # a release just for importing the initial source tree.
+            BASE_REF="$(git rev-list --max-parents=0 "${HEAD_SHA}" | tail -n 1)"
+            if [[ -z "${BASE_REF}" ]]; then
+              echo "::error::Unable to determine the root commit for ${HEAD_SHA}."
+              exit 1
+            fi
+            BASE_LABEL="root-${BASE_REF:0:12}"
           fi
 
           NUMSTAT_FILE="$(mktemp)"
@@ -61,18 +77,22 @@ jobs:
 
           # Count real source changes and tests, but ignore documentation,
           # artwork, dependency lock files, licenses, and generated web assets.
-          git diff --numstat "${BASE_TAG}" "${HEAD_SHA}" -- . \
-            ':(exclude)README.md' \
-            ':(exclude)docs/**' \
-            ':(exclude)img/**' \
-            ':(exclude)LICENSE' \
-            ':(exclude)LICENSES/**' \
-            ':(exclude)NOTICE' \
-            ':(exclude)go.sum' \
-            ':(exclude)web/package-lock.json' \
-            ':(exclude)web/pnpm-lock.yaml' \
-            ':(exclude)web/public/**' \
-            > "${NUMSTAT_FILE}"
+          if [[ "${HEAD_SHA}" == "${BASE_REF}" ]]; then
+            : > "${NUMSTAT_FILE}"
+          else
+            git diff --numstat "${BASE_REF}" "${HEAD_SHA}" -- . \
+              ':(exclude)README.md' \
+              ':(exclude)docs/**' \
+              ':(exclude)img/**' \
+              ':(exclude)LICENSE' \
+              ':(exclude)LICENSES/**' \
+              ':(exclude)NOTICE' \
+              ':(exclude)go.sum' \
+              ':(exclude)web/package-lock.json' \
+              ':(exclude)web/pnpm-lock.yaml' \
+              ':(exclude)web/public/**' \
+              > "${NUMSTAT_FILE}"
+          fi
 
           read -r ADDITIONS DELETIONS < <(
             awk '
@@ -85,17 +105,13 @@ jobs:
           )
           CHANGED_LINES=$((ADDITIONS + DELETIONS))
 
-          VERSION="${BASE_TAG#v}"
-          IFS=. read -r MAJOR MINOR PATCH <<< "${VERSION}"
-          NEXT_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
-
           SHOULD_RELEASE=false
           if (( CHANGED_LINES >= RELEASE_THRESHOLD )); then
             SHOULD_RELEASE=true
           fi
 
           {
-            echo "base_tag=${BASE_TAG}"
+            echo "base_tag=${BASE_LABEL}"
             echo "next_tag=${NEXT_TAG}"
             echo "additions=${ADDITIONS}"
             echo "deletions=${DELETIONS}"
@@ -106,7 +122,7 @@ jobs:
           {
             echo "### Automatic release threshold"
             echo
-            echo "- Base version: \`${BASE_TAG}\`"
+            echo "- Baseline: \`${BASE_LABEL}\`"
             echo "- Target commit: \`${HEAD_SHA}\`"
             echo "- Additions: ${ADDITIONS}"
             echo "- Deletions: ${DELETIONS}"
