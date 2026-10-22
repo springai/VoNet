@@ -5930,6 +5930,19 @@
       },
       "ims": {
         "ipsec_encryption": "aes-cbc",
+        "sms_center": "+447802092035",
+        "sms_preauthenticate": false,
+        "sms_prefer_tel_identity": true,
+        "sms_target_mode": "sip-phone",
+        "sms_target_domain": "o2.co.uk",
+        "sms_recipient_mode": "uk-national",
+        "sms_header_mode": "minimal",
+        "sms_use_contact_via": true,
+        "sms_pani": "IEEE-802.11;country=GB;i-wlan-node-id=820000000001",
+        "sms_new_transaction": true,
+        "sms_bare_401_fallbacks": [
+          "pani-minimal"
+        ],
         "voice_codecs": [
           "AMR-WB",
           "AMR",

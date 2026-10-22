@@ -227,6 +227,14 @@ func (adapter *PCSCAdapter) ReadSMSCenter(ctx context.Context, deviceID string) 
 	return identity.SMSC, nil
 }
 
+func (adapter *PCSCAdapter) ReadSMSCenterPSI(ctx context.Context, deviceID string) (string, error) {
+	selector, pin, err := adapter.resolve(ctx, strings.TrimSpace(deviceID))
+	if err != nil {
+		return "", err
+	}
+	return adapter.service.ReadSMSCenterPSI(ctx, selector, pin)
+}
+
 func (adapter *PCSCAdapter) CheckReady(ctx context.Context, identity SIMIdentity) (AKAEvidence, error) {
 	selector, pin, err := adapter.resolve(ctx, adapter.deviceID(identity))
 	if err != nil {

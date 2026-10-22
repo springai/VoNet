@@ -39,15 +39,42 @@ func TestDeveloperSettingsUpdatesGlobalSMSLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := &Server{store: database, developerEnabled: true, logger: regionTestLogger(), maxRequestBodyBytes: 4096}
-	request := httptest.NewRequest(http.MethodPut, "/api/settings/developer", strings.NewReader(`{"sms_hourly_limit":17}`))
+	request := httptest.NewRequest(http.MethodPut, "/api/settings/developer", strings.NewReader(`{"sms_hourly_limit":21}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	server.handleDeveloperSettings(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
 	}
-	if got := developer.SMSHourlyLimit(ctx, database); got != 17 {
-		t.Fatalf("SMS hourly limit = %d, want 17", got)
+	if got := developer.SMSHourlyLimit(ctx, database); got != 21 {
+		t.Fatalf("SMS hourly limit = %d, want 21", got)
+	}
+}
+
+func TestDeveloperSettingsValidatesSMSHourlyLimit(t *testing.T) {
+	ctx := context.Background()
+	database, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	enabled, _ := json.Marshal(map[string]bool{"enabled": true})
+	if err := database.UpsertAppSetting(ctx, store.AppSetting{Key: developer.EnabledSettingKey, Value: enabled}); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{store: database, developerEnabled: true, logger: regionTestLogger(), maxRequestBodyBytes: 4096}
+	for _, body := range []string{
+		`{"sms_hourly_limit":0}`,
+		`{"sms_hourly_limit":-1}`,
+		`{"sms_hourly_limit":1.5}`,
+	} {
+		request := httptest.NewRequest(http.MethodPut, "/api/settings/developer", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		server.handleDeveloperSettings(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d, want 400", body, response.Code)
+		}
 	}
 }
 

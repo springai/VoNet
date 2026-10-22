@@ -199,6 +199,29 @@ func TestSMSPSIFallbackRoutes(t *testing.T) {
 	}
 }
 
+func TestSMSSIPPhoneTargetIsLimitedToO2(t *testing.T) {
+	aka := &smsPSITestAKA{err: errors.New("PSI unavailable")}
+	session := &Session{
+		provider: &Provider{aka: aka},
+		identity: identitySet{domain: "ims.mnc010.mcc234.3gppnetwork.org"},
+		request: vowifi.IMSRequest{Identity: vowifi.SIMIdentity{
+			ICCID: "8944110000000000001", IMSI: "234109999999999",
+			HomeMCC: "234", HomeMNC: "10",
+		}},
+	}
+	target, err := session.smsTarget(context.Background(), "+447802092035")
+	want := "sip:+447802092035@o2.co.uk;user=phone"
+	if err != nil || target != want {
+		t.Fatalf("O2 SMS target = %q, %v, want %q", target, err, want)
+	}
+
+	session.request.Identity = vowifi.SIMIdentity{HomeMCC: "999", HomeMNC: "99"}
+	target, err = session.smsTarget(context.Background(), "+447802092035")
+	if err != nil || target != "tel:+447802092035" {
+		t.Fatalf("standard SMS target = %q, %v, want tel fallback", target, err)
+	}
+}
+
 type smsPSICanceledCenterAKA struct{ *recordingAKA }
 
 func (*smsPSICanceledCenterAKA) ReadSMSCenter(context.Context, string) (string, error) {

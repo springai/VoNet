@@ -3,9 +3,12 @@ package ims
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/url"
 	"strings"
+
+	"vonet/internal/vowifi"
 )
 
 // smsCenterPSIReader is optional: older AKA adapters retain numeric SMSC routing.
@@ -16,6 +19,15 @@ type smsCenterPSIReader interface {
 
 func (session *Session) smsTarget(ctx context.Context, smsc string) (string, error) {
 	fallback := "tel:" + normalizeE164(smsc)
+	profile := vowifi.ResolveCarrierProfile(session.request.Identity)
+	targetDomain := strings.TrimSpace(profile.SMSTargetDomain)
+	if targetDomain == "" {
+		targetDomain = strings.TrimSpace(session.identity.domain)
+	}
+	if profile.SMSTargetMode == "sip-phone" && targetDomain != "" {
+		fallback = "sip:" + normalizeE164(smsc) +
+			"@" + targetDomain + ";user=phone"
+	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -30,7 +42,14 @@ func (session *Session) smsTarget(ctx context.Context, smsc string) (string, err
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return "", err
 	}
-	if err != nil || !validSMSPSI(psi) {
+	if err != nil {
+		session.logOutboundSMS(slog.LevelWarn, "IMS SMS PSI read failed",
+			"stage", "sms_target", "error_class", "read_failed")
+		return fallback, nil
+	}
+	if !validSMSPSI(psi) {
+		session.logOutboundSMS(slog.LevelWarn, "IMS SMS PSI was invalid",
+			"stage", "sms_target")
 		return fallback, nil
 	}
 	return psi, nil

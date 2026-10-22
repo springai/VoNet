@@ -239,6 +239,9 @@ func TestResolveCarrierProfileStandardHasNoRegisterOverrides(t *testing.T) {
 	if profile.IMSRegisterOptions.ExpirySeconds != 0 {
 		t.Fatalf("standard expiry = %d", profile.IMSRegisterOptions.ExpirySeconds)
 	}
+	if profile.SMSPreauthenticate || profile.SMSPreferRegisteredIdentity {
+		t.Fatal("standard profile unexpectedly enables O2 SMS behavior")
+	}
 	if profile.IMSRegisterOptions.ContactFormat != "" {
 		t.Fatalf("standard contact format = %q", profile.IMSRegisterOptions.ContactFormat)
 	}
@@ -372,7 +375,7 @@ func TestThreeHKCarrierProfileAndPANI(t *testing.T) {
 
 func TestO2UKProfileUsesICCIDFallbackAndOmitsPANI(t *testing.T) {
 	profile := ResolveCarrierProfile(SIMIdentity{
-		IMSI:    "234107000000001",
+		IMSI:    "234109999999999",
 		ICCID:   "8944110000000000001",
 		HomeMCC: "234",
 		HomeMNC: "10",
@@ -382,6 +385,25 @@ func TestO2UKProfileUsesICCIDFallbackAndOmitsPANI(t *testing.T) {
 	}
 	if profile.PANIEnabled == nil || *profile.PANIEnabled {
 		t.Fatalf("O2 PANI configuration = %v, want disabled", profile.PANIEnabled)
+	}
+	if profile.SMSPreauthenticate {
+		t.Fatal("O2 SMS unexpectedly enables cached preauthentication")
+	}
+	if profile.SMSPreferRegisteredIdentity || !profile.SMSPreferTelephoneIdentity {
+		t.Fatal("O2 SMS identity policy is not telephone-associated")
+	}
+	if profile.SMSCenter != "+447802092035" {
+		t.Fatalf("O2 SMSC fallback = %q, want +447802092035", profile.SMSCenter)
+	}
+	if profile.SMSTargetMode != "sip-phone" {
+		t.Fatalf("O2 SMS target mode = %q, want sip-phone", profile.SMSTargetMode)
+	}
+	if profile.SMSRecipientMode != "uk-national" {
+		t.Fatalf("O2 SMS recipient mode = %q, want uk-national", profile.SMSRecipientMode)
+	}
+	if profile.SMSHeaderMode != "minimal" || !profile.SMSUseContactVia ||
+		profile.SMSPANI != "IEEE-802.11;country=GB;i-wlan-node-id=820000000001" {
+		t.Fatalf("O2 SMS MESSAGE profile = %#v", profile)
 	}
 	if profile.IMSRegisterOptions.ExpirySeconds != 600000 ||
 		profile.IMSRegisterOptions.SupportedHeader == nil ||

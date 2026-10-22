@@ -32,8 +32,8 @@ func (s *Server) handleDeveloperSettings(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusBadRequest, "invalid_device_limit", "device limit is outside the supported range")
 			return
 		}
-		if request.SMSHourlyLimit != nil && (*request.SMSHourlyLimit < 1 || *request.SMSHourlyLimit > developer.MaxSMSHourlyLimit) {
-			writeError(w, http.StatusBadRequest, "invalid_sms_hourly_limit", "SMS hourly limit is outside the supported range")
+		if request.SMSHourlyLimit != nil && *request.SMSHourlyLimit < 1 {
+			writeError(w, http.StatusBadRequest, "invalid_sms_hourly_limit", "SMS hourly limit must be greater than or equal to 1")
 			return
 		}
 		if request.DeviceLimit != nil {
@@ -71,7 +71,6 @@ func (s *Server) writeDeveloperSettings(w http.ResponseWriter, r *http.Request) 
 		"max_device_limit":         developer.MaxDeviceLimit,
 		"sms_hourly_limit":         developer.SMSHourlyLimit(r.Context(), s.store),
 		"default_sms_hourly_limit": developer.DefaultSMSHourlyLimit,
-		"max_sms_hourly_limit":     developer.MaxSMSHourlyLimit,
 		"auto_clear_modem_storage": developer.AutoClearModemStorage(r.Context(), s.store),
 	}})
 }

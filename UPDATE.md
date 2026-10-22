@@ -1455,3 +1455,79 @@ ike: IKE_AUTH EAP round 1: ike: responder reported fatal notification 10500
 - `Remove` 会清除 entry 中所有 pending 意图。
 
 ---
+
+### 54. 英国 O2 Wi-Fi Calling 短信发送修复与抓包经验
+
+**问题背景**:
+
+- 英国 O2 Wi-Fi Calling 已可稳定注册、拨打电话和接听来电，但移动始发短信持续失败。
+- Android 实机在相同 SIM、Wi-Fi 和位置下可以成功发送短信，说明问题位于 VoNet 的 SMS-over-IMS 请求构造或兼容参数，而不是 SIM 未开通短信业务。
+- 本次继续采用“Android 成功样本 + VoNet 服务端 SIP/ESP 抓包 + 逐项等价替换”的方式定位，最终成功收到 `202 Accepted` 和对应 RP-ACK。
+- 文档只记录协议差异和排查经验，不包含真实 IMSI、ICCID、IMEI、MSISDN、SMSC、内部 IP、设备序列号、接入点标识、密码、密钥或原始抓包内容。
+
+**一、抓包与对照方法**:
+
+1. Android 侧记录 telephony、QImsService、ImsSmsDispatcher、SMS provider 状态，以及 IKE/ESP/XFRM 和 SIP 端口数据。
+2. VoNet 侧使用服务端 `strace` 保存完整 SIP MESSAGE 和响应，并保存外层 ESP、XFRM SA、运行日志和 API 结果。
+3. 对 Android 成功短信读取发送时间、SMSC、收件号码格式、正文长度和 Qualcomm `messageRef`，再与 VoNet 生成的 RP-DATA/RPDU 逐字节比较。
+4. 尝试 NFLOG 抓取内层解密流量时发现设备自带 tcpdump 无权监听 NFLOG group；该限制被记录，但服务端 `strace` 已能提供完整 SIP 明文，不影响根因分析。
+5. 所有真实抓包、日志、密钥和本地诊断脚本继续保存在 Git 忽略目录中，不进入版本库。
+
+**二、SMS PDU 层发现**:
+
+1. Android 成功样本使用运营商 SMSC，并将英国号码编码为国内格式；VoNet 此前把带国家码的输入直接编码为国际 TP-DA。
+2. O2 Profile 新增 `sms_recipient_mode=uk-national`，仅对 O2 将英国 `+44` 号码转换为国内 `0` 前缀格式；其他运营商保持原输入格式。
+3. RP-DATA 结构保持标准移动始发形式：RP-OA 为空、RP-DA 为运营商 SMSC、User Data 为 SMS-SUBMIT TPDU。
+4. TPDU 使用 Android 同类请求的 SMS-SUBMIT 参数、TP-MR/RP-Reference 对齐以及短文本 GSM-7 编码，修正后 PDU 长度和字段边界与成功样本一致。
+
+**三、SIP MESSAGE 层发现**:
+
+1. 初期所有 MESSAGE 都被 O2 返回裸 `401 Unauthorized`，响应不含 `WWW-Authenticate`、`Proxy-Authenticate` 或诊断头。这不是普通 Digest challenge，不能通过重复 AKA 计算解决。
+2. 已排除并验证无效的组合包括：多种 SMSC/PSI Request-URI、tel/SIP 身份交叉、注册 IMSI/MSISDN 身份交叉、空 Digest、缓存 AKA Digest、`integrity-protected=yes`、无 Authorization、`user=phone` 参数和多种路由目标。
+3. MESSAGE 最终收敛为 O2 专用最小头集合：使用 tel 身份、无 Digest、正确 Contact 端口 Via，并省略与 Android 成功路径无关的 Contact、Supported、User-Agent、Content-Transfer-Encoding 等额外头。
+4. 其他运营商仍走原标准 MESSAGE 构造；O2 差异全部由 Carrier Profile 开关控制，避免影响现有运营商。
+
+**四、决定性根因**:
+
+1. `P-Access-Network-Info` 是 O2 短信业务位置授权的关键。缺少 PANI 时仍返回裸 `401`。
+2. 使用广播或无效 WLAN 占位节点时，O2 会进入业务授权检查并返回：
+   `403 Forbidden - Service not allowed in this location`。
+3. 使用 `country=GB` 和真实本地管理单播 WLAN 节点标识后，同一条 RP-DATA 收到 `202 Accepted`，随后收到相同事务标识的 RP-ACK，证明 IP-SM-GW 已接收短信提交。
+4. 获胜 PANI 形式为：
+   `IEEE-802.11;country=GB;i-wlan-node-id=<WLAN-NODE-ID>`。
+5. 真实 WLAN 节点标识属于位置相关敏感配置，不写入文档。wificalling JSON 的 `sms_pani` 字段保存完整 PANI；当前仓库和测试使用合成 WLAN 节点标识，不代表真实接入点或地理位置。
+
+**五、代码修改**:
+
+- `internal/vowifi/carrier_profiles.json`、`internal/vowifi/carrier_compat.go`：增加 O2 专用短信号码格式、最小 MESSAGE 头、Contact Via、JSON PANI 配置和 O2 回退策略。
+- `internal/vowifi/ims/sms_runtime.go`：对齐国内 TP-DA、tel 身份、最小 SIP MESSAGE、正确 Via、PANI 以及无挑战拒绝的受控回退。
+- `internal/vowifi/ims/sms_psi.go`、`internal/pcsc/service.go`：保留 EF_PSISMSC 读取和 SMSC fallback；SIM 不支持 PSI 文件时使用运营商 SMSC 路由。
+- 测试中的号码、IMSI、ICCID、接入点标识均使用合成值或保留测试值，不使用真实用户数据。
+- 抓包工具和抓包数据不纳入本次代码修改，继续按本地诊断资料保留。
+
+**六、以后修复其他运营商短信的参考顺序**:
+
+1. 先用 Android/原生终端成功发送一条短文本，记录 SMSC、号码格式、正文编码和网络响应。
+2. 对比 RP-DATA/RPDU，不要先盲目修改 SIP URI；RP-DATA 字段边界错误会被网络表现成不直观的拒绝。
+3. 检查 Request-URI、From、P-Preferred-Identity、Authorization、Via 和 Route，但一次只改变一组变量并记录响应码。
+4. 对无 `WWW-Authenticate` 的裸 `401`，不要继续无限计算 Digest；优先检查服务选择、接入网络信息和业务位置授权。
+5. 重点检查 `P-Access-Network-Info`、国家码、WLAN 节点格式和本地管理单播约束。位置受限运营商可能用 `403 Service not allowed in this location` 表示 PANI 不可信。
+6. 一旦收到 2xx，确认是否继续收到 RP-ACK 或 SMS-STATUS-REPORT，再判断是“网络接收成功”还是“终端已投递”。
+7. 获胜参数应固化为运营商 Profile，并用合成号码、合成身份和合成接入点标识写回归测试。
+8. 抓包脚本、pcap、strace、XFRM 密钥、logcat、设备标识和位置数据必须保持 Git 忽略；文档只保留占位符和协议结论。
+
+**七、验证结果**:
+
+- O2 实机短信由 Android 成功发送，用于建立参考样本。
+- VoNet 使用相同短信语义和号码格式后，O2 返回 `202 Accepted`，并返回 RP-ACK。
+- O2 Profile 的国内 TP-DA、tel 身份、最小 MESSAGE 头、Contact Via 和 JSON PANI 均有回归测试。
+- 标准运营商 MESSAGE 构造、PANI 和鉴权行为保持不变。
+- `go test ./...`、`npm test`、`npm run build` 和 `git diff --check` 通过。
+
+**安全与仓库约束**:
+
+- `UPDATE.md` 不包含任何真实用户、SIM、设备、网络位置、凭据或密钥信息。
+- 抓包脚本、解密脚本、抓包数据和构建产物均由 `.gitignore` 覆盖。
+- 本次修复不提交 GitHub；PANI 作为 wificalling JSON 的运营商兼容配置保存。
+
+---

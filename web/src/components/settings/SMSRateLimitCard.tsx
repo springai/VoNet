@@ -1,19 +1,16 @@
 import { SendRegular } from "@fluentui/react-icons";
-import type { DeveloperSettings } from "../../types";
 import { useI18n } from "../../lib/i18n";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
 import { CardDecor, CardIcon, CardTitle } from "./Cards";
 
 export function SMSRateLimitCard({
-  value,
   limit,
   loading,
   saving,
   onLimitChange,
   onSave,
 }: {
-  value: DeveloperSettings | null;
   limit: number;
   loading: boolean;
   saving: boolean;
@@ -38,7 +35,7 @@ export function SMSRateLimitCard({
         <Input
           type="number"
           min={1}
-          max={value?.maxSmsHourlyLimit ?? 20}
+          step={1}
           value={Number.isFinite(limit) ? limit : ""}
           disabled={loading || saving}
           onChange={(event) => onLimitChange(Number(event.target.value))}

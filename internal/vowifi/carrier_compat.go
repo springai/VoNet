@@ -38,6 +38,17 @@ type CarrierProfile struct {
 	IKEProposal                        string
 	AdvertiseEAPOnly                   bool
 	AllowSMSWithoutContactConfirmation bool
+	SMSPreauthenticate                 bool
+	SMSPreferRegisteredIdentity        bool
+	SMSPreferTelephoneIdentity         bool
+	SMSTargetMode                      string
+	SMSTargetDomain                    string
+	SMSRecipientMode                   string
+	SMSHeaderMode                      string
+	SMSUseContactVia                   bool
+	SMSPANI                            string
+	SMSNewTransaction                  bool
+	SMSBareUnauthorizedFallbacks       []string
 	IMSRegisterOptions                 IMSRegisterOptions
 	IMSTransport                       string
 	IMSIdentityProfile                 string
@@ -163,6 +174,17 @@ type carrierProfileIMS struct {
 	VoiceCodecs                        []string                      `json:"voice_codecs,omitempty"`
 	RegisterOptions                    carrierProfileRegisterOptions `json:"register_options,omitzero"`
 	AllowSMSWithoutContactConfirmation *bool                         `json:"allow_sms_without_contact_confirmation,omitempty"`
+	SMSPreauthenticate                 *bool                         `json:"sms_preauthenticate,omitempty"`
+	SMSPreferRegisteredIdentity        *bool                         `json:"sms_prefer_registered_identity,omitempty"`
+	SMSPreferTelephoneIdentity         *bool                         `json:"sms_prefer_tel_identity,omitempty"`
+	SMSTargetMode                      string                        `json:"sms_target_mode,omitempty"`
+	SMSTargetDomain                    string                        `json:"sms_target_domain,omitempty"`
+	SMSRecipientMode                   string                        `json:"sms_recipient_mode,omitempty"`
+	SMSHeaderMode                      string                        `json:"sms_header_mode,omitempty"`
+	SMSUseContactVia                   *bool                         `json:"sms_use_contact_via,omitempty"`
+	SMSPANI                            string                        `json:"sms_pani,omitempty"`
+	SMSNewTransaction                  *bool                         `json:"sms_new_transaction,omitempty"`
+	SMSBareUnauthorizedFallbacks       []string                      `json:"sms_bare_401_fallbacks,omitempty"`
 }
 
 type carrierProfileRegisterOptions struct {
@@ -717,6 +739,39 @@ func applyCarrierProfileRule(base CarrierProfile, rule carrierProfileRule, sourc
 	}
 	if rule.IMS.AllowSMSWithoutContactConfirmation != nil {
 		base.AllowSMSWithoutContactConfirmation = *rule.IMS.AllowSMSWithoutContactConfirmation
+	}
+	if rule.IMS.SMSPreauthenticate != nil {
+		base.SMSPreauthenticate = *rule.IMS.SMSPreauthenticate
+	}
+	if rule.IMS.SMSPreferRegisteredIdentity != nil {
+		base.SMSPreferRegisteredIdentity = *rule.IMS.SMSPreferRegisteredIdentity
+	}
+	if rule.IMS.SMSPreferTelephoneIdentity != nil {
+		base.SMSPreferTelephoneIdentity = *rule.IMS.SMSPreferTelephoneIdentity
+	}
+	if value := strings.ToLower(strings.TrimSpace(rule.IMS.SMSTargetMode)); value != "" {
+		base.SMSTargetMode = value
+	}
+	if value := strings.ToLower(strings.TrimSpace(rule.IMS.SMSTargetDomain)); value != "" {
+		base.SMSTargetDomain = value
+	}
+	if value := strings.ToLower(strings.TrimSpace(rule.IMS.SMSRecipientMode)); value != "" {
+		base.SMSRecipientMode = value
+	}
+	if value := strings.ToLower(strings.TrimSpace(rule.IMS.SMSHeaderMode)); value != "" {
+		base.SMSHeaderMode = value
+	}
+	if rule.IMS.SMSUseContactVia != nil {
+		base.SMSUseContactVia = *rule.IMS.SMSUseContactVia
+	}
+	if value := strings.TrimSpace(rule.IMS.SMSPANI); value != "" {
+		base.SMSPANI = value
+	}
+	if rule.IMS.SMSNewTransaction != nil {
+		base.SMSNewTransaction = *rule.IMS.SMSNewTransaction
+	}
+	if len(rule.IMS.SMSBareUnauthorizedFallbacks) > 0 {
+		base.SMSBareUnauthorizedFallbacks = append([]string(nil), rule.IMS.SMSBareUnauthorizedFallbacks...)
 	}
 	base.IMSRegisterOptions = applyRegisterOptions(base.IMSRegisterOptions, rule.IMS.RegisterOptions)
 	if (base.IMSIdentityProfile == "" || base.IMSIdentityProfile == IMSProfileStandard) && isATTEPDG(base.EPDG) {

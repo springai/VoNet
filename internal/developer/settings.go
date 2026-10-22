@@ -30,7 +30,6 @@ const (
 	DefaultDeviceLimit       = 5
 	MaxDeviceLimit           = 999
 	DefaultSMSHourlyLimit    = 10
-	MaxSMSHourlyLimit        = 20
 )
 
 func DeviceLimit(ctx context.Context, database *store.Store, enabled bool) int {
@@ -77,15 +76,12 @@ func SMSHourlyLimit(ctx context.Context, database *store.Store) int {
 	if json.Unmarshal(setting.Value, &document) != nil || document.Limit < 1 {
 		return DefaultSMSHourlyLimit
 	}
-	if document.Limit > MaxSMSHourlyLimit {
-		return MaxSMSHourlyLimit
-	}
 	return document.Limit
 }
 
 func SetSMSHourlyLimit(ctx context.Context, database *store.Store, limit int) error {
-	if limit < 1 || limit > MaxSMSHourlyLimit {
-		return fmt.Errorf("SMS hourly limit must be between 1 and %d", MaxSMSHourlyLimit)
+	if limit < 1 {
+		return errors.New("SMS hourly limit must be greater than or equal to 1")
 	}
 	value, err := json.Marshal(map[string]int{"limit": limit})
 	if err != nil {

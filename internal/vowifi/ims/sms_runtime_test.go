@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"vonet/internal/device"
 	"vonet/internal/vowifi"
 )
 
@@ -30,7 +31,7 @@ func (smsTestAKA) ReadSMSCenterPSI(context.Context, string) (string, error) {
 
 func TestValidProtectedTCPSourceAllowsAlternatePCSCF(t *testing.T) {
 	session := &Session{securityActive: true}
-	source := &net.TCPAddr{IP: net.ParseIP("2a03:dd00:1f80:5060::26"), Port: 22042}
+	source := &net.TCPAddr{IP: net.ParseIP("2001:db8::26"), Port: 22042}
 	if !session.validProtectedTCPSource(source) {
 		t.Fatal("protected TCP source from an alternate P-CSCF was rejected")
 	}
@@ -288,10 +289,192 @@ func TestSMSCenterForIdentityFallsBackToCarrierProfile(t *testing.T) {
 	}
 
 	// Profile fallback when identity has no SMSC
-	identity := vowifi.SIMIdentity{HomeMCC: "234", HomeMNC: "10"}
+	identity := vowifi.SIMIdentity{
+		ICCID: "8944110000000000001", HomeMCC: "234", HomeMNC: "10",
+	}
 	profile := vowifi.ResolveCarrierProfile(identity)
 	if got := smsCenterForIdentity(Config{}, identity); got != profile.SMSCenter {
 		t.Errorf("smsCenterForIdentity = %q, want %q", got, profile.SMSCenter)
+	}
+	if profile.SMSCenter != "+447802092035" {
+		t.Fatalf("O2 profile SMSC = %q, want +447802092035", profile.SMSCenter)
+	}
+}
+
+func TestO2SMSSubmitRecipientUsesUKNationalAddress(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		recipient string
+		mode      string
+		want      string
+	}{
+		{"O2 international", "+447700900001", "uk-national", "07700900001"},
+		{"O2 already national", "07700900001", "uk-national", "07700900001"},
+		{"other carrier", "+447700900001", "", "+447700900001"},
+		{"non-UK international", "+12025550123", "uk-national", "+12025550123"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := normalizeSMSSubmitRecipient(test.recipient, test.mode); got != test.want {
+				t.Fatalf("normalized recipient = %q, want %q", got, test.want)
+			}
+		})
+	}
+
+	parts, err := device.PrepareSMSSubmitTPDUs(
+		normalizeSMSSubmitRecipient("+447700900001", "uk-national"),
+		"hello",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpdu := parts[0].TPDU
+	wantAddress := []byte{0x70, 0x07, 0x90, 0x00, 0x00, 0xf1}
+	if len(tpdu) < 10 || tpdu[0] != 0x21 || tpdu[2] != 0x0b || tpdu[3] != 0x81 ||
+		!bytes.Equal(tpdu[4:10], wantAddress) {
+		t.Fatalf("O2 TPDU = %x, want national TP-DA %x", tpdu, wantAddress)
+	}
+}
+
+func TestSMSProfileControlsO2MessageHeaders(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		identity vowifi.SIMIdentity
+		wantO2   bool
+	}{
+		{
+			name: "O2 UK",
+			identity: vowifi.SIMIdentity{
+				ICCID: "8944110000000000001", IMSI: "234109999999999",
+				HomeMCC: "234", HomeMNC: "10",
+			},
+			wantO2: true,
+		},
+		{
+			name: "standard profile",
+			identity: vowifi.SIMIdentity{
+				ICCID: "8999990000000000001", IMSI: "999990000000001",
+				HomeMCC: "999", HomeMNC: "99",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &identityTestConn{}
+			session := &Session{
+				provider: &Provider{config: Config{TransactionTimeout: time.Second}},
+				request: vowifi.IMSRequest{
+					DeviceID: "reader",
+					Identity: test.identity,
+				},
+				identity: identitySet{
+					private:         "234109999999999@ims.mnc010.mcc234.3gppnetwork.org",
+					public:          "sip:234109999999999@ims.mnc010.mcc234.3gppnetwork.org",
+					user:            "234109999999999",
+					domain:          "ims.mnc010.mcc234.3gppnetwork.org",
+					temporaryPublic: true,
+				},
+				evidence: vowifi.IMSEvidence{
+					AssociatedIdentities: []string{"tel:+447700900000", "sip:associated-default@example.test"},
+				},
+				endpoint:     pcscfEndpoint{host: "127.0.0.1", port: 5060},
+				transport:    "tcp",
+				conn:         conn,
+				fromTag:      "test-tag",
+				cseq:         1,
+				transactions: make(map[sipTransactionKey]chan *sipResponse),
+			}
+			if !test.wantO2 {
+				session.evidence.AssociatedIdentities = []string{"sip:associated-default@example.test"}
+			}
+			var captured *sipRequest
+			conn.onWrite = func(packet []byte) (int, error) {
+				parsed, err := parseSIPPacket(packet)
+				if err != nil || parsed.Request == nil {
+					return 0, fmt.Errorf("parse outgoing MESSAGE: %v", err)
+				}
+				captured = parsed.Request
+				session.dispatchPacket(sipPacket{Response: &sipResponse{
+					StatusCode: 202,
+					Headers: map[string][]string{
+						"call-id": {captured.value("Call-ID")},
+						"cseq":    {captured.value("CSeq")},
+					},
+				}}, nil)
+				return len(packet), nil
+			}
+			const target = "tel:+447802092035"
+			_, err := session.sendSIPMessage(
+				context.Background(),
+				target,
+				[]byte{0x00, 0x01},
+				"",
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const associatedDefault = "<sip:associated-default@example.test>"
+			if test.wantO2 {
+				if !strings.Contains(captured.value("From"), "<tel:+447700900000>") ||
+					captured.value("P-Preferred-Identity") != "<tel:+447700900000>" ||
+					captured.value("CSeq") != "1 MESSAGE" {
+					t.Fatalf("O2 MESSAGE identity = %#v", captured.Headers)
+				}
+				if captured.value("Contact") != "" || captured.value("Supported") != "" ||
+					captured.value("P-Preferred-Service") != "" || len(captured.values("Accept-Contact")) != 0 {
+					t.Fatalf("O2 MESSAGE minimal headers = %#v", captured.Headers)
+				}
+				if captured.value("P-Access-Network-Info") !=
+					"IEEE-802.11;country=GB;i-wlan-node-id=820000000001" {
+					t.Fatalf("O2 MESSAGE PANI = %q", captured.value("P-Access-Network-Info"))
+				}
+				if captured.value("Authorization") != "" {
+					t.Fatalf("O2 MESSAGE Authorization = %q", captured.value("Authorization"))
+				}
+			} else if captured.value("From") != associatedDefault+";tag=test-tag" ||
+				captured.value("P-Preferred-Identity") != associatedDefault ||
+				captured.value("P-Access-Network-Info") !=
+					"IEEE-802.11;i-wlan-node-id=ffffffffffff" ||
+				captured.value("Authorization") != "" {
+				t.Fatalf("standard MESSAGE headers = %#v", captured.Headers)
+			}
+		})
+	}
+}
+
+func TestSMSPreauthorizationUsesCachedAKAState(t *testing.T) {
+	const target = "sip:+447802092035@ims.mnc010.mcc234.3gppnetwork.org;user=phone"
+	session := &Session{
+		securityActive: true,
+		identity: identitySet{
+			private: "234109999999999@ims.mnc010.mcc234.3gppnetwork.org",
+			domain:  "ims.mnc010.mcc234.3gppnetwork.org",
+		},
+		auth: &authenticationState{
+			challenge: digestChallenge{
+				Realm:     "ims.mnc010.mcc234.3gppnetwork.org",
+				Nonce:     "cached-nonce",
+				Algorithm: "AKAv1-MD5",
+			},
+			response: []byte{1, 2, 3, 4},
+		},
+	}
+	header, authorization := session.smsPreauthorization(target)
+	if header != "Authorization" || authorization == "" {
+		t.Fatalf("cached preauthorization = %q, %q", header, authorization)
+	}
+	scheme, parameters, found := strings.Cut(authorization, " ")
+	if !found || scheme != "Digest" {
+		t.Fatalf("cached preauthorization = %q", authorization)
+	}
+	directives, err := parseAuthDirectives(parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directives["uri"] != target ||
+		directives["nonce"] != "cached-nonce" ||
+		directives["algorithm"] != "AKAv1-MD5" ||
+		directives["response"] == "" ||
+		directives["integrity-protected"] != "yes" {
+		t.Fatalf("cached digest directives = %#v", directives)
 	}
 }
 
@@ -599,7 +782,92 @@ func serveOutboundSMS(listener *net.UDPConn, nonce string, readyForClose chan<- 
 	if len(tpdu) < 2 || tpdu[0]&0x03 != 1 || tpdu[0]&0x20 == 0 || tpdu[1] != body[1] {
 		return fmt.Errorf("SMS-SUBMIT did not request a trackable status report: %x", tpdu)
 	}
-	if _, err = listener.WriteToUDP(testResponse(202, "Accepted", message.Request.value("Call-ID"), message.Request.value("CSeq"), nil), remote); err != nil {
+	messageCallID := message.Request.value("Call-ID")
+	messageCSeq := message.Request.value("CSeq")
+	messageFrom := message.Request.value("From")
+	messageTo := message.Request.value("To")
+	messageBody := append([]byte(nil), body...)
+	messageNonce := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	if _, err = listener.WriteToUDP(testResponse(401, "Unauthorized", messageCallID, messageCSeq, []string{
+		`Proxy-Authenticate: Digest realm="ims.mnc001.mcc001.3gppnetwork.org", nonce="` + messageNonce + `", algorithm=AKAv1-MD5`,
+	}), remote); err != nil {
+		return err
+	}
+
+	count, remote, err = listener.ReadFromUDP(packet)
+	if err != nil {
+		return err
+	}
+	authenticatedMessage, err := parseSIPPacket(packet[:count])
+	if err != nil || authenticatedMessage.Request == nil {
+		return fmt.Errorf("authenticated MESSAGE parse: %v", err)
+	}
+	authenticatedRequest := authenticatedMessage.Request
+	if authenticatedRequest.Method != "MESSAGE" ||
+		authenticatedRequest.URI != message.Request.URI ||
+		authenticatedRequest.value("Call-ID") != messageCallID ||
+		authenticatedRequest.value("From") != messageFrom ||
+		authenticatedRequest.value("To") != messageTo ||
+		!bytes.Equal(authenticatedRequest.Body, messageBody) {
+		return fmt.Errorf("authenticated MESSAGE changed the original request: %#v", authenticatedRequest)
+	}
+	if authenticatedRequest.value("CSeq") == messageCSeq {
+		return errors.New("authenticated MESSAGE reused the challenged CSeq")
+	}
+	if err := verifySIPMessageAuthorization(
+		authenticatedRequest.value("Proxy-Authorization"),
+		messageNonce,
+		message.Request.URI,
+		"",
+		"",
+	); err != nil {
+		return fmt.Errorf("MESSAGE Proxy-Authorization: %w", err)
+	}
+	if authenticatedRequest.value("Authorization") != "" {
+		return errors.New("401 Proxy-Authenticate retry unexpectedly used Authorization")
+	}
+
+	proxyMessageNonce := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x43}, 32))
+	if _, err = listener.WriteToUDP(testResponse(407, "Proxy Authentication Required", messageCallID, authenticatedRequest.value("CSeq"), []string{
+		`Proxy-Authenticate: Digest realm="ims.mnc001.mcc001.3gppnetwork.org", nonce="` + proxyMessageNonce + `", algorithm=AKAv1-MD5, qop="auth"`,
+	}), remote); err != nil {
+		return err
+	}
+
+	count, remote, err = listener.ReadFromUDP(packet)
+	if err != nil {
+		return err
+	}
+	proxyAuthenticatedMessage, err := parseSIPPacket(packet[:count])
+	if err != nil || proxyAuthenticatedMessage.Request == nil {
+		return fmt.Errorf("proxy-authenticated MESSAGE parse: %v", err)
+	}
+	proxyRequest := proxyAuthenticatedMessage.Request
+	if proxyRequest.Method != "MESSAGE" ||
+		proxyRequest.URI != message.Request.URI ||
+		proxyRequest.value("Call-ID") != messageCallID ||
+		proxyRequest.value("From") != messageFrom ||
+		proxyRequest.value("To") != messageTo ||
+		!bytes.Equal(proxyRequest.Body, messageBody) {
+		return fmt.Errorf("proxy-authenticated MESSAGE changed the original request: %#v", proxyRequest)
+	}
+	if proxyRequest.value("CSeq") == authenticatedRequest.value("CSeq") {
+		return errors.New("proxy-authenticated MESSAGE reused the challenged CSeq")
+	}
+	if err := verifySIPMessageAuthorization(
+		proxyRequest.value("Proxy-Authorization"),
+		proxyMessageNonce,
+		message.Request.URI,
+		"auth",
+		"00000002",
+	); err != nil {
+		return fmt.Errorf("MESSAGE Proxy-Authorization: %w", err)
+	}
+	if proxyRequest.value("Authorization") != "" {
+		return errors.New("407 MESSAGE retry unexpectedly used Authorization")
+	}
+
+	if _, err = listener.WriteToUDP(testResponse(202, "Accepted", messageCallID, proxyRequest.value("CSeq"), nil), remote); err != nil {
 		return err
 	}
 
@@ -1197,6 +1465,180 @@ func serveOutboundUSSI(listener *net.UDPConn, nonce string, readyForClose chan<-
 	}
 	_, err = listener.WriteToUDP(testResponse(200, "OK", registerCallID, headers["cseq"], nil), remote)
 	return err
+}
+
+func verifySIPMessageAuthorization(
+	value string,
+	nonce string,
+	uri string,
+	wantQOP string,
+	wantNC string,
+) error {
+	scheme, parameters, found := strings.Cut(value, " ")
+	if !found || scheme != "Digest" {
+		return errors.New("invalid SIP Digest scheme")
+	}
+	directives, err := parseAuthDirectives(parameters)
+	if err != nil {
+		return err
+	}
+	expected := digestResponse(
+		"001010123456789@ims.mnc001.mcc001.3gppnetwork.org",
+		"ims.mnc001.mcc001.3gppnetwork.org",
+		[]byte{1, 2, 3, 4},
+		"MESSAGE",
+		uri,
+		nonce,
+		directives["nc"],
+		directives["cnonce"],
+		directives["qop"],
+	)
+	if directives["username"] != "001010123456789@ims.mnc001.mcc001.3gppnetwork.org" ||
+		directives["realm"] != "ims.mnc001.mcc001.3gppnetwork.org" ||
+		directives["nonce"] != nonce ||
+		directives["uri"] != uri ||
+		directives["algorithm"] != "AKAv1-MD5" ||
+		directives["response"] != expected {
+		return fmt.Errorf("digest directives = %#v", directives)
+	}
+	if directives["qop"] != wantQOP || directives["nc"] != wantNC {
+		return fmt.Errorf("digest qop/nc = %q/%q, want %q/%q",
+			directives["qop"], directives["nc"], wantQOP, wantNC)
+	}
+	if wantQOP == "" && directives["cnonce"] != "" {
+		return errors.New("digest without qop unexpectedly included cnonce")
+	}
+	if wantQOP != "" && directives["cnonce"] == "" {
+		return errors.New("digest with qop omitted cnonce")
+	}
+	return nil
+}
+
+func TestO2SMSBareUnauthorizedFallbackVariants(t *testing.T) {
+	session := &Session{
+		request: vowifi.IMSRequest{
+			Identity: vowifi.SIMIdentity{
+				ICCID: "8944110000000000001", IMSI: "234109999999999",
+				HomeMCC: "234", HomeMNC: "10",
+			},
+		},
+		identity: identitySet{
+			user:    "234109999999999",
+			private: "234109999999999@ims.mnc010.mcc234.3gppnetwork.org",
+			public:  "sip:234109999999999@ims.mnc010.mcc234.3gppnetwork.org",
+			domain:  "ims.mnc010.mcc234.3gppnetwork.org",
+		},
+	}
+	target := "sip:+447802092035@o2.co.uk;user=phone"
+	variants := session.smsMessageVariants(target, "+447802092035")
+	if len(variants) != 5 {
+		t.Fatalf("O2 fallback variant count = %d, want 5: %#v", len(variants), variants)
+	}
+	for index, variant := range variants {
+		if variant.target != target {
+			t.Fatalf("O2 fallback target[%d] = %q, want %q", index, variant.target, target)
+		}
+		if index > 0 && (variant.options.headerMode != smsMessageHeadersMinimal ||
+			!variant.options.useContactVia ||
+			variant.options.authorizationMode != smsAuthorizationNone ||
+			variant.options.ppiMode != smsMessagePPIFromIdentity) {
+			t.Fatalf("O2 fallback options[%d] = %#v", index, variant.options)
+		}
+	}
+	wantPANI := []string{
+		"IEEE-802.11;country=GB;i-wlan-node-id=820000000001",
+		"IEEE-802.11;i-wlan-node-id=ffffffffffff",
+		"IEEE-802.11;country=GB;i-wlan-node-id=ffffffffffff",
+		"IEEE-802.11",
+		"3GPP-WLAN",
+	}
+	for index, want := range wantPANI {
+		if variants[index].options.paniOverride != want {
+			t.Fatalf("O2 PANI[%d] = %q, want %q", index, variants[index].options.paniOverride, want)
+		}
+	}
+
+	standard := &Session{request: vowifi.IMSRequest{Identity: vowifi.SIMIdentity{
+		ICCID: "8999990000000000001", IMSI: "999990000000001",
+		HomeMCC: "999", HomeMNC: "99",
+	}}}
+	if got := standard.smsMessageVariants(target, "+447802092035"); len(got) != 1 {
+		t.Fatalf("standard profile fallback variants = %#v, want one", got)
+	}
+}
+
+func TestO2SMSBareUnauthorizedFallbackStopsAfterAcceptedTarget(t *testing.T) {
+	session := &Session{
+		provider: &Provider{config: Config{TransactionTimeout: time.Second}},
+		request: vowifi.IMSRequest{
+			DeviceID: "reader",
+			Identity: vowifi.SIMIdentity{
+				ICCID: "8944110000000000001", IMSI: "234109999999999",
+				HomeMCC: "234", HomeMNC: "10",
+			},
+		},
+		identity: identitySet{
+			user:    "234109999999999",
+			private: "234109999999999@ims.mnc010.mcc234.3gppnetwork.org",
+			public:  "sip:234109999999999@ims.mnc010.mcc234.3gppnetwork.org",
+			domain:  "ims.mnc010.mcc234.3gppnetwork.org",
+		},
+		evidence:     vowifi.IMSEvidence{AssociatedIdentities: []string{"tel:+447700900000"}},
+		endpoint:     pcscfEndpoint{host: "127.0.0.1", port: 5060},
+		transport:    "tcp",
+		fromTag:      "fallback-tag",
+		cseq:         1,
+		transactions: make(map[sipTransactionKey]chan *sipResponse),
+	}
+	conn := &identityTestConn{}
+	session.conn = conn
+	var requests []*sipRequest
+	conn.onWrite = func(packet []byte) (int, error) {
+		parsed, err := parseSIPPacket(packet)
+		if err != nil || parsed.Request == nil {
+			return 0, fmt.Errorf("parse outgoing MESSAGE: %v", err)
+		}
+		requests = append(requests, parsed.Request)
+		response := &sipResponse{StatusCode: 202, Headers: map[string][]string{
+			"call-id": {parsed.Request.value("Call-ID")},
+			"cseq":    {parsed.Request.value("CSeq")},
+		}}
+		if len(requests) == 1 {
+			response = &sipResponse{StatusCode: 403, Headers: map[string][]string{
+				"call-id": {parsed.Request.value("Call-ID")},
+				"cseq":    {parsed.Request.value("CSeq")},
+			}}
+		}
+		session.dispatchPacket(sipPacket{Response: response}, nil)
+		return len(packet), nil
+	}
+
+	response, err := session.sendSMSMessageWithFallbacks(
+		context.Background(),
+		"sip:+447802092035@o2.co.uk;user=phone",
+		"+447802092035",
+		[]byte{0x00, 0x01},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response == nil || response.StatusCode != 202 {
+		t.Fatalf("fallback response = %#v, want 202", response)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("MESSAGE request count = %d, want 2", len(requests))
+	}
+	if requests[1].URI != "sip:+447802092035@o2.co.uk;user=phone" {
+		t.Fatalf("fallback URI = %q", requests[1].URI)
+	}
+	if requests[0].value("From") == requests[1].value("From") {
+		t.Fatal("fallback reused the previous MESSAGE From tag")
+	}
+	if requests[1].value("Authorization") != "" ||
+		!strings.Contains(requests[1].value("From"), "<tel:+447700900000>") ||
+		requests[1].value("P-Preferred-Identity") != "<tel:+447700900000>" {
+		t.Fatalf("tel-no-auth fallback headers = %#v", requests[1].Headers)
+	}
 }
 
 // fakeConn is a minimal net.Conn useful for tests that only need LocalAddr

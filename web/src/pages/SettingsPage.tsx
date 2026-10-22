@@ -243,9 +243,8 @@ export default function SettingsPage() {
   }, [developerSettings, deviceLimit, lang]);
 
   const onSaveSMSHourlyLimit = useCallback(async () => {
-    const maximum = developerSettings?.maxSmsHourlyLimit ?? 20;
-    if (!Number.isInteger(smsHourlyLimit) || smsHourlyLimit < 1 || smsHourlyLimit > maximum) {
-      message.error(lang === "zh" ? `短信发送限制必须是 1 到 ${maximum} 的整数` : `SMS limit must be an integer between 1 and ${maximum}`);
+    if (!Number.isInteger(smsHourlyLimit) || smsHourlyLimit < 1) {
+      message.error(lang === "zh" ? "短信发送限制必须是大于等于 1 的整数" : "SMS limit must be an integer greater than or equal to 1");
       return;
     }
     setSavingSMSLimit(true);
@@ -259,7 +258,7 @@ export default function SettingsPage() {
     } finally {
       setSavingSMSLimit(false);
     }
-  }, [developerSettings, smsHourlyLimit, lang]);
+  }, [smsHourlyLimit, lang]);
 
   const onToggleSMSAutoClear = useCallback(async (enabled: boolean) => {
     setSavingSMSSettings(true);
@@ -545,7 +544,6 @@ export default function SettingsPage() {
               onSave={onSaveDeviceLimit}
             />
             <SMSRateLimitCard
-              value={developerSettings}
               limit={smsHourlyLimit}
               loading={loadingDeveloper}
               saving={savingSMSLimit}

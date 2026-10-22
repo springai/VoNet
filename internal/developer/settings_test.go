@@ -106,44 +106,52 @@ func TestAutoClearModemStorageDefaultsEnabled(t *testing.T) {
 	}
 }
 
-func TestSetSMSHourlyLimitValidatesRange(t *testing.T) {
+func TestSetSMSHourlyLimitRequiresPositiveInteger(t *testing.T) {
 	ctx := context.Background()
 	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "vonet.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	if SetSMSHourlyLimit(ctx, database, 0) == nil || SetSMSHourlyLimit(ctx, database, MaxSMSHourlyLimit+1) == nil {
-		t.Fatal("out-of-range SMS hourly limit was accepted")
+	if SetSMSHourlyLimit(ctx, database, 0) == nil || SetSMSHourlyLimit(ctx, database, -1) == nil {
+		t.Fatal("non-positive SMS hourly limit was accepted")
 	}
-	if err := SetSMSHourlyLimit(ctx, database, 15); err != nil {
+	if err := SetSMSHourlyLimit(ctx, database, 21); err != nil {
 		t.Fatal(err)
 	}
-	if got := SMSHourlyLimit(ctx, database); got != 15 {
-		t.Fatalf("SMS hourly limit = %d, want 15", got)
+	if got := SMSHourlyLimit(ctx, database); got != 21 {
+		t.Fatalf("SMS hourly limit = %d, want 21", got)
 	}
 }
 
-func TestStoredLimitsAboveHardMaximumAreClamped(t *testing.T) {
+func TestStoredDeviceLimitAboveHardMaximumIsClamped(t *testing.T) {
 	ctx := context.Background()
 	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "vonet.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	for key, limit := range map[string]int{
-		DeviceLimitSettingKey: MaxDeviceLimit + 1,
-		SMSHourlyLimitKey:     MaxSMSHourlyLimit + 1,
-	} {
-		value, _ := json.Marshal(map[string]int{"limit": limit})
-		if err := database.UpsertAppSetting(ctx, store.AppSetting{Key: key, Value: value}); err != nil {
-			t.Fatal(err)
-		}
+	value, _ := json.Marshal(map[string]int{"limit": MaxDeviceLimit + 1})
+	if err := database.UpsertAppSetting(ctx, store.AppSetting{Key: DeviceLimitSettingKey, Value: value}); err != nil {
+		t.Fatal(err)
 	}
 	if got := DeviceLimit(ctx, database, true); got != MaxDeviceLimit {
 		t.Fatalf("device limit = %d, want %d", got, MaxDeviceLimit)
 	}
-	if got := SMSHourlyLimit(ctx, database); got != MaxSMSHourlyLimit {
-		t.Fatalf("SMS hourly limit = %d, want %d", got, MaxSMSHourlyLimit)
+}
+
+func TestStoredSMSHourlyLimitIsNotClamped(t *testing.T) {
+	ctx := context.Background()
+	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "vonet.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	value, _ := json.Marshal(map[string]int{"limit": 1000})
+	if err := database.UpsertAppSetting(ctx, store.AppSetting{Key: SMSHourlyLimitKey, Value: value}); err != nil {
+		t.Fatal(err)
+	}
+	if got := SMSHourlyLimit(ctx, database); got != 1000 {
+		t.Fatalf("SMS hourly limit = %d, want 1000", got)
 	}
 }

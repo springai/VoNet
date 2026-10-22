@@ -531,7 +531,6 @@ export interface DeveloperSettings {
   maxDeviceLimit: number;
   smsHourlyLimit: number;
   defaultSmsHourlyLimit: number;
-  maxSmsHourlyLimit: number;
   autoClearModemStorage?: boolean;
 }
 

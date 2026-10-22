@@ -365,6 +365,71 @@ func readIdentity(ctx context.Context, card Card, pin string) (Identity, error) 
 	return identity, nil
 }
 
+func (service *Service) ReadSMSCenterPSI(ctx context.Context, selector Selector, pin string) (string, error) {
+	session, err := service.OpenSession(ctx, selector)
+	if err != nil {
+		return "", wrapReaderOpenError(err, selector)
+	}
+	defer session.Close()
+	card := session.card
+	if _, err := selectUSIM(ctx, card); err != nil {
+		return "", err
+	}
+	if err := verifyPIN(ctx, card, pin); err != nil {
+		return "", err
+	}
+	var lastErr error
+	paths := [][][]byte{
+		{{0x7F, 0x10}, {0x6F, 0xE5}},
+		{{0x6F, 0xE5}},
+	}
+	for _, path := range paths {
+		if err := selectMF(ctx, card); err != nil {
+			lastErr = fmt.Errorf("select MF: %w", err)
+			continue
+		}
+		if err := selectPSIPath(ctx, card, path); err != nil {
+			lastErr = err
+			continue
+		}
+		record, err := readRecord(ctx, card, 1, 255)
+		if err != nil {
+			lastErr = fmt.Errorf("read EF_PSISMSC: %w", err)
+			continue
+		}
+		psi, err := smsCenterPSIFromRecord(record)
+		if err != nil {
+			lastErr = fmt.Errorf("decode EF_PSISMSC: %w", err)
+			continue
+		}
+		return psi, nil
+	}
+	if _, err := selectUSIM(ctx, card); err != nil {
+		return "", errors.Join(lastErr, err)
+	}
+	if err := selectFile(ctx, card, []byte{0x6F, 0xE5}); err != nil {
+		return "", errors.Join(lastErr, fmt.Errorf("select EF_PSISMSC in USIM: %w", err))
+	}
+	record, err := readRecord(ctx, card, 1, 255)
+	if err != nil {
+		return "", errors.Join(lastErr, fmt.Errorf("read EF_PSISMSC in USIM: %w", err))
+	}
+	psi, err := smsCenterPSIFromRecord(record)
+	if err != nil {
+		return "", errors.Join(lastErr, fmt.Errorf("decode EF_PSISMSC in USIM: %w", err))
+	}
+	return psi, nil
+}
+
+func selectPSIPath(ctx context.Context, card Card, path [][]byte) error {
+	for _, fileID := range path {
+		if err := selectFile(ctx, card, fileID); err != nil {
+			return fmt.Errorf("select SMS PSI file %X: %w", fileID, err)
+		}
+	}
+	return nil
+}
+
 func readISIMProvisionedIMSI(ctx context.Context, card Card) string {
 	if _, err := selectApplicationByPrefix(ctx, card, isimAIDPrefix); err != nil {
 		return ""
@@ -846,4 +911,18 @@ func readSMSC(ctx context.Context, card Card) string {
 		return "+" + digits
 	}
 	return digits
+}
+
+func smsCenterPSIFromRecord(record []byte) (string, error) {
+	value := findTLV(record, 0x80)
+	value = bytes.Trim(value, "\x00\xff \t\r\n")
+	if len(value) == 0 {
+		return "", errors.New("SMS center PSI record has no URI value")
+	}
+	for _, character := range value {
+		if character < 0x21 || character > 0x7e {
+			return "", errors.New("SMS center PSI record is not visible ASCII")
+		}
+	}
+	return string(value), nil
 }

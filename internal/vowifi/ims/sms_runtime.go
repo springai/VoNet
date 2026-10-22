@@ -26,6 +26,8 @@ import (
 const (
 	smsContentType          = "application/vnd.3gpp.sms"
 	ussiContentType         = "application/vnd.3gpp.ussd"
+	smsServiceURN           = "urn:urn-7:3gpp-service.ims.icsi.sms"
+	smsFeatureTag           = "urn%3Aurn-7%3A3gpp-service.ims.icsi.sms"
 	sipMessageRetransmitT1  = 500 * time.Millisecond
 	sipMessageRetransmitMax = 4 * time.Second
 )
@@ -1074,13 +1076,15 @@ func (session *Session) SendSMS(ctx context.Context, request vowifi.SMSSubmitReq
 		session.request.Identity.SMSC = smsc
 		session.mu.Unlock()
 	}
-	parts, err := device.PrepareSMSSubmitTPDUs(request.Recipient, request.Text)
+	profile := vowifi.ResolveCarrierProfile(session.request.Identity)
+	submitRecipient := normalizeSMSSubmitRecipient(request.Recipient, profile.SMSRecipientMode)
+	parts, err := device.PrepareSMSSubmitTPDUs(submitRecipient, request.Text)
 	if err != nil {
 		return vowifi.SMSSubmitResult{}, err
 	}
 	now := time.Now().UTC()
 	result := vowifi.SMSSubmitResult{
-		To:               parts[0].To,
+		To:               request.Recipient,
 		Encoding:         string(parts[0].Encoding),
 		SubmittedAt:      now,
 		PartsTotal:       len(parts),
@@ -1124,7 +1128,7 @@ func (session *Session) SendSMS(ctx context.Context, request vowifi.SMSSubmitReq
 			return result, buildErr
 		}
 		result.PartsAttempted++
-		response, sendErr := session.sendSIPMessage(ctx, psi, rpdu, "")
+		response, sendErr := session.sendSMSMessageWithFallbacks(ctx, psi, smsc, rpdu)
 		partResult := vowifi.SMSSubmitPart{
 			Part: part.Part, Total: part.Total, Reference: int(reference), SubmittedAt: time.Now().UTC(),
 		}
@@ -1185,6 +1189,18 @@ func smsRecipientType(recipient string) string {
 	}
 }
 
+func normalizeSMSSubmitRecipient(recipient, mode string) string {
+	if strings.TrimSpace(mode) != "uk-national" {
+		return recipient
+	}
+	normalized := normalizeE164(recipient)
+	digits := strings.TrimPrefix(normalized, "+")
+	if !strings.HasPrefix(normalized, "+44") || len(digits) != 12 {
+		return recipient
+	}
+	return "0" + digits[2:]
+}
+
 func (session *Session) logOutboundSMS(level slog.Level, message string, attributes ...any) {
 	logger := slog.Default()
 	if session != nil && session.provider != nil && session.provider.config.Logger != nil {
@@ -1242,27 +1258,144 @@ func (session *Session) sendSIPMessageWithIdentity(
 	acceptContactTag string,
 	preferredIdentity string,
 ) (*sipResponse, error) {
+	profile := vowifi.ResolveCarrierProfile(session.request.Identity)
+	return session.sendSIPMessageConfigured(ctx, target, body, inReplyTo, contentType, acceptContactTag, smsMessageOptions{
+		preferredIdentity: preferredIdentity,
+		authorizationMode: smsAuthorizationModeForProfile(profile),
+		headerMode:        smsHeaderModeForProfile(profile),
+		useContactVia:     profile.SMSUseContactVia,
+		paniOverride:      profile.SMSPANI,
+	})
+}
+
+type smsMessageIdentityMode int
+
+const (
+	smsMessageIdentityDefault smsMessageIdentityMode = iota
+	smsMessageIdentityRegistered
+	smsMessageIdentityTelephone
+	smsMessageIdentityAssociatedSIP
+)
+
+type smsAuthorizationMode int
+
+const (
+	smsAuthorizationCached smsAuthorizationMode = iota
+	smsAuthorizationNone
+	smsAuthorizationEmptyIntegrity
+)
+
+type smsMessageHeaderMode int
+
+const (
+	smsMessageHeadersStandard smsMessageHeaderMode = iota
+	smsMessageHeadersMinimal
+	smsMessageHeadersSMSIPOnly
+	smsMessageHeadersICSIOnly
+)
+
+type smsMessagePPIMode int
+
+const (
+	smsMessagePPIFromIdentity smsMessagePPIMode = iota
+	smsMessagePPIRegistered
+	smsMessagePPITelephone
+	smsMessagePPIAssociatedSIP
+	smsMessagePPIAssociatedList
+)
+
+type smsMessageOptions struct {
+	preferredIdentity string
+	identityMode      smsMessageIdentityMode
+	authorizationMode smsAuthorizationMode
+	headerMode        smsMessageHeaderMode
+	useContactVia     bool
+	ppiMode           smsMessagePPIMode
+	paniOverride      string
+}
+
+type smsMessageVariant struct {
+	target  string
+	options smsMessageOptions
+}
+
+func (session *Session) sendSIPMessageConfigured(
+	ctx context.Context,
+	target string,
+	body []byte,
+	inReplyTo string,
+	contentType string,
+	acceptContactTag string,
+	options smsMessageOptions,
+) (*sipResponse, error) {
 	callToken, err := randomHex(18)
 	if err != nil {
 		return nil, err
 	}
-	branch, err := randomHex(12)
-	if err != nil {
-		return nil, err
-	}
 	callID := callToken + "@" + addressHost(session.conn.LocalAddr())
+	profile := vowifi.ResolveCarrierProfile(session.request.Identity)
 	session.mu.Lock()
-	cseq := session.cseq
-	session.cseq++
 	var identity, identitySource string
-	if session.identity.temporaryPublic && contentType == smsContentType && inReplyTo == "" {
+	if options.identityMode == smsMessageIdentityRegistered &&
+		contentType == smsContentType && inReplyTo == "" &&
+		strings.TrimSpace(session.identity.public) != "" {
+		identity, identitySource = session.identity.public, "registered_impu"
+	} else if options.identityMode == smsMessageIdentityTelephone &&
+		contentType == smsContentType && inReplyTo == "" {
+		identity, identitySource = firstTelephoneIdentity(session.evidence.AssociatedIdentities)
+		if identity == "" {
+			identity, identitySource = messagePublicIdentity(session.identity.public, options.preferredIdentity, session.evidence.AssociatedIdentities)
+		}
+	} else if options.identityMode == smsMessageIdentityAssociatedSIP &&
+		contentType == smsContentType && inReplyTo == "" {
+		identity, identitySource = firstNonTelephoneIdentity(session.evidence.AssociatedIdentities)
+		if identity == "" {
+			identity, identitySource = messagePublicIdentity(session.identity.public, options.preferredIdentity, session.evidence.AssociatedIdentities)
+		}
+	} else if profile.SMSPreferRegisteredIdentity &&
+		contentType == smsContentType && inReplyTo == "" &&
+		strings.TrimSpace(session.identity.public) != "" {
+		identity, identitySource = session.identity.public, "registered_impu"
+	} else if profile.SMSPreferTelephoneIdentity &&
+		contentType == smsContentType && inReplyTo == "" {
+		identity, identitySource = firstTelephoneIdentity(session.evidence.AssociatedIdentities)
+		if identity == "" {
+			identity, identitySource = messagePublicIdentity(session.identity.public, options.preferredIdentity, session.evidence.AssociatedIdentities)
+		}
+	} else if session.identity.temporaryPublic && contentType == smsContentType && inReplyTo == "" {
 		identity, identitySource, err = originatingSMSPublicIdentity(session.identity.public, session.evidence.AssociatedIdentities)
 		if err != nil {
 			session.mu.Unlock()
 			return nil, err
 		}
 	} else {
-		identity, identitySource = messagePublicIdentity(session.identity.public, preferredIdentity, session.evidence.AssociatedIdentities)
+		identity, identitySource = messagePublicIdentity(session.identity.public, options.preferredIdentity, session.evidence.AssociatedIdentities)
+	}
+	ppiHeader := "<" + identity + ">"
+	switch options.ppiMode {
+	case smsMessagePPIRegistered:
+		if value := strings.TrimSpace(session.identity.public); value != "" {
+			ppiHeader = "<" + value + ">"
+		}
+	case smsMessagePPITelephone:
+		if value, _ := firstTelephoneIdentity(session.evidence.AssociatedIdentities); value != "" {
+			ppiHeader = "<" + value + ">"
+		}
+	case smsMessagePPIAssociatedSIP:
+		if value, _ := firstNonTelephoneIdentity(session.evidence.AssociatedIdentities); value != "" {
+			ppiHeader = "<" + value + ">"
+		}
+	case smsMessagePPIAssociatedList:
+		values := splitHeaderValues(session.evidence.AssociatedIdentities)
+		wrapped := make([]string, 0, len(values))
+		for _, value := range values {
+			if uri := publicIdentityURI(value); uri != "" {
+				wrapped = append(wrapped, "<"+uri+">")
+			}
+		}
+		if len(wrapped) > 0 {
+			ppiHeader = strings.Join(wrapped, ", ")
+		}
 	}
 	serviceRoutes := append([]string(nil), session.evidence.ServiceRoute...)
 	securityHeaders := runtimeSecurityHeaders(
@@ -1271,65 +1404,564 @@ func (session *Session) sendSIPMessageWithIdentity(
 	)
 	session.mu.Unlock()
 	transportUpper := strings.ToUpper(session.transport)
-	lines := []string{
-		"MESSAGE " + target + " SIP/2.0",
-		fmt.Sprintf("Via: SIP/2.0/%s %s;branch=z9hG4bK%s;rport", transportUpper, session.conn.LocalAddr().String(), branch),
-		"Max-Forwards: 70",
-	}
-	lines = append(lines, securityHeaders...)
-	if len(serviceRoutes) == 0 {
-		lines = append(lines, "Route: <sip:"+session.endpoint.address()+";transport="+session.transport+";lr>")
-	} else {
-		for _, route := range serviceRoutes {
-			lines = append(lines, "Route: "+route)
+	viaAddress := session.conn.LocalAddr().String()
+	if options.useContactVia {
+		if contactAddress := session.contactAddress(); contactAddress != "" {
+			viaAddress = contactAddress
 		}
 	}
-	lines = append(lines,
-		"From: <"+identity+">;tag="+session.fromTag,
-		"To: <"+target+">",
-		"Call-ID: "+callID,
-		fmt.Sprintf("CSeq: %d MESSAGE", cseq),
-		"P-Preferred-Identity: <"+identity+">",
-	)
-	if pani := session.pAccessNetworkInfo(); pani != "" {
-		lines = append(lines, "P-Access-Network-Info: "+pani)
+	fromTag := session.fromTag
+	if profile.SMSNewTransaction {
+		if fromTag, err = randomHex(8); err != nil {
+			return nil, err
+		}
 	}
-	if acceptContactTag != "" {
-		lines = append(lines, "Accept-Contact: *;+g.3gpp."+acceptContactTag)
+	authorizationHeader := ""
+	authorization := ""
+	switch options.authorizationMode {
+	case smsAuthorizationCached:
+		authorizationHeader, authorization = session.smsPreauthorization(target)
+	case smsAuthorizationEmptyIntegrity:
+		session.mu.Lock()
+		authorizationHeader = "Authorization"
+		authorization = emptySMSPreauthorization(
+			session.identity.private,
+			session.identity.domain,
+			target,
+		) + ", integrity-protected=yes"
+		session.mu.Unlock()
 	}
-	lines = append(lines,
-		"Request-Disposition: no-fork",
-		"Allow: MESSAGE",
-		"User-Agent: "+session.imsUserAgent(),
-	)
-	if inReplyTo != "" {
-		lines = append(lines, "In-Reply-To: "+inReplyTo)
+	for attempt := 0; attempt <= maxAuthenticationChallenges; attempt++ {
+		branch, err := randomHex(12)
+		if err != nil {
+			return nil, err
+		}
+		session.mu.Lock()
+		cseq := uint32(1)
+		if profile.SMSNewTransaction {
+			cseq += uint32(attempt)
+		} else {
+			cseq = session.cseq
+			session.cseq++
+		}
+		session.mu.Unlock()
+
+		lines := []string{
+			"MESSAGE " + target + " SIP/2.0",
+			fmt.Sprintf("Via: SIP/2.0/%s %s;branch=z9hG4bK%s;rport", transportUpper, viaAddress, branch),
+			"Max-Forwards: 70",
+		}
+		lines = append(lines, securityHeaders...)
+		if len(serviceRoutes) == 0 {
+			lines = append(lines, "Route: <sip:"+session.endpoint.address()+";transport="+session.transport+";lr>")
+		} else {
+			for _, route := range serviceRoutes {
+				lines = append(lines, "Route: "+route)
+			}
+		}
+		lines = append(lines,
+			"From: <"+identity+">;tag="+fromTag,
+			"To: <"+target+">",
+			"Call-ID: "+callID,
+			fmt.Sprintf("CSeq: %d MESSAGE", cseq),
+			"P-Preferred-Identity: "+ppiHeader,
+		)
+		pani := options.paniOverride
+		if pani == "" {
+			pani = session.pAccessNetworkInfo()
+		}
+		if pani != "" {
+			lines = append(lines, "P-Access-Network-Info: "+pani)
+		}
+		switch {
+		case options.headerMode == smsMessageHeadersICSIOnly:
+			lines = append(lines,
+				"P-Preferred-Service: "+smsServiceURN,
+				`Accept-Contact: *;+g.3gpp.icsi-ref="`+smsFeatureTag+`"`,
+			)
+		case options.headerMode == smsMessageHeadersSMSIPOnly:
+			lines = append(lines, `Accept-Contact: *;+g.3gpp.smsip`)
+		case options.headerMode == smsMessageHeadersMinimal:
+		case contentType == smsContentType && profile.SMSTargetMode != "":
+			lines = append(lines,
+				"P-Preferred-Service: "+smsServiceURN,
+				`Accept-Contact: *;+g.3gpp.icsi-ref="`+smsFeatureTag+`"`,
+				`Accept-Contact: *;+g.3gpp.smsip`,
+			)
+		case acceptContactTag != "":
+			lines = append(lines, "Accept-Contact: *;+g.3gpp."+acceptContactTag)
+		}
+		if options.headerMode == smsMessageHeadersStandard {
+			lines = append(lines,
+				"Request-Disposition: no-fork",
+				"Allow: MESSAGE",
+				"User-Agent: "+session.imsUserAgent(),
+			)
+			if profile.SMSTargetMode != "" {
+				lines = append(lines, "Supported: path,sec-agree")
+				if contact := session.dialogContactHeader(); contact != "" {
+					lines = append(lines, contact)
+				}
+			}
+		}
+		if inReplyTo != "" {
+			lines = append(lines, "In-Reply-To: "+inReplyTo)
+		}
+		if authorization != "" {
+			lines = append(lines, authorizationHeader+": "+authorization)
+		}
+		lines = append(lines, "Content-Type: "+contentType)
+		if options.headerMode == smsMessageHeadersStandard {
+			lines = append(lines, "Content-Transfer-Encoding: binary")
+		}
+		lines = append(lines, "Content-Length: "+strconv.Itoa(len(body)), "", "")
+		request := append([]byte(strings.Join(lines, "\r\n")), body...)
+		session.logOutboundSMS(slog.LevelDebug, "IMS SIP MESSAGE transaction started",
+			"stage", "sip_send", "call_id", callID, "cseq", cseq,
+			"identity_source", identitySource, "auth_attempt", attempt,
+			"authorization_header", authorizationHeader,
+			"body_bytes", len(body), "service_routes", len(serviceRoutes))
+		response, exchangeErr := session.exchangeRuntime(
+			ctx,
+			request,
+			sipTransactionKey{callID: callID, cseq: cseq, method: "MESSAGE"},
+		)
+		if exchangeErr != nil {
+			session.logOutboundSMS(slog.LevelWarn, "IMS SIP MESSAGE transaction failed",
+				"stage", "sip_transaction", "call_id", callID, "cseq", cseq,
+				"auth_attempt", attempt, "error", exchangeErr)
+			return response, exchangeErr
+		}
+		session.logOutboundSMS(slog.LevelDebug, "IMS SIP MESSAGE response received",
+			"stage", "sip_response", "call_id", callID, "cseq", cseq,
+			"auth_attempt", attempt, "sip_status", response.StatusCode)
+		if response.StatusCode != 401 && response.StatusCode != 407 {
+			return response, nil
+		}
+		if attempt == maxAuthenticationChallenges {
+			session.logOutboundSMS(slog.LevelWarn, "IMS SIP MESSAGE authentication retry limit reached",
+				"stage", "sip_auth", "call_id", callID, "auth_attempt", attempt,
+				"sip_status", response.StatusCode)
+			return response, nil
+		}
+
+		authorizationHeader, authorization, err = session.sipMessageAuthorization(
+			ctx,
+			response,
+			target,
+			uint32(attempt+1),
+		)
+		if err != nil {
+			session.logOutboundSMS(slog.LevelWarn, "IMS SIP MESSAGE authentication failed",
+				"stage", "sip_auth", "call_id", callID, "auth_attempt", attempt+1,
+				"sip_status", response.StatusCode, "error", err)
+			return response, err
+		}
+		session.logOutboundSMS(slog.LevelDebug, "IMS SIP MESSAGE authentication challenge accepted",
+			"stage", "sip_auth", "call_id", callID, "auth_attempt", attempt+1,
+			"sip_status", response.StatusCode, "authorization_header", authorizationHeader)
 	}
-	lines = append(lines,
-		"Content-Type: "+contentType,
-		"Content-Transfer-Encoding: binary",
-		"Content-Length: "+strconv.Itoa(len(body)),
-		"", "",
-	)
-	request := append([]byte(strings.Join(lines, "\r\n")), body...)
-	session.logOutboundSMS(slog.LevelDebug, "IMS SIP MESSAGE transaction started",
-		"stage", "sip_send", "call_id", callID, "cseq", cseq,
-		"identity_source", identitySource,
-		"body_bytes", len(body), "service_routes", len(serviceRoutes))
-	response, exchangeErr := session.exchangeRuntime(
+	return nil, errors.New("ims: SIP MESSAGE authentication retry loop ended unexpectedly")
+}
+
+func (session *Session) sendSMSMessageWithFallbacks(
+	ctx context.Context,
+	target string,
+	smsc string,
+	body []byte,
+) (*sipResponse, error) {
+	variants := session.smsMessageVariants(target, smsc)
+	var lastResponse *sipResponse
+	var lastErr error
+	for index, variant := range variants {
+		response, err := session.sendSIPMessageConfigured(
+			ctx,
+			variant.target,
+			body,
+			"",
+			smsContentType,
+			"smsip",
+			variant.options,
+		)
+		lastResponse, lastErr = response, err
+		retryable := isBareSIPUnauthorized(response) ||
+			(response != nil && response.StatusCode == 403)
+		if response == nil || !retryable || index == len(variants)-1 {
+			return response, err
+		}
+		session.logOutboundSMS(slog.LevelWarn, "IMS SMS MESSAGE received bare unauthorized; trying O2 fallback",
+			"stage", "sip_fallback", "attempt", index+1, "next_target", variants[index+1].target)
+	}
+	return lastResponse, lastErr
+}
+
+func isBareSIPUnauthorized(response *sipResponse) bool {
+	if response == nil || response.StatusCode != 401 {
+		return false
+	}
+	return len(response.values("WWW-Authenticate")) == 0 &&
+		len(response.values("Proxy-Authenticate")) == 0
+}
+
+func (session *Session) smsMessageVariants(target, smsc string) []smsMessageVariant {
+	profile := vowifi.ResolveCarrierProfile(session.request.Identity)
+	variants := []smsMessageVariant{{
+		target: target,
+		options: smsMessageOptions{
+			authorizationMode: smsAuthorizationModeForProfile(profile),
+			headerMode:        smsHeaderModeForProfile(profile),
+			useContactVia:     profile.SMSUseContactVia,
+			paniOverride:      profile.SMSPANI,
+		},
+	}}
+	if len(profile.SMSBareUnauthorizedFallbacks) == 0 {
+		return variants
+	}
+
+	session.mu.Lock()
+	subscriberUser := strings.TrimSpace(session.identity.user)
+	if subscriberUser == "" {
+		subscriberUser = strings.SplitN(session.identity.private, "@", 2)[0]
+	}
+	imsDomain := strings.TrimSpace(session.identity.domain)
+	session.mu.Unlock()
+	targetHost := sipTargetHost(target)
+	smscDigits := strings.TrimPrefix(normalizeE164(smsc), "+")
+
+	initialVariant := variants[0]
+	seen := map[smsMessageVariant]bool{initialVariant: true}
+	appendVariantFull := func(variant smsMessageVariant) {
+		if variant.target == "" || seen[variant] {
+			return
+		}
+		seen[variant] = true
+		variants = append(variants, variant)
+	}
+	appendVariantWith := func(
+		fallbackTarget string,
+		identityMode smsMessageIdentityMode,
+		authorizationMode smsAuthorizationMode,
+		headerMode smsMessageHeaderMode,
+		useContactVia bool,
+		ppiMode smsMessagePPIMode,
+	) {
+		appendVariantFull(smsMessageVariant{
+			target: fallbackTarget,
+			options: smsMessageOptions{
+				identityMode:      identityMode,
+				authorizationMode: authorizationMode,
+				headerMode:        headerMode,
+				useContactVia:     useContactVia,
+				ppiMode:           ppiMode,
+			},
+		})
+	}
+	appendVariant := func(fallbackTarget string, identityMode smsMessageIdentityMode, authorizationMode smsAuthorizationMode) {
+		appendVariantWith(fallbackTarget, identityMode, authorizationMode, smsMessageHeadersStandard,
+			false, smsMessagePPIFromIdentity)
+	}
+	for _, mode := range profile.SMSBareUnauthorizedFallbacks {
+		switch strings.ToLower(strings.TrimSpace(mode)) {
+		case "pani-minimal":
+			for _, pani := range []string{
+				"IEEE-802.11;i-wlan-node-id=ffffffffffff",
+				"IEEE-802.11;country=GB;i-wlan-node-id=ffffffffffff",
+				"IEEE-802.11",
+				"3GPP-WLAN",
+			} {
+				appendVariantFull(smsMessageVariant{
+					target: target,
+					options: smsMessageOptions{
+						identityMode:      smsMessageIdentityTelephone,
+						authorizationMode: smsAuthorizationNone,
+						headerMode:        smsMessageHeadersMinimal,
+						useContactVia:     true,
+						ppiMode:           smsMessagePPIFromIdentity,
+						paniOverride:      pani,
+					},
+				})
+			}
+		case "generic-psi-minimal":
+			for _, candidate := range []string{
+				"sip:smsc@" + imsDomain,
+				"sip:ipsmgw@" + imsDomain,
+				"sip:sms@" + imsDomain,
+				"sip:sms-service@" + imsDomain,
+				"sip:smsc@" + targetHost,
+				"sip:ipsmgw@" + targetHost,
+				"sip:" + smscDigits + "@" + imsDomain,
+				"sip:" + smscDigits + "@" + targetHost,
+				"sip:smsc@" + imsDomain + ";user=phone",
+				"sip:ipsmgw@" + imsDomain + ";user=phone",
+				normalizeE164(smsc),
+			} {
+				if candidate == "" || strings.Contains(candidate, "@;") {
+					continue
+				}
+				targetValue := candidate
+				if strings.HasPrefix(targetValue, "+") {
+					targetValue = "tel:" + targetValue
+				}
+				appendVariantWith(targetValue, smsMessageIdentityTelephone, smsAuthorizationNone,
+					smsMessageHeadersMinimal, true, smsMessagePPIFromIdentity)
+			}
+		case "registered-from-tel-ppi":
+			appendVariantWith(target, smsMessageIdentityRegistered, smsAuthorizationNone,
+				smsMessageHeadersMinimal, true, smsMessagePPITelephone)
+		case "tel-from-registered-ppi":
+			appendVariantWith(target, smsMessageIdentityTelephone, smsAuthorizationNone,
+				smsMessageHeadersMinimal, true, smsMessagePPIRegistered)
+		case "sip-from-registered-ppi":
+			appendVariantWith(target, smsMessageIdentityAssociatedSIP, smsAuthorizationNone,
+				smsMessageHeadersMinimal, true, smsMessagePPIRegistered)
+		case "tel-combined-ppi":
+			appendVariantWith(target, smsMessageIdentityTelephone, smsAuthorizationNone,
+				smsMessageHeadersMinimal, true, smsMessagePPIAssociatedList)
+		case "via-contact-tel-no-auth":
+			appendVariantWith(target, smsMessageIdentityTelephone, smsAuthorizationNone,
+				smsMessageHeadersStandard, true, smsMessagePPIFromIdentity)
+		case "minimal-tel-no-auth":
+			appendVariantWith(target, smsMessageIdentityTelephone, smsAuthorizationNone,
+				smsMessageHeadersMinimal, true, smsMessagePPIFromIdentity)
+		case "smsip-only-tel-no-auth":
+			appendVariantWith(target, smsMessageIdentityTelephone, smsAuthorizationNone,
+				smsMessageHeadersSMSIPOnly, true, smsMessagePPIFromIdentity)
+		case "icsi-only-tel-no-auth":
+			appendVariantWith(target, smsMessageIdentityTelephone, smsAuthorizationNone,
+				smsMessageHeadersICSIOnly, true, smsMessagePPIFromIdentity)
+		case "minimal-associated-sip-no-auth":
+			appendVariantWith(target, smsMessageIdentityAssociatedSIP, smsAuthorizationNone,
+				smsMessageHeadersMinimal, true, smsMessagePPIFromIdentity)
+		case "minimal-tel-no-user-param":
+			appendVariantWith(sipTargetWithoutUserPhone(target), smsMessageIdentityTelephone,
+				smsAuthorizationNone, smsMessageHeadersMinimal, true, smsMessagePPIFromIdentity)
+		case "minimal-tel-no-user-param-no-plus":
+			noPlus := strings.Replace(target, ":+", ":", 1)
+			appendVariantWith(sipTargetWithoutUserPhone(noPlus), smsMessageIdentityTelephone,
+				smsAuthorizationNone, smsMessageHeadersMinimal, true, smsMessagePPIFromIdentity)
+		case "tel-no-auth":
+			appendVariant(target, smsMessageIdentityTelephone, smsAuthorizationNone)
+		case "associated-sip-no-auth":
+			appendVariant(target, smsMessageIdentityAssociatedSIP, smsAuthorizationNone)
+		case "tel-no-user-param":
+			appendVariant(sipTargetWithoutUserPhone(target), smsMessageIdentityTelephone, smsAuthorizationNone)
+		case "tel-no-user-param-no-plus":
+			noPlus := strings.Replace(target, ":+", ":", 1)
+			appendVariant(sipTargetWithoutUserPhone(noPlus), smsMessageIdentityTelephone, smsAuthorizationNone)
+		case "subscriber-o2-no-user-param":
+			if subscriberUser != "" && targetHost != "" {
+				appendVariant("sip:"+subscriberUser+"@"+targetHost,
+					smsMessageIdentityTelephone, smsAuthorizationNone)
+			}
+		case "subscriber-ims-no-user-param":
+			if subscriberUser != "" && imsDomain != "" {
+				appendVariant("sip:"+subscriberUser+"@"+imsDomain,
+					smsMessageIdentityRegistered, smsAuthorizationNone)
+			}
+		case "empty-integrity-auth":
+			appendVariant(target, smsMessageIdentityTelephone, smsAuthorizationEmptyIntegrity)
+		case "no-plus-smsc":
+			if smscDigits != "" && targetHost != "" {
+				appendVariant("sip:"+smscDigits+"@"+targetHost+";user=phone",
+					smsMessageIdentityTelephone, smsAuthorizationModeForProfile(profile))
+			}
+		case "subscriber-o2-phone":
+			if subscriberUser != "" && targetHost != "" {
+				appendVariant("sip:"+subscriberUser+"@"+targetHost+";user=phone",
+					smsMessageIdentityTelephone, smsAuthorizationModeForProfile(profile))
+			}
+		case "subscriber-ims-phone":
+			if subscriberUser != "" && imsDomain != "" {
+				appendVariant("sip:"+subscriberUser+"@"+imsDomain+";user=phone",
+					smsMessageIdentityRegistered, smsAuthorizationModeForProfile(profile))
+			}
+		case "registered-no-auth":
+			appendVariant(target, smsMessageIdentityRegistered, smsAuthorizationNone)
+		}
+	}
+	return variants
+}
+
+func smsAuthorizationModeForProfile(profile vowifi.CarrierProfile) smsAuthorizationMode {
+	if profile.SMSPreauthenticate {
+		return smsAuthorizationCached
+	}
+	return smsAuthorizationNone
+}
+
+func smsHeaderModeForProfile(profile vowifi.CarrierProfile) smsMessageHeaderMode {
+	switch strings.ToLower(strings.TrimSpace(profile.SMSHeaderMode)) {
+	case "minimal":
+		return smsMessageHeadersMinimal
+	case "smsip-only":
+		return smsMessageHeadersSMSIPOnly
+	case "icsi-only":
+		return smsMessageHeadersICSIOnly
+	default:
+		return smsMessageHeadersStandard
+	}
+}
+
+func sipTargetHost(target string) string {
+	value := strings.TrimSpace(target)
+	if colon := strings.IndexByte(value, ':'); colon >= 0 {
+		value = value[colon+1:]
+	}
+	if semicolon := strings.IndexByte(value, ';'); semicolon >= 0 {
+		value = value[:semicolon]
+	}
+	if at := strings.LastIndexByte(value, '@'); at >= 0 {
+		value = value[at+1:]
+	}
+	return strings.TrimSpace(value)
+}
+
+func sipTargetWithoutUserPhone(target string) string {
+	value := strings.TrimSpace(target)
+	if semicolon := strings.IndexByte(value, ';'); semicolon >= 0 {
+		value = value[:semicolon]
+	}
+	return value
+}
+
+func emptySMSPreauthorization(username, realm, target string) string {
+	return "Digest " + strings.Join([]string{
+		`uri="` + quoteDigest(target) + `"`,
+		`username="` + quoteDigest(username) + `"`,
+		`response=""`,
+		`realm="` + quoteDigest(realm) + `"`,
+		`nonce=""`,
+	}, ", ")
+}
+
+func (session *Session) smsPreauthorization(target string) (string, string) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.auth == nil {
+		return "Authorization", messageDigestAuthorization(session, emptySMSPreauthorization(
+			session.identity.private,
+			session.identity.domain,
+			target,
+		))
+	}
+	credentials := digestCredentials{
+		Username:    session.identity.private,
+		AKAResponse: session.auth.response,
+		AUTS:        session.auth.auts,
+		URI:         target,
+		Method:      "MESSAGE",
+		CNonce:      session.auth.cnonce,
+		NC:          session.auth.nc + 1,
+	}
+	authorization := messageDigestAuthorization(session, buildDigestAuthorization(session.auth.challenge, credentials))
+	if session.auth.challenge.Proxy {
+		return "Proxy-Authorization", authorization
+	}
+	return "Authorization", authorization
+}
+
+func (session *Session) sipMessageAuthorization(
+	ctx context.Context,
+	response *sipResponse,
+	target string,
+	nc uint32,
+) (string, string, error) {
+	challenge, err := messageChallengeFromResponse(response)
+	if err != nil {
+		return "", "", err
+	}
+	preference := ""
+	if vowifi.IsATT310280(session.request.Identity) {
+		preference = "isim_strict"
+	}
+	material, err := authenticateAKA(
 		ctx,
-		request,
-		sipTransactionKey{callID: callID, cseq: cseq, method: "MESSAGE"},
+		session.provider.aka,
+		session.request.Identity,
+		challenge,
+		preference,
 	)
-	if exchangeErr != nil {
-		session.logOutboundSMS(slog.LevelWarn, "IMS SIP MESSAGE transaction failed",
-			"stage", "sip_transaction", "call_id", callID, "cseq", cseq, "error", exchangeErr)
-		return response, exchangeErr
+	if err != nil {
+		return "", "", err
 	}
-	session.logOutboundSMS(slog.LevelDebug, "IMS SIP MESSAGE response received",
-		"stage", "sip_response", "call_id", callID, "cseq", cseq,
-		"sip_status", response.StatusCode)
-	return response, nil
+	credentials, err := newDigestCredentials(
+		session.identity.private,
+		material.response,
+		target,
+		"MESSAGE",
+		nc,
+	)
+	if err != nil {
+		clearAKAMaterial(&material)
+		return "", "", err
+	}
+	credentials.AUTS = base64.StdEncoding.EncodeToString(material.auts)
+	authorization := messageDigestAuthorization(session, buildDigestAuthorization(challenge, credentials))
+	clearAKAMaterial(&material)
+	if challenge.Proxy {
+		return "Proxy-Authorization", authorization, nil
+	}
+	return "Authorization", authorization, nil
+}
+
+func messageDigestAuthorization(session *Session, authorization string) string {
+	if session != nil && session.securityActive {
+		return authorization + ", integrity-protected=yes"
+	}
+	return authorization
+}
+
+func firstTelephoneIdentity(identities []string) (string, string) {
+	for _, value := range splitHeaderValues(identities) {
+		uri := publicIdentityURI(value)
+		if strings.HasPrefix(strings.ToLower(uri), "tel:") {
+			return uri, "associated_tel"
+		}
+	}
+	return "", ""
+}
+
+func firstNonTelephoneIdentity(identities []string) (string, string) {
+	for _, value := range splitHeaderValues(identities) {
+		uri := publicIdentityURI(value)
+		if strings.HasPrefix(strings.ToLower(uri), "sip:") {
+			return uri, "associated_sip"
+		}
+	}
+	return "", ""
+}
+
+func messageChallengeFromResponse(response *sipResponse) (digestChallenge, error) {
+	type challengeHeader struct {
+		name  string
+		proxy bool
+	}
+	headers := []challengeHeader{
+		{name: "WWW-Authenticate"},
+		{name: "Proxy-Authenticate", proxy: true},
+	}
+	var lastError error
+	found := false
+	for _, header := range headers {
+		values := response.values(header.name)
+		if len(values) > 0 {
+			found = true
+		}
+		for _, value := range values {
+			challenge, err := parseDigestChallenge(value, header.proxy)
+			if err == nil {
+				return challenge, nil
+			}
+			lastError = fmt.Errorf("%s: %w", header.name, err)
+		}
+	}
+	if !found {
+		return digestChallenge{}, errors.New("ims: authentication response omitted WWW-Authenticate and Proxy-Authenticate")
+	}
+	if lastError == nil {
+		lastError = errors.New("ims: authentication response contained no usable digest challenge")
+	}
+	return digestChallenge{}, lastError
 }
 
 func runtimeSecurityHeaders(active bool, verifyValue string) []string {

@@ -65,6 +65,22 @@ func TestDecodeSPN(t *testing.T) {
 	}
 }
 
+func TestSMSCenterPSIFromRecord(t *testing.T) {
+	const want = "sip:smsc@ims.mnc010.mcc234.3gppnetwork.org"
+	record := append([]byte{0x80, byte(len(want))}, want...)
+	record = append(record, 0xff, 0xff)
+	got, err := smsCenterPSIFromRecord(record)
+	if err != nil || got != want {
+		t.Fatalf("smsCenterPSIFromRecord() = %q, %v, want %q", got, err, want)
+	}
+	if _, err := smsCenterPSIFromRecord([]byte{0x81, 0x01, 'x'}); err == nil {
+		t.Fatal("non-URI TLV was accepted")
+	}
+	if _, err := smsCenterPSIFromRecord([]byte{0x80, 0x02, 0x00, 0xff}); err == nil {
+		t.Fatal("non-ASCII PSI was accepted")
+	}
+}
+
 func TestProvisionedIMSIFromNAI(t *testing.T) {
 	for _, test := range []struct {
 		value string

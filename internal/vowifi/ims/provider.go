@@ -1501,7 +1501,9 @@ func (session *Session) applyRegistrationEvidence(response *sipResponse) error {
 	// nonce count advances for each request, so a refresh does not replay the
 	// authenticated REGISTER. Clearing it here forces a new AKA challenge and
 	// can make an established ipsec-3gpp session fail with SIP 494.
-	if session.auth != nil && !strings.EqualFold(session.auth.challenge.QOP, "auth") {
+	profile := vowifi.ResolveCarrierProfile(session.request.Identity)
+	if session.auth != nil && !strings.EqualFold(session.auth.challenge.QOP, "auth") &&
+		!profile.SMSPreauthenticate {
 		session.clearAuthentication()
 	}
 	return nil
