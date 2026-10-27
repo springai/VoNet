@@ -375,6 +375,13 @@ export interface SMSMessage {
   status: string;
   source?: string;
   deliveryState?: string;
+  serviceCenterTimestamp?: string;
+  serviceCenterTimestampCorrection?: {
+    originalTimestamp: string;
+    timezone: string;
+    carrierProfile: string;
+    reason: string;
+  };
 }
 
 export interface UpstreamProxy {

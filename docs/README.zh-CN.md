@@ -174,6 +174,29 @@ docker run -d \
 
 该模式有意赋予 VoNet 对主机设备和网络栈的广泛访问权限，请仅在受信任的 Linux 主机上使用。自动发现会识别受支持的 Quectel USB 模组（USB 厂商 ID `2c7c`），以及通过 Linux WWAN 子系统暴露的 PCIe/MHI 模组；它不能识别任意模组布局。仅用 `--device` 映射单个节点，例如 `/dev/ttyUSB2`、`/dev/cdc-wdm0` 或 `/dev/wwan0qmi0`，会将容器限定在这些固定节点上，无法提供完整的多设备或热插拔发现。
 
+在 OpenWrt 主机上，fw4 的 input 链会拒绝来自其未管理接口的新连接，其中包括 VoNet 为每个 VoWiFi 会话创建的 TUN。VoNet 使用镜像内的 `nft` 安装范围很窄的 `vonet-ims-*` 放行规则。如果容器内 `nft` 无法读取主机规则集，请将 `VONET_NFT` 指向访问主机 `nft` 的 wrapper；ARMv7 上通常需要使用 `ld-musl-armhf.so.1`，不能直接假定 `uname -m` 与 musl loader 文件名相同。
+
+例如，在主机创建 wrapper 并将其挂载到容器：
+
+```bash
+cat > /opt/vonet-host-nft <<'EOF'
+#!/bin/sh
+exec /host/lib/ld-musl-$(uname -m).so.1 \
+  --library-path /host/usr/lib:/host/lib \
+  /host/usr/sbin/nft "$@"
+EOF
+chmod 755 /opt/vonet-host-nft
+
+# 在上面的 docker run 命令中追加：
+#   -v /usr:/host/usr:ro \
+#   -v /lib:/host/lib:ro \
+#   -v /opt/vonet-host-nft:/usr/local/bin/host-nft:ro \
+#   -e VONET_NFT=/usr/local/bin/host-nft
+```
+
+ARMv7 上请将 loader 路径替换为主机实际存在的 loader，例如
+`/host/lib/ld-musl-armhf.so.1`。
+
 GHCR 镜像发布为 `linux/amd64` 与 `linux/arm64`。
 
 > [!TIP]

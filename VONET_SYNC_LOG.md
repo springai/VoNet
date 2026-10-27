@@ -1215,3 +1215,61 @@ Ultra Mobile (ipcc-ultramint-mobile-310026):
 - `git diff --check` 通过，无冲突标记。
 
 本次仅完成本地同步和记录更新，不提交、不推送 GitHub。
+
+---
+
+## 2026-10-27 同步审计补漏
+
+- 补全 `README.md` 与 `docs/README.zh-CN.md` 中 OpenWrt `VONET_NFT` host wrapper、
+  挂载参数和 ARMv7 musl loader 示例，命名统一为 VoNet。
+- 将 `web/package-lock.json` 的 `set-cookie-parser` 与 `web/pnpm-lock.yaml`
+  统一为 `2.7.2`，消除锁文件传递依赖漂移。
+- `npm ci`、29 项前端测试、`npm run build` 和 `git diff --check` 均通过。
+
+本次仅修复审计遗漏，不提交、不推送 GitHub。
+
+---
+
+## 2026-10-27 同步上游 4859412 → 2c1e283（9 个提交，选择性同步）
+
+**同步范围**:
+
+- `7aec04c` OpenWrt fw4/Docker IMS input 规则。
+- `a172a66` SMS SCTS 运营商时区修正。
+- `ac39db9` 上游合并提交。
+- `4fb0410` 自动发布累计变更阈值和恢复流程。
+- `a18dceb` linux/arm PC/SC backend。
+- `0488a7a` SOCKS5 UDP 端口浮动时重建 association。
+- `57e1fec` native QMI eUICC profile 切换后 provisioning 重绑和 doctor 争用检查。
+- `4bb200c` `react-router-dom` 7.18.4。
+- `2c1e283` `lucide-react` 1.61.0。
+
+**逐文件同步结果**:
+
+| 文件/区域 | 操作 | 说明 |
+|---|---|---|
+| `internal/vowifi/ike/*`、`Dockerfile`、README | 人工合并 | 引入 `VONET_NFT`、fw4 探测诊断、`nftables` 运行时依赖和 OpenWrt 文档；保留 VoNet 命名 |
+| `internal/vowifi/sms_timestamp.go`、carrier profile、IMS/server SMS | 人工合并 | DITO SCTS 规范化、原始时间证据和入站/状态报告修正；保留 O2 SMS 外发逻辑 |
+| `cmd/vonet/main.go`、`internal/store/*` | 人工合并 | delivery report 保存 `service_center_timestamp_correction`，消息 API 返回修正证据 |
+| `internal/device/*` | 人工合并 | eUICC profile switch/power-cycle 后先 deactivate 再 activate Primary GW provisioning；保留 slot 1，因为现有 eUICC/CAT 链路固定使用该槽位 |
+| `cmd/vonet/doctor*` | 人工合并 | 增加 OpenStick native QMI 与 ModemManager 争用检查；查询失败不会误报为通过 |
+| `internal/pcsc/backend*` | 合入 | build tags 增加 linux/arm |
+| `internal/vowifi/ike/transport.go` | 合入 | UDP/4500 浮动先建立新 SOCKS5 association，再关闭旧 association |
+| `.github/workflows/auto-release.yml`、`scripts/auto-release.py`、测试 | 人工合并 | 使用成功 release 作为基线、失败恢复和产物校验；无稳定 release 时保留 root-commit 基线 |
+| `web/package.json`、两份 lockfile、`web/src/types.ts` | 人工合并 | 只升级 `react-router-dom`/`lucide-react`，保留 Tailwind 4；增加时间修正字段 |
+| `internal/vowifi/ike/userspace_firewall*.go` | 补充 | 清理旧 `vocat-ims-*` 规则，避免升级后残留 fw4 放行规则 |
+
+**本地功能保护**:
+
+- O2 SMS 修复、VoWiFi 通话/短信运行时、PCSC 生命周期、设备移除、无 tag 自动发布 bootstrap 和 Go 工具链修复均未被覆盖。
+- 抓包脚本、抓包数据、`captures/`、`.env*` 和本地构建产物继续由 `.gitignore` 排除，不纳入同步或提交。
+- QMI provisioning 保持 slot 1；多 QMI slot 需要从 `GetSlotStatus` 到 UIM/CAT/power-cycle 全链路单独设计，不能只改重绑接口。
+
+**验证**:
+
+- `go test ./...` 通过。
+- `npm test`、`npm run build` 通过。
+- `python3 -m unittest discover -s scripts -p 'test_auto_release.py' -v` 通过。
+- `git diff --check` 通过。
+
+本次仅完成本地同步和记录更新，不提交、不推送 GitHub。

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -134,6 +135,9 @@ func runDoctor(args []string) error {
 			}
 		}
 	}
+	if check, ok := nativeQMIModemManagerContentionCheck(ctx, candidates); ok {
+		add(check.Name, check.Status, check.Code, check.Message, check.Evidence)
+	}
 
 	readers, readerErr := pcsc.New().Readers(ctx)
 	if readerErr == nil {
@@ -165,6 +169,85 @@ func runDoctor(args []string) error {
 		fmt.Printf("%-8s %-26s %-28s %s\n", strings.ToUpper(check.Status), check.Name, check.Code, check.Message)
 	}
 	return nil
+}
+
+// nativeQMIModemManagerContentionCheck reports the OpenStick native QMI
+// ownership conflict that can make an otherwise readable SIM appear absent.
+// It deliberately only warns: changing the host's modem owner automatically
+// can break an existing connection.
+func nativeQMIModemManagerContentionCheck(ctx context.Context, candidates []modem.Candidate) (doctorCheck, bool) {
+	affected := make([]map[string]string, 0)
+	for _, candidate := range candidates {
+		if !isOpenStickNativeQMICandidate(candidate) {
+			continue
+		}
+		affected = append(affected, map[string]string{
+			"device_id":   candidate.ID,
+			"qmi_control": candidate.QMIControl,
+		})
+	}
+	if len(affected) == 0 || runtime.GOOS != "linux" {
+		return doctorCheck{}, false
+	}
+
+	systemctl, err := exec.LookPath("systemctl")
+	if err != nil {
+		return doctorCheck{
+			Name:     "modemmanager:native_qmi",
+			Status:   "warning",
+			Code:     "modemmanager_status_unknown",
+			Message:  "OpenStick native QMI control was found, but systemctl is unavailable to check ModemManager ownership",
+			Evidence: affected,
+		}, true
+	}
+	probeContext, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	command := exec.CommandContext(probeContext, systemctl, "is-active", "--quiet", "ModemManager.service")
+	commandErr := command.Run()
+	if errors.Is(probeContext.Err(), context.DeadlineExceeded) {
+		return doctorCheck{
+			Name:     "modemmanager:native_qmi",
+			Status:   "warning",
+			Code:     "modemmanager_status_timeout",
+			Message:  "Timed out while checking whether ModemManager owns the OpenStick native QMI control node",
+			Evidence: affected,
+		}, true
+	}
+	// systemctl is-active returns 3 for an inactive unit. Any other failure
+	// means the ownership state is unknown and must not be reported as passed.
+	if commandErr != nil {
+		if exitErr, ok := commandErr.(*exec.ExitError); ok && exitErr.ExitCode() == 3 {
+			return doctorCheck{
+				Name:     "modemmanager:native_qmi",
+				Status:   "passed",
+				Code:     "native_qmi_exclusive",
+				Message:  "ModemManager is inactive; VoNet can exclusively own the OpenStick native QMI control node",
+				Evidence: affected,
+			}, true
+		}
+		return doctorCheck{
+			Name:     "modemmanager:native_qmi",
+			Status:   "warning",
+			Code:     "modemmanager_status_unknown",
+			Message:  "Could not determine whether ModemManager is active beside the OpenStick native QMI control node",
+			Evidence: affected,
+		}, true
+	}
+	return doctorCheck{
+		Name:     "modemmanager:native_qmi",
+		Status:   "warning",
+		Code:     "modemmanager_qmi_contention",
+		Message:  "ModemManager is active beside OpenStick native QMI control. Choose one owner: stop/disable ModemManager after any required UIM provisioning, then let VoNet own the modem; do not run mmcli while VoNet is running.",
+		Evidence: affected,
+	}, true
+}
+
+func isOpenStickNativeQMICandidate(candidate modem.Candidate) bool {
+	if !strings.HasPrefix(strings.TrimSpace(candidate.ID), "mhi-wwan") {
+		return false
+	}
+	control := filepath.Base(strings.TrimSpace(candidate.QMIControl))
+	return strings.HasPrefix(control, "wwan") && strings.Contains(control, "qmi")
 }
 
 func minDuration(left, right time.Duration) time.Duration {

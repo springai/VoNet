@@ -52,6 +52,7 @@ type ReceivedSMS struct {
 	Text                   string
 	Timestamp              time.Time
 	ServiceCenterTimestamp *time.Time
+	TimestampCorrection    *vowifi.SMSTimestampCorrection
 	Encoding               device.SMSEncoding
 	Concat                 *device.SMSConcatInfo
 	RPReference            int
@@ -83,6 +84,7 @@ type ReceivedSMSStatus struct {
 	StatusCode             int
 	DeliveryStatus         string
 	ServiceCenterTimestamp *time.Time
+	TimestampCorrection    *vowifi.SMSTimestampCorrection
 	DischargeTimestamp     *time.Time
 	Timestamp              time.Time
 	RPReference            int
@@ -629,6 +631,12 @@ func (session *Session) processSMSMessage(request *sipRequest) {
 
 	switch {
 	case message.Direction == device.SMSDirectionStatusReport:
+		normalizedTimestamp, timestampCorrection := carrierProfile.NormalizeSMSTimestamp(message.ServiceCenterTimestamp)
+		var serviceCenterTimestamp *time.Time
+		if normalizedTimestamp != nil {
+			value := normalizedTimestamp.UTC()
+			serviceCenterTimestamp = &value
+		}
 		status := ReceivedSMSStatus{
 			DeviceID:               session.request.DeviceID,
 			ICCID:                  session.request.Identity.ICCID,
@@ -638,7 +646,8 @@ func (session *Session) processSMSMessage(request *sipRequest) {
 			MessageReference:       intPtrValue(message.MessageReference),
 			StatusCode:             intPtrValue(message.StatusCode),
 			DeliveryStatus:         message.DeliveryStatus,
-			ServiceCenterTimestamp: message.ServiceCenterTimestamp,
+			ServiceCenterTimestamp: serviceCenterTimestamp,
+			TimestampCorrection:    timestampCorrection,
 			DischargeTimestamp:     message.DischargeTimestamp,
 			Timestamp:              receivedAt,
 			RPReference:            int(rpdu.reference),
@@ -667,8 +676,9 @@ func (session *Session) processSMSMessage(request *sipRequest) {
 
 	case message.Direction == device.SMSDirectionReceived || decodeErr != nil:
 		var serviceCenterTimestamp *time.Time
-		if message.ServiceCenterTimestamp != nil {
-			value := message.ServiceCenterTimestamp.UTC()
+		normalizedTimestamp, timestampCorrection := carrierProfile.NormalizeSMSTimestamp(message.ServiceCenterTimestamp)
+		if normalizedTimestamp != nil {
+			value := normalizedTimestamp.UTC()
 			serviceCenterTimestamp = &value
 		}
 		received := ReceivedSMS{
@@ -684,6 +694,7 @@ func (session *Session) processSMSMessage(request *sipRequest) {
 			Text:                   message.Text,
 			Timestamp:              receivedAt,
 			ServiceCenterTimestamp: serviceCenterTimestamp,
+			TimestampCorrection:    timestampCorrection,
 			Encoding:               message.Encoding,
 			Concat:                 message.Concat,
 			RPReference:            int(rpdu.reference),

@@ -710,6 +710,7 @@ func (s *Server) syncModemSMS(ctx context.Context, onlyDevice string) {
 			config.ModemIMEI,
 		)
 		concatSources := modemSMSConcatSources(messages)
+		timestampProfile := modemSMSTimestampProfile(currentEntry.Snapshot)
 		autoClear := developer.AutoClearModemStorage(ctx, s.store)
 		var clearSlots []modemSMSSlot
 		// Multipart IDs derive from the first segment's slot in this scan, so
@@ -736,7 +737,8 @@ func (s *Server) syncModemSMS(ctx context.Context, onlyDevice string) {
 			}
 			if message.Direction == device.SMSDirectionStatusReport &&
 				message.MessageReference != nil && message.StatusCode != nil {
-				_, applyErr := s.store.ApplySMSDeliveryReport(ctx, store.SMSDeliveryReport{
+				serviceCenterTimestamp, timestampCorrection := timestampProfile.NormalizeSMSTimestamp(message.ServiceCenterTimestamp)
+				deliveryReport := store.SMSDeliveryReport{
 					DeviceID:          config.ID,
 					ModemIMEI:         modemIMEI,
 					IMSI:              identityAfter.IMSI,
@@ -745,10 +747,16 @@ func (s *Server) syncModemSMS(ctx context.Context, onlyDevice string) {
 					MessageReference:  *message.MessageReference,
 					StatusCode:        *message.StatusCode,
 					DeliveryState:     message.DeliveryStatus,
-					ServiceCenterTime: message.ServiceCenterTimestamp,
+					ServiceCenterTime: serviceCenterTimestamp,
 					DischargeTime:     message.DischargeTimestamp,
 					ReceivedAt:        time.Now().UTC(),
-				})
+				}
+				if timestampCorrection != nil {
+					deliveryReport.Extra = map[string]any{
+						"service_center_timestamp_correction": timestampCorrection,
+					}
+				}
+				_, applyErr := s.store.ApplySMSDeliveryReport(ctx, deliveryReport)
 				if applyErr != nil {
 					if !errors.Is(applyErr, store.ErrNotFound) {
 						s.logger.Warn("apply modem SMS delivery report failed", "device_id", config.ID, "error", applyErr)
@@ -762,8 +770,9 @@ func (s *Server) syncModemSMS(ctx context.Context, onlyDevice string) {
 			}
 			peer := firstNonEmpty(message.From, message.To, "未知发送方")
 			timestamp := time.Now().UTC()
-			if message.ServiceCenterTimestamp != nil {
-				timestamp = message.ServiceCenterTimestamp.UTC()
+			serviceCenterTimestamp, timestampCorrection := timestampProfile.NormalizeSMSTimestamp(message.ServiceCenterTimestamp)
+			if serviceCenterTimestamp != nil {
+				timestamp = serviceCenterTimestamp.UTC()
 			} else if message.DischargeTimestamp != nil {
 				timestamp = message.DischargeTimestamp.UTC()
 			}
@@ -772,7 +781,7 @@ func (s *Server) syncModemSMS(ctx context.Context, onlyDevice string) {
 				direction = "outbound"
 			}
 			messageID := modemSMSMessageID(message, modemIMEI, config.ID, peer, concatSources[modemSMSStorageKey(message)])
-			extra, _ := json.Marshal(map[string]any{
+			metadata := map[string]any{
 				"modem_index":        message.Index,
 				"storage":            message.Storage,
 				"storage_status":     message.StorageStatus,
@@ -789,7 +798,12 @@ func (s *Server) syncModemSMS(ctx context.Context, onlyDevice string) {
 				// segment differently on a later pass, otherwise notification
 				// providers can treat the old message as newly inserted.
 				"keep_durable_id_on_rescan": true,
-			})
+			}
+			if timestampCorrection != nil {
+				metadata["service_center_timestamp"] = serviceCenterTimestamp.UTC()
+				metadata["service_center_timestamp_correction"] = timestampCorrection
+			}
+			extra, _ := json.Marshal(metadata)
 			saveResult, saveErr := s.store.SaveSMSMessageWithResult(ctx, store.SMSMessage{
 				MessageID:     messageID,
 				DeviceID:      config.ID,
@@ -935,6 +949,27 @@ func modemSMSMessageID(message device.SMSMessage, modemIMEI, deviceID, peer, con
 type smsSubscriptionIdentity struct {
 	ICCID string
 	IMSI  string
+}
+
+func modemSMSTimestampProfile(snapshot *device.Snapshot) vowifi.CarrierProfile {
+	if snapshot == nil {
+		return vowifi.ResolveCarrierProfile(vowifi.SIMIdentity{})
+	}
+	identity := vowifi.SIMIdentity{
+		ICCID: snapshot.ICCID, IMSI: snapshot.IMSI, SPN: snapshot.SPN,
+		GID1: snapshot.GID1, GID2: snapshot.GID2,
+	}
+	// Use the SIM's home network, never the visited registration operator or
+	// the host's location. CarrierForSIM also handles DITO sponsor identities.
+	if (snapshot.MNCLength == 2 || snapshot.MNCLength == 3) && len(snapshot.IMSI) >= 3+snapshot.MNCLength {
+		identity.HomeMCC, identity.HomeMNC = snapshot.IMSI[:3], snapshot.IMSI[3:3+snapshot.MNCLength]
+	} else if plmn, _, _, ok := device.CarrierForSIM(device.CarrierIdentity{
+		ICCID: snapshot.ICCID, IMSI: snapshot.IMSI, SPN: snapshot.SPN,
+		GID1: snapshot.GID1, GID2: snapshot.GID2, MNCLength: snapshot.MNCLength,
+	}); ok && len(plmn) >= 5 {
+		identity.HomeMCC, identity.HomeMNC = plmn[:3], plmn[3:]
+	}
+	return vowifi.ResolveCarrierProfile(identity)
 }
 
 func smsIdentityFromSnapshot(snapshot *device.Snapshot) smsSubscriptionIdentity {
@@ -1177,13 +1212,15 @@ func (s *Server) StartSMSSyncLoop(ctx context.Context, interval time.Duration) {
 func storedSMSResponse(message store.SMSMessage) map[string]any {
 	body := smsdecode.Preview(message.Body)
 	decodeError := store.SMSDecodeError(message.Extra)
+	var extra map[string]any
+	_ = json.Unmarshal(message.Extra, &extra)
 	decodeStatus := "decoded"
 	if decodeError != "" {
 		decodeStatus = "failed"
 	} else if strings.TrimSpace(body) == "" {
 		decodeStatus = "empty"
 	}
-	return map[string]any{
+	response := map[string]any{
 		"id":             message.ID,
 		"message_id":     message.MessageID,
 		"device_id":      message.DeviceID,
@@ -1206,6 +1243,13 @@ func storedSMSResponse(message store.SMSMessage) map[string]any {
 		"parts_total":    message.PartsTotal,
 		"delivery_state": message.DeliveryState,
 	}
+	if value, ok := extra["service_center_timestamp"]; ok {
+		response["service_center_timestamp"] = value
+	}
+	if value, ok := extra["service_center_timestamp_correction"]; ok {
+		response["service_center_timestamp_correction"] = value
+	}
+	return response
 }
 
 func reverseSMS(messages []store.SMSMessage) {

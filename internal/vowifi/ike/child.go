@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 
 	"vonet/internal/vowifi"
@@ -274,6 +275,7 @@ type ChildSAConfig struct {
 	UDPEncapsulation   bool
 	ProxyMode          vowifi.ProxyMode
 	Relay              NATTPacketRelay
+	Logger             *slog.Logger
 }
 
 // NATTPacketRelay carries raw ESP packets inside UDP/4500.  A user-space

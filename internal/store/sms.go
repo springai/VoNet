@@ -483,6 +483,9 @@ func (s *Store) ApplySMSDeliveryReport(ctx context.Context, report SMSDeliveryRe
 		"delivery_state": report.DeliveryState,
 		"received_at":    report.ReceivedAt.UTC(),
 	}
+	for key, value := range report.Extra {
+		reportValue[key] = value
+	}
 	if report.ServiceCenterTime != nil {
 		reportValue["service_center_timestamp"] = report.ServiceCenterTime.UTC()
 	}

@@ -209,6 +209,34 @@ modem layouts. Mapping only individual nodes with `--device`, such as
 `/dev/ttyUSB2`, `/dev/cdc-wdm0`, or `/dev/wwan0qmi0`, limits the container to
 those fixed nodes and does not provide complete multi-device or hot-plug discovery.
 
+On OpenWrt hosts, the fw4 input chain drops new connections from interfaces it
+does not manage, including VoNet's per-session VoWiFi TUN. VoNet installs narrow
+`vonet-ims-*` accept rules for P-CSCF traffic using the bundled `nft`. Set
+`VONET_NFT` to a wrapper for the host's `nft` when the container cannot read the
+host ruleset. The wrapper must use the host's actual musl loader name; ARMv7
+images commonly use `ld-musl-armhf.so.1`.
+
+For example, create a host-side wrapper and mount it into the container:
+
+```bash
+cat > /opt/vonet-host-nft <<'EOF'
+#!/bin/sh
+exec /host/lib/ld-musl-$(uname -m).so.1 \
+  --library-path /host/usr/lib:/host/lib \
+  /host/usr/sbin/nft "$@"
+EOF
+chmod 755 /opt/vonet-host-nft
+
+# Add these options to the docker run command above:
+#   -v /usr:/host/usr:ro \
+#   -v /lib:/host/lib:ro \
+#   -v /opt/vonet-host-nft:/usr/local/bin/host-nft:ro \
+#   -e VONET_NFT=/usr/local/bin/host-nft
+```
+
+On ARMv7, replace the loader path with the actual host loader, for example
+`/host/lib/ld-musl-armhf.so.1`.
+
 The GHCR image is published for `linux/amd64` and `linux/arm64`.
 
 > [!TIP]

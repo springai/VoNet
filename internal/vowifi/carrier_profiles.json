@@ -11873,6 +11873,17 @@
         {
           "home_plmns": [
             "51566",
+            "515066"
+          ],
+          "require_home_plmn": true,
+          "require_iccid": true,
+          "iccid_prefixes": [
+            "896366"
+          ]
+        },
+        {
+          "home_plmns": [
+            "51566",
             "515066",
             "20404",
             "204047",
@@ -11882,6 +11893,7 @@
             "204047616",
             "204043610"
           ],
+          "require_iccid": true,
           "iccid_prefixes": [
             "896366"
           ]
@@ -11902,6 +11914,9 @@
       "route": {
         "mcc": "515",
         "mnc": "66"
+      },
+      "sms": {
+        "zero_scts_timezone": "Asia/Manila"
       },
       "epdg": {
         "hostname": "epdg.epc.mnc066.mcc515.pub.3gppnetwork.org"

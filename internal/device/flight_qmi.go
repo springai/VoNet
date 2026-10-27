@@ -52,6 +52,11 @@ type nativeQMIUIMResetSession interface {
 	ResetUIM(context.Context) error
 }
 
+type nativeQMIProvisioningSession interface {
+	GetUSIMAID(context.Context) ([]byte, error)
+	RebindPrimaryGWProvisioning(context.Context, uint8, []byte) error
+}
+
 type nativeQMIVoWiFiSession interface {
 	qmiRadioSession
 	GetICCID(context.Context) (string, error)
@@ -272,6 +277,40 @@ func (session *productionQMIRadioSession) ResetUIM(ctx context.Context) error {
 		return err
 	}
 	return uim.Reset(ctx)
+}
+
+// RebindPrimaryGWProvisioning restores the primary GSM/LTE provisioning
+// session after an eUICC profile switch. Some Qualcomm MHI firmware clears
+// this binding while power-cycling the UICC.
+func (session *productionQMIRadioSession) RebindPrimaryGWProvisioning(ctx context.Context, slot uint8, aid []byte) error {
+	if len(aid) == 0 {
+		return errors.New("USIM AID is empty")
+	}
+	uim, err := session.uimService(ctx)
+	if err != nil {
+		return err
+	}
+	if err := uim.ChangeProvisioningSession(ctx, qmi.UIMChangeProvisioningSessionRequest{
+		SessionType: qmi.UIMSessionTypePrimaryGWProvisioning,
+		Activate:    false,
+		Slot:        &slot,
+	}); err != nil {
+		return fmt.Errorf("deactivate primary GSM/LTE provisioning session: %w", err)
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := uim.ChangeProvisioningSession(ctx, qmi.UIMChangeProvisioningSessionRequest{
+		SessionType:           qmi.UIMSessionTypePrimaryGWProvisioning,
+		Activate:              true,
+		Slot:                  &slot,
+		ApplicationIdentifier: append([]byte(nil), aid...),
+	}); err != nil {
+		return fmt.Errorf("activate primary GSM/LTE provisioning session: %w", err)
+	}
+	return nil
 }
 
 func (session *productionQMIRadioSession) uimService(ctx context.Context) (*qmi.UIMService, error) {

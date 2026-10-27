@@ -1245,7 +1245,7 @@ func newVoWiFiOrchestrator(
 		OnSMS: func(ctx context.Context, message ims.ReceivedSMS) error {
 			localPhone, _ := database.PhoneNumberForICCID(ctx, message.ICCID)
 			modemIMEI := firstNonEmpty(message.ModemIMEI, deviceConfig.ModemIMEI)
-			extra, _ := json.Marshal(map[string]any{
+			metadata := map[string]any{
 				"transport":                "ims",
 				"encoding":                 message.Encoding,
 				"concat":                   message.Concat,
@@ -1256,7 +1256,11 @@ func newVoWiFiOrchestrator(
 				"raw_rpdu":                 message.RawRPDU,
 				"raw_tpdu":                 message.RawTPDU,
 				"decode_error":             message.DecodeError,
-			})
+			}
+			if message.TimestampCorrection != nil {
+				metadata["service_center_timestamp_correction"] = message.TimestampCorrection
+			}
+			extra, _ := json.Marshal(metadata)
 			partsTotal := 1
 			if message.Concat != nil && message.Concat.Total > 0 {
 				partsTotal = message.Concat.Total
@@ -1294,6 +1298,11 @@ func newVoWiFiOrchestrator(
 				ServiceCenterTime: report.ServiceCenterTimestamp,
 				DischargeTime:     report.DischargeTimestamp,
 				ReceivedAt:        report.Timestamp,
+			}
+			if report.TimestampCorrection != nil {
+				deliveryReport.Extra = map[string]any{
+					"service_center_timestamp_correction": report.TimestampCorrection,
+				}
 			}
 			var applyErr error
 			for attempt := 0; attempt < 10; attempt++ {

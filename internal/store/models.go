@@ -237,6 +237,7 @@ type SMSDeliveryReport struct {
 	ServiceCenterTime *time.Time
 	DischargeTime     *time.Time
 	ReceivedAt        time.Time
+	Extra             map[string]any
 }
 
 type SMSContact struct {

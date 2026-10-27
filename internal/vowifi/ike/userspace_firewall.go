@@ -9,6 +9,37 @@ import (
 
 const openWrtFirewallCommentPrefix = "vonet-ims-"
 
+const openWrtNFTCommandEnv = "VONET_NFT"
+
+var openWrtLegacyFirewallCommentPrefixes = []string{"vocat-ims-"}
+
+func managedOpenWrtFirewallComment(comment string) bool {
+	if strings.HasPrefix(comment, openWrtFirewallCommentPrefix) {
+		return true
+	}
+	for _, prefix := range openWrtLegacyFirewallCommentPrefixes {
+		if strings.HasPrefix(comment, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func openWrtNFTCommand(getenv func(string) string) string {
+	if command := strings.TrimSpace(getenv(openWrtNFTCommandEnv)); command != "" {
+		return command
+	}
+	return "nft"
+}
+
+func fw4InputChainAbsent(exitCode int, output string) bool {
+	if exitCode != 1 {
+		return false
+	}
+	return strings.Contains(output, "No such file or directory") ||
+		strings.Contains(output, "Protocol not supported")
+}
+
 type openWrtFirewallRule struct {
 	comment   string
 	arguments []string
@@ -105,8 +136,18 @@ func staleOpenWrtFirewallRuleHandles(
 	interfaceMatch := `iifname "` + interfaceName + `"`
 	var handles []string
 	for _, line := range strings.Split(output, "\n") {
+		commentStart := strings.Index(line, `comment "`)
+		commentEnd := -1
+		if commentStart >= 0 {
+			commentValue := commentStart + len(`comment "`)
+			commentEnd = strings.IndexByte(line[commentValue:], '"')
+			if commentEnd >= 0 {
+				commentEnd += commentValue
+			}
+		}
 		if !strings.Contains(line, interfaceMatch) ||
-			!strings.Contains(line, `comment "`+openWrtFirewallCommentPrefix) {
+			commentStart < 0 || commentEnd < 0 ||
+			!managedOpenWrtFirewallComment(line[commentStart+len(`comment "`):commentEnd]) {
 			continue
 		}
 		current := false
