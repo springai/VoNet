@@ -317,15 +317,66 @@ html.dark .sidebar-brand-description { color: #9ca3af; }
   letter-spacing: -0.01em;
 }
 
-.sidebar-menu { display: flex; flex-direction: column; }
+.sidebar-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(100% - 152px);
+  padding: 4px 0 88px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.28) transparent;
+}
+.sidebar-menu-group { display: flex; flex-direction: column; gap: 2px; }
+.sidebar-menu-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 0 16px;
+  color: #8a94a3;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.sidebar-menu-group-marker {
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  background: #cbd5e1;
+  flex-shrink: 0;
+}
+.sidebar-menu-group:first-child .sidebar-menu-group-marker { background: #38bdf8; }
+.sidebar-menu-group:nth-child(2) .sidebar-menu-group-marker { background: #818cf8; }
+.sidebar-menu-group:nth-child(3) .sidebar-menu-group-marker { background: #34d399; }
+.sidebar-menu-group:nth-child(4) .sidebar-menu-group-marker { background: #fbbf24; }
+.sidebar-menu-group:nth-child(5) .sidebar-menu-group-marker { background: #f472b6; }
+.sidebar-menu-group-label span:last-child { white-space: nowrap; }
+.sidebar-menu-group-items { display: flex; flex-direction: column; gap: 2px; }
+.sidebar-menu-group.is-collapsed { gap: 4px; }
+.sidebar-menu-group.is-collapsed .sidebar-menu-group-label {
+  min-height: 8px;
+  justify-content: center;
+  padding: 0;
+}
+.sidebar-menu-group.is-collapsed .sidebar-menu-group-marker {
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  opacity: 0.65;
+}
+.sidebar-menu-group.is-collapsed .sidebar-menu-group-items { gap: 3px; }
 .sidebar-menu .vonet-menu-item {
   position: relative;
   display: flex;
   align-items: center;
-  height: 40px;
-  min-height: 40px;
-  margin: 2px 8px;
-  border-radius: 10px;
+  height: 38px;
+  min-height: 38px;
+  margin: 0 8px;
+  border-radius: 8px;
   padding-left: 13px;
   padding-right: 13px;
   font-size: 0.94rem;
@@ -347,6 +398,13 @@ html.dark .sidebar-brand-description { color: #9ca3af; }
 }
 .sidebar-menu .vonet-menu-item:hover { background: var(--sidebar-menu-hover-bg); }
 html.dark .sidebar-shell .sidebar-menu .vonet-menu-item:not(.is-active) { color: rgba(236, 241, 252, 0.9); }
+html.dark .sidebar-menu-group-label { color: rgba(203, 213, 225, 0.68); }
+html.dark .sidebar-menu-group-marker { background: rgba(148, 163, 184, 0.48); }
+html.dark .sidebar-menu-group:first-child .sidebar-menu-group-marker { background: #38bdf8; }
+html.dark .sidebar-menu-group:nth-child(2) .sidebar-menu-group-marker { background: #818cf8; }
+html.dark .sidebar-menu-group:nth-child(3) .sidebar-menu-group-marker { background: #34d399; }
+html.dark .sidebar-menu-group:nth-child(4) .sidebar-menu-group-marker { background: #fbbf24; }
+html.dark .sidebar-menu-group:nth-child(5) .sidebar-menu-group-marker { background: #f472b6; }
 .sidebar-menu .vonet-menu-item.is-active {
   background: var(--sidebar-menu-active-bg);
   color: var(--sidebar-menu-active-color);
@@ -357,7 +415,7 @@ html.dark .sidebar-shell .sidebar-menu .vonet-menu-item:not(.is-active) { color:
   width: 36px;
   height: 36px;
   min-height: 36px;
-  margin: 3px auto;
+  margin: 0 auto;
   padding: 0;
   justify-content: center;
 }

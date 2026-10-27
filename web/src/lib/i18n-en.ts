@@ -5,6 +5,14 @@
  * 富文本片段（嵌套链接/代码块的说明框）不走字典，在组件里按语言分支渲染。
  */
 export const EN_DICT: Record<string, string> = {
+  "监控": "Monitoring",
+  "运维": "Operations",
+  "系统": "System",
+  "系统诊断": "System Diagnostics",
+  "IMEI池": "IMEI Pool",
+  "设备通话": "Device Calls",
+  "代理中心": "Proxy Center",
+  "节点转换": "Node Conversion",
   "短信解析失败": "SMS decoding failed",
   "短信正文为空": "SMS body is empty",
   "E911地址设置": "Set E911 address",
@@ -286,7 +294,7 @@ export const EN_DICT: Record<string, string> = {
     "When disabled, bound devices stop using this VoWiFi route and do not leak traffic to a direct connection.",
   // ---- 外壳 / 导航 ----
   仪表盘: "Dashboard",
-  设备管理: "Devices",
+  设备管理: "Device Management",
   代理管理: "Proxy",
   短信检测: "SMS Test",
   自动任务: "Automatic Tasks",
