@@ -36,14 +36,14 @@ export function Drawer({
   return createPortal(
     <div className="fixed inset-0 z-[2900]">
       <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        className="ui-drawer-overlay absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={() => {
           if (closeOnOverlay) onClose();
         }}
       />
       <div
         className={cx(
-          "absolute inset-y-0 overflow-hidden shadow-2xl",
+          "ui-drawer-panel absolute inset-y-0 overflow-hidden shadow-2xl",
           side === "left"
             ? "left-0 animate-[drawer-in_0.25s_cubic-bezier(0.4,0,0.2,1)]"
             : "right-0 animate-[drawer-in-right_0.25s_cubic-bezier(0.4,0,0.2,1)]",

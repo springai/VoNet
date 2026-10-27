@@ -97,7 +97,7 @@ export function Select({ value, onChange, options, placeholder, disabled, size =
         disabled={disabled}
         onClick={toggleOpen}
         className={cx(
-          "flex w-full items-center justify-between gap-2 rounded-lg border border-[#dcdfe6] bg-white px-3 text-left text-sm text-gray-900 outline-none transition-all",
+          "ui-select flex w-full items-center justify-between gap-2 rounded-lg border border-[#dcdfe6] bg-white px-3 text-left text-sm text-gray-900 outline-none transition-all",
           "hover:border-[#c0c4cc] focus:border-[#0ea5e9] focus:ring-2 focus:ring-[#0ea5e9]/25",
           "dark:border-white/15 dark:bg-black/20 dark:text-gray-100 dark:hover:border-white/25",
           "disabled:cursor-not-allowed disabled:opacity-60",
@@ -114,7 +114,7 @@ export function Select({ value, onChange, options, placeholder, disabled, size =
           <div
             ref={menuRef}
             style={menuStyle}
-            className="overflow-auto rounded-lg border border-gray-200/70 bg-white p-1 shadow-xl backdrop-blur-xl dark:border-white/10 dark:bg-[#1c1c22]"
+            className="ui-select-menu overflow-auto rounded-lg border border-gray-200/70 bg-white p-1 shadow-xl backdrop-blur-xl dark:border-white/10 dark:bg-[#1c1c22]"
           >
           {options.length === 0 && <div className="px-3 py-2 text-sm text-gray-400">{t("暂无数据")}</div>}
           {options.map((option) => {

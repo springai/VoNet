@@ -101,11 +101,11 @@ export default function DiagnosticsPage() {
   const failed = checks.filter((c) => c.status === "failed").length;
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="diagnostics-page">
       <PageHeader title={t("系统诊断")} subtitle={t("检查 VoWiFi/XFRM 运行环境")} />
 
       <div className="ui-card group relative overflow-hidden p-8">
-        <div className="absolute right-0 top-0 -mr-10 -mt-10 h-40 w-40 rounded-bl-full bg-indigo-500/5 transition-transform group-hover:scale-110" />
+        <div className="diagnostic-scan" aria-hidden="true" />
         <div className="relative z-10 mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400">

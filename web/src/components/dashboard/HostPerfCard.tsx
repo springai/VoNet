@@ -45,7 +45,7 @@ function UsageBar({ label, percent, detail }: { label: string; percent: number; 
 export function HostPerfCard({ perf }: { perf?: DashboardHostPerf | null }) {
   const { t } = useI18n();
   return (
-    <div className="ui-panel p-4">
+    <div className="ui-panel dashboard-metric-card metric-blue p-4">
       <div className="mb-3 flex items-center gap-2">
         <GaugeRegular className="h-4 w-4 text-sky-500" />
         <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100">{t("性能信息")}</h3>

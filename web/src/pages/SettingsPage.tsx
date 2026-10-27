@@ -492,7 +492,7 @@ export default function SettingsPage() {
   }, [updateInfo]);
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="settings-page">
       <PageHeader title={t("系统设置")} subtitle={t("管理网关参数与运行信息")} />
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
         <SecurityCard

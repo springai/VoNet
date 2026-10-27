@@ -104,7 +104,7 @@ export function OnlineRateCard({ online, total }: { online: number; total: numbe
   };
 
   return (
-    <div className="ui-panel relative flex flex-col justify-between p-4 transition-all">
+    <div className="ui-panel dashboard-metric-card metric-green relative flex flex-col justify-between p-4 transition-all">
       {/* Header */}
       <div>
         <div className="flex items-center justify-between">

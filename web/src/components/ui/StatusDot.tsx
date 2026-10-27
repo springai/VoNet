@@ -25,7 +25,7 @@ export function StatusDot({
     <span
       aria-hidden="true"
       className={cx(
-        "inline-block flex-shrink-0 rounded-full",
+        "status-dot inline-block flex-shrink-0 rounded-full",
         TONE[tone],
         size === "md" ? "h-1.5 w-1.5" : "h-2 w-2",
         animated && "animate-pulse",

@@ -5,10 +5,12 @@ export function Spinner({ className }: { className?: string }) {
   return (
     <span
       className={cx(
-        "inline-block animate-spin rounded-full border-2 border-current border-t-transparent",
+        "micro-spinner inline-flex items-center justify-center",
         className,
       )}
       aria-hidden="true"
-    />
+    >
+      <span />
+    </span>
   );
 }

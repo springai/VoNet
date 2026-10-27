@@ -443,7 +443,7 @@ export default function AutomaticTasksPage() {
 	  : [{ value: "vowifi", label: "VoWiFi" }, { value: "cellular", label: t("基站直连（自动选网）") }];
 
   return (
-    <div className="mx-auto max-w-7xl">
+    <div className="tasks-page">
       <PageHeader
         title={t("自动任务")}
 		subtitle={advancedTasksAvailable

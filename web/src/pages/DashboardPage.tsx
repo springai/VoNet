@@ -76,7 +76,7 @@ export default function DashboardPage() {
   const openDevice = (id: string) => navigate(`/devices?device=${encodeURIComponent(id)}&tab=overview`);
 
   return (
-    <div>
+    <div className="dashboard-page">
       <PageHeader
         title={t("设备监控")}
         subtitle={t("实时监测模组检测状态与出口连通性")}

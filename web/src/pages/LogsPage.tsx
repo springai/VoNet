@@ -276,7 +276,7 @@ export default function LogsPage() {
   }, [filtered]);
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div className="logs-page">
       <PageHeader
         title={t("设备与业务日志")}
         subtitle={t("记录硬件、驻网、WiFi Calling、短信、通话和用户操作；敏感信息已自动打码")}
@@ -365,7 +365,7 @@ export default function LogsPage() {
       <div className="ui-card overflow-hidden">
         <div
           ref={logContainerRef}
-          className="h-[60vh] min-h-[280px] overflow-auto font-mono text-sm bg-gray-900 dark:bg-black text-gray-100 p-4"
+          className="log-console h-[60vh] min-h-[280px] overflow-auto font-mono text-sm bg-gray-900 dark:bg-black text-gray-100 p-4"
         >
           {filtered.length === 0 ? (
             <div className="text-gray-500 text-center py-8">

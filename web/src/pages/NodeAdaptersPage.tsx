@@ -1176,7 +1176,7 @@ export default function NodeAdaptersPage() {
 
   if (!env?.dbReady && !envLoading) {
     return (
-      <div className="space-y-4">
+      <div className="node-page space-y-4">
         <PageHeader title={t("节点转换")} subtitle={t("将其他协议节点转换为本地 SOCKS5 节点")} />
         {envCard()}
         {singboxCard()}
@@ -1185,7 +1185,7 @@ export default function NodeAdaptersPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="node-page space-y-4">
       <PageHeader title={t("节点转换")} subtitle={t("将其他协议节点转换为本地 SOCKS5 节点")} actions={
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-400">{t("IP")}: {globalCfg.listenIp}{detectedIps.length > 1 ? ` (${detectedIps.length} ${t("个可用")})` : ""}</span>

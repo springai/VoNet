@@ -6,9 +6,9 @@ import { Spinner } from "./Spinner";
 // (Replaces the old pulsing gray rows, which read as a distracting breathing shadow.)
 export function ListSkeleton({ className }: { rows?: number; className?: string }) {
   return (
-    <div className={cx("ui-surface rounded-2xl p-6", className)}>
+    <div className={cx("ui-loading-panel ui-surface rounded-2xl p-6", className)}>
       <div className="flex items-center justify-center gap-3 py-12 text-gray-400 dark:text-gray-500">
-        <Spinner className="h-5 w-5 text-[#0ea5e9]" />
+        <Spinner className="h-7 w-7 text-[#0ea5e9]" />
         <span className="text-sm">{tl("加载中...")}</span>
       </div>
     </div>

@@ -78,7 +78,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       type={type}
       disabled={isDisabled}
       className={cx(
-        "inline-flex select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border font-medium outline-none transition-all duration-150",
+        "ui-button inline-flex select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border font-medium outline-none transition-all duration-200",
         "focus-visible:ring-2 focus-visible:ring-[#0ea5e9]/50 focus-visible:ring-offset-1 dark:focus-visible:ring-offset-gray-950",
         "active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60",
         SIZE[size],

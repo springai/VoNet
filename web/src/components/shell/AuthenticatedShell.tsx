@@ -154,6 +154,15 @@ export function AuthenticatedShell({
     else setCollapsed((value) => !value);
   }
 
+  const currentNavItem = NAV_GROUPS
+    .flatMap((group) => group.items)
+    .find((item) => item.to === location.pathname || (item.to !== "/" && location.pathname.startsWith(`${item.to}/`)));
+  const currentLabel = currentNavItem
+    ? t(currentNavItem.label)
+    : location.pathname.startsWith("/extensions")
+      ? t("扩展")
+      : t("控制台");
+
   function menuList(collapse: boolean) {
     const sidebarPlugins = plugins
       .filter((plugin) => plugin.enabled)
@@ -224,7 +233,7 @@ export function AuthenticatedShell({
 
   function userCard() {
     return (
-      <div className="ui-panel-muted flex items-center gap-3 p-3">
+      <div className="reborn-user-card">
         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-300">
           <SettingsRegular className="h-[18px] w-[18px]" />
         </div>
@@ -249,7 +258,7 @@ export function AuthenticatedShell({
       {!isMobile && (
         <aside
           className={cx(
-            "ui-glass sidebar-shell relative h-full transition-[width] duration-200",
+            "reborn-sidebar relative h-full transition-[width] duration-200",
             collapsed ? "w-[64px]" : "w-[260px]",
           )}
         >
@@ -268,7 +277,7 @@ export function AuthenticatedShell({
       )}
 
       <Drawer open={isMobile && mobileOpen} onClose={() => setMobileOpen(false)} className="mobile-drawer">
-        <div className="sidebar-shell relative h-full bg-white/95 backdrop-blur-md dark:bg-[#141418]/95">
+        <div className="reborn-sidebar reborn-mobile-sidebar relative h-full">
           <div className="flex h-20 items-center gap-3 px-4">
             <BrandLogo className="sidebar-brand-logo" />
             <div className="min-w-0">
@@ -282,13 +291,13 @@ export function AuthenticatedShell({
       </Drawer>
 
       <div className="flex h-full min-w-0 flex-1 flex-col">
-        <header className="ui-glass sticky top-0 z-10 flex h-14 items-center justify-between border-b border-gray-100 px-4 dark:border-white/5 sm:px-5">
-          <div className="flex items-center gap-2">
+        <header className="reborn-topbar">
+          <div className="reborn-topbar-left">
             <button
               type="button"
               onClick={toggle}
               aria-label={collapsed ? t("展开侧栏") : t("收起侧栏")}
-              className="rounded-lg px-2 py-1.5 text-gray-500 transition-colors hover:bg-black/5 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
+              className="reborn-icon-button"
             >
               {!isMobile && !collapsed ? (
                 <PanelLeftContractRegular className="h-5 w-5" />
@@ -296,15 +305,19 @@ export function AuthenticatedShell({
                 <PanelLeftExpandRegular className="h-5 w-5" />
               )}
             </button>
+            <div className="reborn-topbar-context">
+              <span>WORKSPACE</span>
+              <strong>{currentLabel}</strong>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="reborn-topbar-actions">
             <VersionBadge />
             <LanguageSwitch />
             <SwitchDark isDark={isDark} onToggle={onToggleTheme} />
           </div>
         </header>
-        <main className="flex-1 overflow-auto bg-gray-50/50 p-4 dark:bg-transparent sm:p-6">
-          <div className="main-inner mx-auto w-full">
+        <main className="reborn-main">
+          <div className="reborn-content">
             <ErrorBoundary title={t("页面渲染失败")}>
               <Outlet />
             </ErrorBoundary>

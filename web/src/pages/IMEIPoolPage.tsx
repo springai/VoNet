@@ -65,7 +65,7 @@ export default function IMEIPoolPage() {
   };
 
   return (
-    <div>
+    <div className="imei-page">
       <PageHeader
         title={t("IMEI 池")}
         subtitle={t("管理读卡器可用的 IMEI")}

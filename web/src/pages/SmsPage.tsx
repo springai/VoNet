@@ -619,7 +619,7 @@ export default function SmsPage() {
   useEffect(() => () => clearLongPress(), [clearLongPress]);
 
   return (
-    <div ref={pageRef} className="sms-page flex h-[calc(100vh-140px)] flex-col">
+    <div ref={pageRef} className="sms-page workspace-page flex h-[calc(100vh-168px)] flex-col">
       <PageHeader
         title={t("短信功能检测")}
         subtitle={t("通过收发测试验证模组 SMS 收发功能是否正常")}

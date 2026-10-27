@@ -22,7 +22,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       <input
         ref={ref}
         className={cx(
-          "w-full rounded-lg border border-[#dcdfe6] bg-white px-3 text-sm text-gray-900 outline-none transition-all",
+          "ui-input w-full rounded-lg border border-[#dcdfe6] bg-white px-3 text-sm text-gray-900 outline-none transition-all",
           "placeholder:text-gray-400 hover:border-[#c0c4cc] focus:border-[#0ea5e9] focus:ring-2 focus:ring-[#0ea5e9]/25",
           "dark:border-white/15 dark:bg-black/20 dark:text-gray-100 dark:placeholder:text-gray-500 dark:hover:border-white/25 dark:focus:border-[#0ea5e9]",
           inputSize === "large" ? "h-10" : "h-8",
@@ -45,7 +45,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
     <textarea
       ref={ref}
       className={cx(
-        "w-full rounded-lg border border-[#dcdfe6] bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-all",
+        "ui-input w-full rounded-lg border border-[#dcdfe6] bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-all",
         "placeholder:text-gray-400 hover:border-[#c0c4cc] focus:border-[#0ea5e9] focus:ring-2 focus:ring-[#0ea5e9]/25",
         "dark:border-white/15 dark:bg-black/20 dark:text-gray-100 dark:placeholder:text-gray-500 dark:hover:border-white/25 dark:focus:border-[#0ea5e9]",
         className,

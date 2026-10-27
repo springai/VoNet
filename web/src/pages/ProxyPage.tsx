@@ -236,8 +236,8 @@ export default function ProxyPage() {
   }, [countryRules, loadUpstream, t]);
 
   return (
-    <div className="proxy-management-page mx-auto w-full max-w-[1600px]">
-      <div className="mx-auto max-w-7xl">
+    <div className="proxy-management-page">
+      <div className="proxy-section">
       <PageHeader
         title={t("代理管理")}
         subtitle={t("管理上游代理、MCC 国家规则和 SIM / Profile 代理顺序")}
@@ -263,7 +263,7 @@ export default function ProxyPage() {
       </section>
       </div>
       <ProxyBindingSection proxies={proxies} devices={devices} onChanged={() => void loadUpstream(false)} />
-      <div className="mx-auto max-w-7xl">
+      <div className="proxy-section">
       {plugins.filter((plugin) => plugin.enabled).flatMap((plugin) =>
         plugin.contributions.filter((contribution) => contribution.location === "proxy").map((contribution) => (
           <section key={`${plugin.id}:${contribution.id}`} className="ui-card mt-6 overflow-hidden p-0">

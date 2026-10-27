@@ -21,7 +21,7 @@ export function Tabs({
 }) {
   return (
     <div className={cx("relative", className)}>
-      <div className="relative flex items-center gap-1 overflow-x-auto border-b border-gray-200/70 dark:border-white/10">
+      <div className="ui-tabs relative flex items-center gap-1 overflow-x-auto border-b border-gray-200/70 dark:border-white/10">
         {tabs.map((tab) => {
           const active = tab.key === value;
           return (
@@ -31,7 +31,7 @@ export function Tabs({
               disabled={tab.disabled}
               onClick={() => onChange(tab.key)}
               className={cx(
-                "relative whitespace-nowrap px-4 py-2.5 text-sm font-medium transition-colors outline-none",
+                "ui-tab-button relative whitespace-nowrap px-4 py-2.5 text-sm font-medium transition-colors outline-none",
                 "disabled:cursor-not-allowed disabled:opacity-50",
                 active
                   ? "text-[#0ea5e9] dark:text-[#7dd3fc]"

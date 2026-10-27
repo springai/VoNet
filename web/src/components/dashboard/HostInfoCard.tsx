@@ -17,7 +17,7 @@ export function HostInfoCard({ info }: { info?: DashboardHostInfo | null }) {
     { label: t("硬盘型号"), value: info?.diskModel || "" },
   ];
   return (
-    <div className="ui-panel p-4">
+    <div className="ui-panel dashboard-metric-card metric-cyan p-4">
       <div className="mb-3 flex items-center gap-2">
         <ServerRegular className="h-4 w-4 text-sky-500" />
         <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100">{t("宿主机信息")}</h3>

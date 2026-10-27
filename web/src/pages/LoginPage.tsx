@@ -1,13 +1,15 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowRightRegular, LockClosedRegular, PersonRegular } from "@fluentui/react-icons";
+import {
+  ArrowRightRegular,
+  LockClosedRegular,
+  PersonRegular,
+  ShieldCheckmarkRegular,
+} from "@fluentui/react-icons";
 import { useAuth } from "../store/auth";
 import { useI18n } from "../lib/i18n";
 import { message } from "../components/ui/message";
 import { BrandLogo } from "../components/shell/BrandLogo";
-
-const INPUT_CLASS =
-  "w-full rounded-lg border border-gray-200 bg-white/70 py-3 pl-10 pr-4 font-mono text-sm text-gray-900 placeholder-gray-400 outline-none transition-all focus:border-indigo-500/40 focus:ring-2 focus:ring-indigo-500/25 dark:border-white/10 dark:bg-black/20 dark:text-gray-100 dark:placeholder-gray-500";
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -25,7 +27,7 @@ export default function LoginPage() {
       return;
     }
     setWorking(true);
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await new Promise((resolve) => setTimeout(resolve, 420));
     const ok = await login(username, password);
     setWorking(false);
     if (ok) {
@@ -38,25 +40,59 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative flex h-full w-full items-center justify-center overflow-hidden">
-      <div className="animate-pulse-slow absolute -left-32 -top-32 h-[520px] w-[520px] rounded-full bg-indigo-500/15 blur-[120px] dark:bg-indigo-500/20" />
-      <div className="animate-pulse-slow absolute -bottom-32 -right-32 h-[520px] w-[520px] rounded-full bg-indigo-500/12 blur-[120px] [animation-delay:2s] dark:bg-indigo-500/16" />
-      <div className="relative w-full max-w-md p-1">
-        <div className="group relative overflow-hidden rounded-2xl border border-gray-100 bg-white/70 p-8 shadow-2xl backdrop-blur-xl dark:border-white/10 dark:bg-[#141418]/70">
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-indigo-500/8 to-transparent opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
-          <div className="relative z-10 mb-10 text-center">
-            <BrandLogo className="mx-auto mb-5 h-32 w-32 object-contain transition-transform duration-300 group-hover:scale-105" />
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">VoNet</h1>
-            <p className="mt-2 text-sm font-medium text-gray-500 dark:text-gray-400">MODEM · PC/SC · PANEL</p>
+    <div className="reborn-login">
+      <section className="reborn-login-brand">
+        <div className="reborn-login-grid" aria-hidden="true" />
+        <div className="reborn-login-brand-top">
+          <BrandLogo className="reborn-login-logo" />
+          <div>
+            <strong>VoNet</strong>
+            <span>MODEM · PC/SC · PANEL</span>
           </div>
-          <form onSubmit={submit} className="relative z-10 space-y-6">
-            <div className="space-y-2">
-              <div className="relative">
-                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400 dark:text-gray-500">
-                  <PersonRegular className="h-5 w-5" />
-                </div>
+        </div>
+
+        <div className="reborn-login-brand-copy">
+          <span className="reborn-login-kicker">CELLULAR CONTROL PLANE</span>
+          <h1>VoNet</h1>
+          <p>MODEM · PC/SC · PANEL</p>
+        </div>
+
+        <div className="reborn-login-console" aria-hidden="true">
+          <div className="reborn-console-head">
+            <span>LIVE LINK</span>
+            <strong>READY</strong>
+          </div>
+          <div className="reborn-console-chart">
+            {[34, 56, 42, 78, 62, 88, 54, 72, 46, 82, 64, 92].map((height, index) => (
+              <span key={index} style={{ height: `${height}%`, animationDelay: `${index * 70}ms` }} />
+            ))}
+          </div>
+          <div className="reborn-console-foot">
+            <span><i /> SECURE SESSION</span>
+            <span>12 MS</span>
+          </div>
+        </div>
+
+        <div className="reborn-login-brand-foot">
+          <span><ShieldCheckmarkRegular /> LOCAL CONTROL</span>
+          <span>VO.NET / 2026</span>
+        </div>
+      </section>
+
+      <section className="reborn-login-auth">
+        <div className="reborn-login-auth-inner">
+          <div className="reborn-login-auth-heading">
+            <span>AUTHORIZED ACCESS</span>
+            <h2>{t("登录")}</h2>
+            <p>{t("欢迎回来")}</p>
+          </div>
+
+          <form className="reborn-login-form" onSubmit={submit}>
+            <label>
+              <span>{t("用户名")}</span>
+              <div className="reborn-login-field">
+                <PersonRegular />
                 <input
-                  className={INPUT_CLASS}
                   placeholder={t("用户名")}
                   type="text"
                   autoComplete="username"
@@ -64,14 +100,12 @@ export default function LoginPage() {
                   onChange={(event) => setUsername(event.target.value)}
                 />
               </div>
-            </div>
-            <div className="space-y-2">
-              <div className="relative">
-                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400 dark:text-gray-500">
-                  <LockClosedRegular className="h-5 w-5" />
-                </div>
+            </label>
+            <label>
+              <span>{t("密码")}</span>
+              <div className="reborn-login-field">
+                <LockClosedRegular />
                 <input
-                  className={INPUT_CLASS}
                   placeholder={t("密码")}
                   type="password"
                   autoComplete="current-password"
@@ -79,25 +113,20 @@ export default function LoginPage() {
                   onChange={(event) => setPassword(event.target.value)}
                 />
               </div>
-            </div>
-            <button
-              type="submit"
-              disabled={working}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#0ea5e9] px-4 py-3 font-bold text-white shadow-sm transition-all duration-200 hover:bg-[#0284c7] active:scale-95 disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              {working ? (
-                <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-              ) : (
-                <span>{t("登录")}</span>
-              )}
-              {!working && <ArrowRightRegular className="h-5 w-5" />}
+            </label>
+
+            <button className="reborn-login-submit" type="submit" disabled={working}>
+              <span>{working ? t("登录中...") : t("进入控制台")}</span>
+              {working ? <i className="reborn-button-loader" /> : <ArrowRightRegular />}
             </button>
           </form>
+
+          <div className="reborn-login-auth-foot">
+            <span>VoNet © 2026</span>
+            <span><i /> SYSTEM ONLINE</span>
+          </div>
         </div>
-        <div className="mt-6 text-center">
-          <p className="text-xs text-gray-500">VoNet © 2026</p>
-        </div>
-      </div>
+      </section>
     </div>
   );
 }

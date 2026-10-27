@@ -331,7 +331,7 @@ export default function CallPage() {
   if (error) return <ErrorState message={error} />;
 
   return (
-    <div className="flex h-[calc(100vh-140px)] flex-col">
+    <div className="call-page workspace-page flex h-[calc(100vh-168px)] flex-col">
       <PageHeader title={t("设备通话")} />
       <div className="relative flex-1 overflow-hidden ui-card">
         <div className="call-main-layout h-full">

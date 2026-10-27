@@ -37,7 +37,7 @@ export function ErrorState({
   if (lastSuccessAt) meta.push(`${tl("最后成功：")}${new Date(lastSuccessAt).toLocaleString()}`);
 
   return (
-    <div className={cx("rounded-2xl border border-red-100 bg-red-50/70 p-6 dark:border-red-500/20 dark:bg-red-500/10", className)}>
+    <div className={cx("ui-error-state rounded-2xl border border-red-100 bg-red-50/70 p-6 dark:border-red-500/20 dark:bg-red-500/10", className)}>
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="text-sm font-extrabold text-red-700 dark:text-red-300">{title ?? t("加载失败")}</div>

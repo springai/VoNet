@@ -44,7 +44,7 @@ export function Modal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[3000] flex items-center justify-center overflow-y-auto bg-black/50 p-4 backdrop-blur-sm animate-[fade-slide-in_0.2s_ease]"
+      className="ui-modal-overlay fixed inset-0 z-[3000] flex items-center justify-center overflow-y-auto bg-black/50 p-4 backdrop-blur-sm"
       onMouseDown={(event) => {
         if (closeOnOverlay && event.target === event.currentTarget) onClose();
       }}
@@ -53,7 +53,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         className={cx(
-          "glass-modal relative flex max-h-[calc(100dvh-2rem)] w-full flex-col rounded-2xl shadow-2xl animate-[fade-slide-in_0.25s_cubic-bezier(0.4,0,0.2,1)]",
+          "ui-modal glass-modal relative flex max-h-[calc(100dvh-2rem)] w-full flex-col rounded-2xl shadow-2xl",
           width,
           className,
         )}

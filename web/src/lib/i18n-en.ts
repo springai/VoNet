@@ -13,6 +13,8 @@ export const EN_DICT: Record<string, string> = {
   "设备通话": "Device Calls",
   "代理中心": "Proxy Center",
   "节点转换": "Node Conversion",
+  "登录中...": "Signing in...",
+  "进入控制台": "Enter Console",
   "短信解析失败": "SMS decoding failed",
   "短信正文为空": "SMS body is empty",
   "E911地址设置": "Set E911 address",

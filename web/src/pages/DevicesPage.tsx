@@ -687,7 +687,7 @@ export default function DevicesPage() {
   ) : null;
 
   return (
-    <div className="devices-page mx-auto w-full max-w-[1500px]">
+    <div className="devices-page">
       <PageHeader
         title={t("设备管理")}
         subtitle={t("接管 EC20 模组并执行射频、网络、SIM 与终端功能检测")}

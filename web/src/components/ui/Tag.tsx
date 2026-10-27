@@ -16,7 +16,7 @@ export function Tag({ type = "info", children, className }: { type?: TagType; ch
   return (
     <span
       className={cx(
-        "inline-flex items-center gap-1 whitespace-nowrap rounded-md border px-2 py-0.5 text-xs font-medium",
+        "ui-tag inline-flex items-center gap-1 whitespace-nowrap rounded-md border px-2 py-0.5 text-xs font-medium",
         TONE[type],
         className,
       )}

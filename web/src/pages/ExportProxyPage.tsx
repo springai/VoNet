@@ -147,7 +147,7 @@ export default function ExportProxyPage() {
   };
 
   return (
-    <div className="mx-auto max-w-7xl">
+    <div className="export-proxy-page">
       <PageHeader
         title={t("导出代理")}
         subtitle={t("将模块漫游数据导出为主机 HTTP 或 SOCKS5 代理")}
