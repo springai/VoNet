@@ -42,6 +42,27 @@ export interface CallRecord {
   createdAt: number;
 }
 
+function isIncomingDirection(direction: number | string | undefined): boolean {
+  return direction === 1 || (typeof direction === "string" && direction.toLowerCase() === "incoming");
+}
+
+export function findIncomingCall(calls: CallInfo[]): CallInfo | undefined {
+  return calls.find((call) => {
+    if (call.endedAt) return false;
+    const direction = call.direction;
+    const state = typeof call.state === "string" ? call.state.toLowerCase() : call.state;
+    if (state === "incoming") return true;
+    if (state === "ringing" || state === "waiting") {
+      return isIncomingDirection(direction) || direction == null;
+    }
+    if (typeof state === "number") {
+      if (state === 4 || state === 5) return true;
+      return isIncomingDirection(direction) && (state === 0 || state === 3);
+    }
+    return false;
+  });
+}
+
 export interface CallHistoryResponse {
   records: CallRecord[];
   total: number;

@@ -26,6 +26,7 @@ import { VersionBadge } from "./VersionBadge";
 import { listPlugins, type InstalledPlugin } from "../../extensions";
 import { api } from "../../api";
 import type { SystemInfo } from "../../types";
+import { IncomingCallMonitor } from "../call/IncomingCallMonitor";
 
 type SidebarNavItem = {
   to: string;
@@ -255,6 +256,7 @@ export function AuthenticatedShell({
 
   return (
     <div className="flex h-full">
+      <IncomingCallMonitor />
       {!isMobile && (
         <aside
           className={cx(

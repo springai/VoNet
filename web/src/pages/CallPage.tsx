@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { PageHeader, Spinner, ErrorState, message } from "../components/ui";
 import { useI18n } from "../lib/i18n";
 import { usePolling } from "../lib/usePolling";
 import { api } from "../api";
 import { cx } from "../lib/utils";
 import { CallPanel } from "../components/call/CallPanel";
-import { dialCall, hangupCall, answerCall, rejectCall, sendDTMF, listCalls, connectCallMedia, type CallInfo, type CallsResponse, getCallHistory, deleteCallRecord, type CallRecord } from "../components/call/callApi";
+import { dialCall, hangupCall, answerCall, rejectCall, sendDTMF, listCalls, connectCallMedia, findIncomingCall, type CallInfo, type CallsResponse, getCallHistory, deleteCallRecord, type CallRecord } from "../components/call/callApi";
 import type { DeviceListItem, DevicesResponse } from "../types";
 
 const MOBILE_BREAKPOINT = 980;
@@ -19,16 +20,6 @@ function fmtDur(sec: number) {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return m + ":" + String(s).padStart(2, "0");
-}
-
-function isIncomingCall(calls: CallInfo[]): CallInfo | undefined {
-  return calls.find((c) => {
-    if (c.endedAt) return false;
-    const s = typeof c.state === "string" ? c.state.toLowerCase() : "";
-    if (s === "ringing" || s === "waiting") return true;
-    if (typeof c.state === "number" && (c.state === 4 || c.state === 5)) return true;
-    return false;
-  });
 }
 
 function CallHistoryItem({ record, t, onSelect, onDelete }: { record: CallRecord; t: (s: string) => string; onSelect: (n: string) => void; onDelete: (id: number) => void }) {
@@ -79,6 +70,8 @@ function CallHistoryItem({ record, t, onSelect, onDelete }: { record: CallRecord
 
 export default function CallPage() {
   const { t } = useI18n();
+  const [searchParams] = useSearchParams();
+  const requestedDevice = searchParams.get("device") || "";
   const [devices, setDevices] = useState<DeviceListItem[]>([]);
   const [selectedDevice, setSelectedDevice] = useState("");
   const [loading, setLoading] = useState(true);
@@ -109,14 +102,20 @@ export default function CallPage() {
       const res = await api<DevicesResponse>("/devices");
       const running = (res.devices || []).filter((d) => d.running);
       setDevices(running);
-      if (!selectedDevice && running.length > 0) setSelectedDevice(running[0].id);
+      if (running.length > 0) {
+        const preferred = running.find((device) => device.id === requestedDevice)?.id;
+        setSelectedDevice((current) => {
+          if (current && running.some((device) => device.id === current)) return current;
+          return preferred || running[0].id;
+        });
+      }
       setError(null);
     } catch (e: any) {
       setError(e?.message || t("加载失败"));
     } finally {
       setLoading(false);
     }
-  }, [selectedDevice, t]);
+  }, [requestedDevice, selectedDevice, t]);
 
   usePolling(loadDevices, 10000);
 
@@ -138,7 +137,7 @@ export default function CallPage() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // Poll calls for mobile in-call detection
+  // Poll calls for both desktop popups and the mobile in-call view.
   const stopMobileAudio = useCallback(() => {
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
     if (processorRef.current) { processorRef.current.disconnect(); processorRef.current = null; }
@@ -212,13 +211,13 @@ export default function CallPage() {
     }
   }, [selectedDevice, stopMobileAudio]);
   const loadCalls = useCallback(async () => {
-    if (!selectedDevice || !isMobile) return;
+    if (!selectedDevice) return;
     try {
       const res = await listCalls(selectedDevice);
       const callList = res.calls || [];
       setCalls(callList);
       setTransport(res.transport || "");
-      const incoming = isIncomingCall(callList);
+      const incoming = findIncomingCall(callList);
       const active = callList.find((c) => !c.endedAt);
       if (active) {
         const s = typeof active.state === "string" ? active.state.toLowerCase() : "";
@@ -237,7 +236,7 @@ export default function CallPage() {
           setActiveCallNumber(active.number || dialNumber);
           setMobileView("incall");
         }
-      } else if (callPhase !== "idle" && callPhase !== "incoming") {
+      } else if (callPhase !== "idle") {
         setCallPhase("idle");
         setMobileView("main");
         setCallDuration(0);
@@ -245,7 +244,7 @@ export default function CallPage() {
         setMuted(false);
       }
     } catch {}
-  }, [selectedDevice, isMobile, callPhase, dialNumber, startMobileAudio, stopMobileAudio]);
+  }, [selectedDevice, callPhase, dialNumber, startMobileAudio, stopMobileAudio]);
 
   usePolling(loadCalls, 2000);
 
@@ -301,18 +300,18 @@ export default function CallPage() {
 
   const handleMobileAnswer = useCallback(async () => {
     if (!selectedDevice) return;
-    const incoming = isIncomingCall(calls);
+    const incoming = findIncomingCall(calls);
     try {
       await answerCall(selectedDevice, incoming?.id);
       if (incoming?.id) startMobileAudio(incoming.id);
       setCallPhase("connected");
       setCallDuration(0);
     } catch {}
-  }, [selectedDevice, calls]);
+  }, [selectedDevice, calls, startMobileAudio]);
 
   const handleMobileReject = useCallback(async () => {
     if (!selectedDevice) return;
-    const incoming = isIncomingCall(calls);
+    const incoming = findIncomingCall(calls);
     try { await rejectCall(selectedDevice, incoming?.id); } catch {}
     setCallPhase("idle");
     setMobileView("main");

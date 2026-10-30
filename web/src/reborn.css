@@ -580,6 +580,52 @@ body {
   border-color: var(--rb-border);
   background: var(--rb-surface);
 }
+
+.incoming-call-modal {
+  overflow: hidden;
+  border-top: 3px solid var(--rb-green);
+}
+.incoming-call-modal-body {
+  padding-top: 8px;
+}
+.incoming-call-identity {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--rb-border);
+  border-radius: 8px;
+  background: var(--rb-surface-soft);
+}
+.incoming-call-icon {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--rb-green) 24%, var(--rb-border));
+  border-radius: 50%;
+  color: var(--rb-green);
+  background: color-mix(in srgb, var(--rb-green) 10%, transparent);
+  font-size: 24px;
+}
+.incoming-call-number {
+  color: var(--rb-ink);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 20px;
+  font-weight: 700;
+}
+.incoming-call-label {
+  margin-top: 5px;
+  color: var(--rb-muted);
+  font-size: 12px;
+}
+.incoming-call-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 22px;
+}
 main table { border-radius: 7px; }
 main thead th {
   color: var(--rb-muted);
