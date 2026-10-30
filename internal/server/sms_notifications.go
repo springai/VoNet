@@ -348,7 +348,8 @@ func sendSMSNotification(ctx context.Context, channel string, config map[string]
 }
 
 func sendBarkSMSNotification(ctx context.Context, config map[string]any, message smsNotification) error {
-	if !notificationMatchesDevice(configStrings(config, "device_ids"), message.DeviceID) {
+	destinations := notificationDestinations(config, message.DeviceID)
+	if len(destinations) == 0 {
 		return nil
 	}
 	client, err := restrictedHTTPClient(ctx, 6*time.Second, "")
@@ -362,22 +363,8 @@ func sendBarkSMSNotification(ctx context.Context, config map[string]any, message
 		}
 	}
 	encoded, _ := json.Marshal(payload)
-	for _, destination := range configStrings(config, "urls") {
-		parsed, err := validateOutboundURL(ctx, destination, false)
-		if err != nil {
-			return err
-		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), bytes.NewReader(encoded))
-		if err != nil {
-			return fmt.Errorf("create Bark notification request: %w", err)
-		}
-		request.Header.Set("Content-Type", "application/json; charset=utf-8")
-		request.Header.Set("User-Agent", "vonet-sms-notification/1")
-		if err := performNotificationRequest(client, request, false); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err = sendBarkPayload(ctx, client, destinations, encoded, "vonet-sms-notification/1", false)
+	return err
 }
 
 func sendWebhookSMSNotification(ctx context.Context, config map[string]any, message smsNotification) error {

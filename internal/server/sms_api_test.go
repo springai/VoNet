@@ -784,7 +784,6 @@ func TestSMSSendOutcome(t *testing.T) {
 }
 
 func TestBlockedSMSDestination(t *testing.T) {
-	// Local: China SMS blocking is disabled (blockedSMSDestination always returns false)
 	tests := []struct {
 		name  string
 		phone string
@@ -804,9 +803,9 @@ func TestBlockedSMSDestination(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			blocked, _ := blockedSMSDestination(test.phone)
+			blocked, _ := device.BlockedSMSDestination(test.phone)
 			if blocked != test.block {
-				t.Fatalf("blockedSMSDestination(%q) blocked = %v, want %v", test.phone, blocked, test.block)
+				t.Fatalf("device.BlockedSMSDestination(%q) blocked = %v, want %v", test.phone, blocked, test.block)
 			}
 		})
 	}

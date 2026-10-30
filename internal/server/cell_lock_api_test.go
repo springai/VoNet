@@ -23,7 +23,7 @@ func (f *cellLockTestController) Cells(context.Context, string) (device.CellList
 		return device.CellList{}, f.err
 	}
 	return device.CellList{
-		Items:           []device.CellInfo{{CellLockTarget: device.CellLockTarget{1650, 0}, Source: "serving"}},
+		Items:           []device.CellInfo{{CellLockTarget: device.CellLockTarget{EARFCN: 1650, PCI: 0}, Source: "serving"}},
 		NeighborsStatus: "unavailable",
 	}, nil
 }
@@ -46,7 +46,7 @@ func TestCellLockAPI(t *testing.T) {
 		target                   *device.CellLockTarget
 	}{
 		{name: "cells without lock support", method: "GET", path: "/cells", code: 501, failure: device.ErrUnsupportedCapability},
-		{name: "status", method: "GET", path: "/cell-lock", code: 200, target: &device.CellLockTarget{1650, 0}},
+		{name: "status", method: "GET", path: "/cell-lock", code: 200, target: &device.CellLockTarget{EARFCN: 1650, PCI: 0}},
 		{name: "lock zero values", method: "PUT", path: "/cell-lock", body: `{"earfcn":0,"pci":0}`, code: 200, writes: 1, target: &device.CellLockTarget{}},
 		{name: "clear", method: "DELETE", path: "/cell-lock", code: 200, writes: 1},
 		{name: "missing PCI", method: "PUT", path: "/cell-lock", body: `{"earfcn":1650}`, code: 400},
@@ -56,7 +56,7 @@ func TestCellLockAPI(t *testing.T) {
 		{name: "write failed", method: "DELETE", path: "/cell-lock", code: 502, writes: 1, failure: errors.New("readback mismatch")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			controller := &cellLockTestController{target: &device.CellLockTarget{1650, 0}, err: test.failure}
+			controller := &cellLockTestController{target: &device.CellLockTarget{EARFCN: 1650, PCI: 0}, err: test.failure}
 			s := &Server{devices: controller, logger: regionTestLogger(), maxRequestBodyBytes: 4096}
 			response := httptest.NewRecorder()
 			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))

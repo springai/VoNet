@@ -135,7 +135,8 @@ func sendTelegramTextNotification(ctx context.Context, config map[string]any, de
 }
 
 func sendBarkTextNotification(ctx context.Context, config map[string]any, deviceID, title, text string) error {
-	if !notificationMatchesDevice(configStrings(config, "device_ids"), deviceID) {
+	destinations := notificationDestinations(config, deviceID)
+	if len(destinations) == 0 {
 		return nil
 	}
 	client, err := restrictedHTTPClient(ctx, 8*time.Second, "")
@@ -149,22 +150,8 @@ func sendBarkTextNotification(ctx context.Context, config map[string]any, device
 		}
 	}
 	encoded, _ := json.Marshal(payload)
-	for _, destination := range configStrings(config, "urls") {
-		parsed, err := validateOutboundURL(ctx, destination, false)
-		if err != nil {
-			return err
-		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, parsed.String(), bytes.NewReader(encoded))
-		if err != nil {
-			return err
-		}
-		request.Header.Set("Content-Type", "application/json; charset=utf-8")
-		request.Header.Set("User-Agent", "vonet-automatic-task/1")
-		if err := performNotificationRequest(client, request, false); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err = sendBarkPayload(ctx, client, destinations, encoded, "vonet-automatic-task/1", false)
+	return err
 }
 
 func sendPushplusTextNotification(ctx context.Context, config map[string]any, deviceID, title, text string) error {

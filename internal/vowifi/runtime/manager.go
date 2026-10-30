@@ -58,7 +58,8 @@ type Manager struct {
 
 type entry struct {
 	orchestrator       *vowifi.Orchestrator
-	maintenance        bool
+	maintenanceDepth   int
+	operationEpoch     uint64
 	busy               bool
 	reconnectPending   bool
 	disablePending     bool
@@ -74,34 +75,61 @@ type entry struct {
 	provisioningCancel context.CancelFunc
 }
 
-// BeginMaintenance temporarily suppresses background enable requests while a
+// BeginMaintenance discards the old desired policy and setup requests while a
 // caller performs an exclusive SIM operation such as switching eSIM profiles.
-// Disable requests remain allowed so the current runtime can release QMI/UIM.
+// In-flight setup is canceled; Disable remains allowed to release QMI/UIM. The
+// caller must wait for that disable to finish before accessing the SIM.
 func (manager *Manager) BeginMaintenance(deviceID string) error {
 	if err := manager.Ensure(manager.ctx, deviceID); err != nil {
 		return err
 	}
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	if manager.closed {
+		manager.mu.Unlock()
 		return ErrClosed
 	}
 	item := manager.entries[deviceID]
 	if item == nil {
+		manager.mu.Unlock()
 		return ErrNotRegistered
 	}
-	item.maintenance = true
+	item.maintenanceDepth++
+	// Workers and timers can already be queued without having started. Invalidate
+	// them even if this maintenance ends before their goroutines acquire mu.
+	item.operationEpoch++
+	item.desiredEnabled = false
+	item.reconnectPending = false
+	item.autoRetryPending = false
+	item.retryFailures = 0
+	if item.busy {
+		item.disablePending = true
+	}
+	cancel := item.operationCancel
+	manager.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	return nil
 }
 
-// EndMaintenance re-enables ordinary desired-state reconciliation. The caller
-// then applies the newly active profile's persisted policy.
+// EndMaintenance releases one matching maintenance scope. It never restores the
+// old desired state: the caller explicitly applies the active profile's policy
+// after the last scope has ended.
 func (manager *Manager) EndMaintenance(deviceID string) {
 	manager.mu.Lock()
-	if item := manager.entries[deviceID]; item != nil {
-		item.maintenance = false
+	if item := manager.entries[deviceID]; item != nil && item.maintenanceDepth > 0 {
+		item.maintenanceDepth--
 	}
 	manager.mu.Unlock()
+}
+
+// InMaintenance reports whether an exclusive SIM operation owns this runtime.
+// It does not create a runtime or alter its desired policy.
+func (manager *Manager) InMaintenance(deviceID string) bool {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	item := manager.entries[deviceID]
+	return item != nil && item.maintenanceDepth > 0
 }
 
 func New(options Options) *Manager {
@@ -323,7 +351,15 @@ func (manager *Manager) RequestEnabled(deviceID string, enabled bool) (vowifi.St
 	}
 	manager.mu.Lock()
 	item := manager.entries[deviceID]
-	if item.maintenance && enabled {
+	if manager.closed {
+		manager.mu.Unlock()
+		return vowifi.State{}, ErrClosed
+	}
+	if item == nil {
+		manager.mu.Unlock()
+		return vowifi.State{}, ErrNotRegistered
+	}
+	if item.maintenanceDepth > 0 && enabled {
 		state := item.orchestrator.State()
 		manager.mu.Unlock()
 		return state, nil
@@ -353,8 +389,8 @@ func (manager *Manager) RequestEnabled(deviceID string, enabled bool) (vowifi.St
 		}
 		return state, nil
 	}
-	manager.mu.Unlock()
-	return manager.startOperation(deviceID, false, func(ctx context.Context, orchestrator *vowifi.Orchestrator) error {
+	// Keep the desired-state update and queueing atomic with BeginMaintenance.
+	state, err := manager.startOperationLocked(deviceID, false, func(ctx context.Context, orchestrator *vowifi.Orchestrator) error {
 		if enabled {
 			_, err := orchestrator.Enable(ctx)
 			return err
@@ -362,6 +398,8 @@ func (manager *Manager) RequestEnabled(deviceID string, enabled bool) (vowifi.St
 		_, err := orchestrator.Disable(ctx)
 		return err
 	})
+	manager.mu.Unlock()
+	return state, err
 }
 
 func (manager *Manager) RequestReconnect(deviceID string) (vowifi.State, error) {
@@ -369,14 +407,27 @@ func (manager *Manager) RequestReconnect(deviceID string) (vowifi.State, error) 
 		return vowifi.State{}, err
 	}
 	manager.mu.Lock()
-	if item := manager.entries[deviceID]; item != nil {
-		item.desiredEnabled = true
+	if manager.closed {
+		manager.mu.Unlock()
+		return vowifi.State{}, ErrClosed
 	}
-	manager.mu.Unlock()
-	return manager.startOperation(deviceID, true, func(ctx context.Context, orchestrator *vowifi.Orchestrator) error {
+	item := manager.entries[deviceID]
+	if item == nil {
+		manager.mu.Unlock()
+		return vowifi.State{}, ErrNotRegistered
+	}
+	if item.maintenanceDepth > 0 {
+		state := item.orchestrator.State()
+		manager.mu.Unlock()
+		return state, nil
+	}
+	item.desiredEnabled = true
+	state, err := manager.startOperationLocked(deviceID, true, func(ctx context.Context, orchestrator *vowifi.Orchestrator) error {
 		_, err := orchestrator.Reconnect(ctx)
 		return err
 	})
+	manager.mu.Unlock()
+	return state, err
 }
 
 func (manager *Manager) SendSMS(
@@ -523,18 +574,29 @@ func (manager *Manager) startOperation(
 	operation func(context.Context, *vowifi.Orchestrator) error,
 ) (vowifi.State, error) {
 	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return manager.startOperationLocked(deviceID, coalesceReconnect, operation)
+}
+
+// startOperationLocked requires manager.mu. Callers that change the desired
+// policy must queue the corresponding operation under the same lock.
+func (manager *Manager) startOperationLocked(
+	deviceID string,
+	coalesceReconnect bool,
+	operation func(context.Context, *vowifi.Orchestrator) error,
+) (vowifi.State, error) {
 	if manager.closed {
-		manager.mu.Unlock()
 		return vowifi.State{}, ErrClosed
 	}
 	item := manager.entries[deviceID]
 	if item == nil {
-		manager.mu.Unlock()
 		return vowifi.State{}, ErrNotRegistered
 	}
 	if item.provisioning {
-		manager.mu.Unlock()
 		return item.orchestrator.State(), ErrOperationInProgress
+	}
+	if item.maintenanceDepth > 0 && coalesceReconnect {
+		return item.orchestrator.State(), nil
 	}
 	if item.busy {
 		state := item.orchestrator.State()
@@ -544,18 +606,15 @@ func (manager *Manager) startOperation(
 			// operation instead of rejecting the request or running two modem/
 			// tunnel transactions concurrently.
 			item.reconnectPending = true
-			manager.mu.Unlock()
 			return state, nil
 		}
-		manager.mu.Unlock()
 		return state, ErrOperationInProgress
 	}
 	item.busy = true
 	manager.wg.Add(1)
-	manager.mu.Unlock()
 
 	manager.logger.Debug("VoWiFi lifecycle operation queued", "device_id", deviceID)
-	go manager.runOperations(deviceID, item, operation)
+	go manager.runOperations(deviceID, item, operation, item.operationEpoch)
 	return item.orchestrator.State(), nil
 }
 
@@ -563,6 +622,7 @@ func (manager *Manager) runOperations(
 	deviceID string,
 	item *entry,
 	operation func(context.Context, *vowifi.Orchestrator) error,
+	epoch uint64,
 ) {
 	defer manager.wg.Done()
 	manager.logger.Debug("VoWiFi lifecycle worker started", "device_id", deviceID)
@@ -582,9 +642,16 @@ func (manager *Manager) runOperations(
 	for {
 		ctx, cancel := context.WithTimeout(manager.ctx, manager.operationTimeout)
 		manager.mu.Lock()
-		if item.disablePending {
+		if manager.closed || manager.entries[deviceID] != item {
+			item.busy = false
+			manager.mu.Unlock()
+			cancel()
+			return
+		}
+		if item.disablePending || item.maintenanceDepth > 0 || epoch != item.operationEpoch {
 			item.disablePending = false
 			item.reconnectPending = false
+			epoch = item.operationEpoch
 			operation = func(ctx context.Context, orchestrator *vowifi.Orchestrator) error {
 				_, err := orchestrator.Disable(ctx)
 				return err
@@ -613,15 +680,22 @@ func (manager *Manager) runOperations(
 			manager.mu.Unlock()
 			return
 		}
-		if item.disablePending {
+		if item.disablePending || epoch != item.operationEpoch {
 			item.disablePending = false
 			item.reconnectPending = false
+			epoch = item.operationEpoch
 			manager.mu.Unlock()
 			operation = func(ctx context.Context, orchestrator *vowifi.Orchestrator) error {
 				_, err := orchestrator.Disable(ctx)
 				return err
 			}
 			continue
+		}
+		if item.maintenanceDepth > 0 {
+			item.reconnectPending = false
+			item.busy = false
+			manager.mu.Unlock()
+			return
 		}
 		if item.reconnectPending {
 			item.reconnectPending = false
@@ -699,7 +773,8 @@ func (manager *Manager) scheduleAutoRetry(deviceID string, item *entry) {
 }
 
 func (manager *Manager) scheduleAutoRetryLocked(deviceID string, item *entry) {
-	if manager.closed || item.busy || item.autoRetryPending || !item.desiredEnabled {
+	if manager.closed || manager.entries[deviceID] != item || item.maintenanceDepth > 0 ||
+		item.busy || item.autoRetryPending || !item.desiredEnabled {
 		return
 	}
 	delay := manager.retryInitial
@@ -719,6 +794,7 @@ func (manager *Manager) scheduleAutoRetryLocked(deviceID string, item *entry) {
 	delay += staggerJitter(deviceID, delay)
 	item.retryFailures++
 	item.autoRetryPending = true
+	epoch := item.operationEpoch
 	manager.wg.Add(1)
 
 	manager.logger.Info(
@@ -737,8 +813,15 @@ func (manager *Manager) scheduleAutoRetryLocked(deviceID string, item *entry) {
 		}
 
 		manager.mu.Lock()
+		// A previous profile's timer must not restart setup or clear a newer
+		// profile's pending retry after maintenance has completed.
+		if epoch != item.operationEpoch {
+			manager.mu.Unlock()
+			return
+		}
 		item.autoRetryPending = false
-		if manager.closed || manager.entries[deviceID] != item || !item.desiredEnabled {
+		if manager.closed || manager.entries[deviceID] != item ||
+			item.maintenanceDepth > 0 || !item.desiredEnabled {
 			manager.mu.Unlock()
 			return
 		}
@@ -761,7 +844,7 @@ func (manager *Manager) scheduleAutoRetryLocked(deviceID string, item *entry) {
 		go manager.runOperations(deviceID, item, func(ctx context.Context, orchestrator *vowifi.Orchestrator) error {
 			_, err := orchestrator.Retry(ctx)
 			return err
-		})
+		}, epoch)
 	}()
 }
 

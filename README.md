@@ -279,6 +279,8 @@ VoNet reads an optional JSON configuration file from `VONET_CONFIG`, then applie
 | `VONET_SECURE_COOKIES` | `false` | Marks session cookies as secure when HTTPS is used. |
 | `VONET_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown timeout. |
 | `VONET_MAX_REQUEST_BODY_BYTES` | `1048576` | Maximum API request body size. |
+| `VONET_MCP_ENABLED` | `false` | Serve the MCP endpoint at `/mcp` for AI agents. Set `true` to enable it. |
+| `VONET_PROBE_UNKNOWN_USB` | `false` | Opt in to probing unrecognized USB serial devices with AT commands. Probing changes serial settings and clears input; enable only when those ports are dedicated to modems. Verified modem identities are discovered automatically. JSON key: `probe_unknown_usb`. |
 | `VONET_REPO` | `springai/VoNet` | Trusted GitHub repository used by the self-updater, in `owner/name` form. |
 | `GITHUB_TOKEN` | empty | Optional GitHub token for private repositories or higher API limits. |
 
@@ -291,6 +293,57 @@ database once with `vonet bootstrap-admin`; environment variables and JSON
 configuration cannot set or overwrite the administrator username or password.
 
 Do not store Telegram tokens, SMTP passwords, webhook secrets, SIM credentials, or other private data in the repository. Configure them through the application settings or protected environment files.
+
+## API tokens and MCP
+
+Non-browser clients authenticate against the same `/api/...` endpoints with a
+bearer token instead of the browser's session cookie and CSRF flow:
+
+```bash
+vonet token create --read-only --ttl 720h ci-runner   # prints the token once
+curl -H "Authorization: Bearer vonet_..." http://127.0.0.1:7575/api/devices
+```
+
+`vonet token list` and `vonet token revoke <name>` manage the inventory.
+Tokens act with administrator privileges; a `--read-only` token may only use
+`GET`, `HEAD`, and `OPTIONS` operations and cannot send SMS, switch eSIM
+profiles, trigger reconnects, or use the other documented hardware side
+effects. One documented database side effect remains: `GET /api/sms/thread`
+marks its messages as read. Rotating the administrator password or applying a
+binary update revokes every session and token. Create tokens after the first
+`bootstrap-admin`. Remote bearer clients also need a network access policy
+that admits their source address; the default `internal` mode only serves
+private networks.
+
+When `VONET_MCP_ENABLED=true`, the service exposes an MCP (Model Context
+Protocol) endpoint at `http://<host>:7575/mcp` using the Streamable HTTP
+transport and bearer-token authentication. Tools cover device status, SMS
+threads and guarded sending, eSIM profile listing and coordinated switching,
+and WiFi Calling status/reconnect. Sensitive operations such as raw AT, eSIM
+download/delete, SIM PIN, network selection and system update are not
+exposed, and tool output does not include IMSI, SIM PIN or activation codes.
+A read-only token receives a tool list without the write tools. SMS sending
+uses the same VoNet destination policy and global hourly limit as the web UI,
+with no destination-country block. MCP messages use the cellular AT path and
+are not written to the web conversation history, so they do not reproduce the
+web UI's IMS-first/O2 SMS behavior.
+
+Client configuration (Claude Code as the example):
+
+```json
+{
+  "mcpServers": {
+    "vonet": {
+      "type": "http",
+      "url": "http://192.168.1.10:7575/mcp",
+      "headers": { "Authorization": "Bearer vonet_..." }
+    }
+  }
+}
+```
+
+See [docs/API_MCP_DEVELOPMENT_PLAN.md](docs/API_MCP_DEVELOPMENT_PLAN.md) for
+the design record.
 
 ## Telegram bot
 

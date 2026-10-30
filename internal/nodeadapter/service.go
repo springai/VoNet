@@ -20,15 +20,15 @@ import (
 )
 
 const (
-	globalConfigKey       = "global_config"
-	DefaultStartPort      = 50000
-	DefaultHTTPStartPort  = 60000
-	ProbeTimeout          = 10 * time.Second
-	healthCheckInterval   = 30 * time.Second
-	maxAutoRestarts       = 5
-	restartBackoffBase    = 5 * time.Second
-	restartBackoffMax     = 2 * time.Minute
-	restartBackoffReset   = 5 * time.Minute // if process runs this long, reset counter
+	globalConfigKey      = "global_config"
+	DefaultStartPort     = 50000
+	DefaultHTTPStartPort = 60000
+	ProbeTimeout         = 10 * time.Second
+	healthCheckInterval  = 30 * time.Second
+	maxAutoRestarts      = 5
+	restartBackoffBase   = 5 * time.Second
+	restartBackoffMax    = 2 * time.Minute
+	restartBackoffReset  = 5 * time.Minute // if process runs this long, reset counter
 
 	maxStartupRetries = 5
 	startupRetryDelay = 2 * time.Second
@@ -317,6 +317,7 @@ func (s *Service) StartEnabled(ctx context.Context) {
 	// Start the health-check watchdog.
 	go s.healthCheckLoop(ctx)
 }
+
 // startInstance builds the sing-box config and starts the process.
 func (s *Service) startInstance(ctx context.Context, a NodeAdapter) error {
 	cfg, err := singbox.BuildConfig(
@@ -479,6 +480,7 @@ func (s *Service) handleProcessExit(id string, err error, stopped bool) {
 	}
 	s.logger.Info("auto-restart succeeded", "id", id, "name", a.Name, "attempt", attempt)
 }
+
 // healthCheckLoop periodically verifies that every enabled adapter has a
 // running sing-box process. If a process is missing, it triggers a restart.
 // This acts as a safety net alongside the OnExit callback.
@@ -627,7 +629,7 @@ func (s *Service) ConvertToSocks5(ctx context.Context, id string) error {
 	_ = db.UpdateStatus(ctx, a.ID, "running", "")
 
 	// Verify the port is actually listening.
-	addr := fmt.Sprintf("%s:%d", a.ListenHost, a.ListenPort)
+	addr := net.JoinHostPort(a.ListenHost, strconv.Itoa(a.ListenPort))
 	time.Sleep(200 * time.Millisecond)
 	conn, probeErr := net.DialTimeout("tcp", addr, 2*time.Second)
 	if probeErr != nil {
@@ -703,7 +705,7 @@ func (s *Service) ConvertToHTTP(ctx context.Context, id string) error {
 	_ = db.UpdateHTTPStatus(ctx, a.ID, "running", "")
 
 	// Verify the port is actually listening.
-	addr := fmt.Sprintf("%s:%d", a.HTTPListenHost, a.HTTPListenPort)
+	addr := net.JoinHostPort(a.HTTPListenHost, strconv.Itoa(a.HTTPListenPort))
 	time.Sleep(200 * time.Millisecond)
 	conn, probeErr := net.DialTimeout("tcp", addr, 2*time.Second)
 	if probeErr != nil {
@@ -929,7 +931,6 @@ func (s *Service) List(ctx context.Context) ([]NodeAdapter, error) {
 	return result, listErr
 }
 
-
 // SyncStatus checks the actual running state of SOCKS5 and HTTP processes
 // and corrects the database status to match reality.
 func (s *Service) SyncStatus(ctx context.Context, id string) error {
@@ -1027,7 +1028,6 @@ func (s *Service) SaveGlobalConfig(ctx context.Context, cfg GlobalConfig) error 
 	`, globalConfigKey, string(raw))
 	return err
 }
-
 
 func (s *Service) nextHTTPPort(ctx context.Context, db *DB) (int, error) {
 	maxPort, err := db.MaxPort(ctx)

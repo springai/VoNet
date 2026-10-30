@@ -525,6 +525,9 @@ func TestManagerRemovedEntryStopsAfterActiveOperation(t *testing.T) {
 		orchestrator:   testOrchestrator(t, "removed-while-busy"),
 		desiredEnabled: true,
 	}
+	manager.mu.Lock()
+	manager.entries["removed-while-busy"] = item
+	manager.mu.Unlock()
 	calls := 0
 	done := make(chan struct{})
 	manager.wg.Add(1)
@@ -532,8 +535,11 @@ func TestManagerRemovedEntryStopsAfterActiveOperation(t *testing.T) {
 		defer close(done)
 		manager.runOperations("removed-while-busy", item, func(context.Context, *vowifi.Orchestrator) error {
 			calls++
+			manager.mu.Lock()
+			delete(manager.entries, "removed-while-busy")
+			manager.mu.Unlock()
 			return nil
-		})
+		}, item.operationEpoch)
 	}()
 
 	select {

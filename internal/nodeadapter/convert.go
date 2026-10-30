@@ -22,16 +22,16 @@ type ParsedLink struct {
 
 // PingResult holds TCP ping result.
 type PingResult struct {
-	Host       string `json:"host"`
-	Port       int    `json:"port"`
-	Reachable  bool   `json:"reachable"`
-	LatencyMs  int64  `json:"latency_ms"`
-	Error      string `json:"error,omitempty"`
+	Host      string `json:"host"`
+	Port      int    `json:"port"`
+	Reachable bool   `json:"reachable"`
+	LatencyMs int64  `json:"latency_ms"`
+	Error     string `json:"error,omitempty"`
 }
 
 // TCPPing tests TCP connectivity to host:port.
 func TCPPing(host string, port int) PingResult {
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	start := time.Now()
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	elapsed := time.Since(start).Milliseconds()

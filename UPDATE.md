@@ -1568,3 +1568,23 @@ ike: IKE_AUTH EAP round 1: ike: responder reported fatal notification 10500
 - 本次仅修改 Web 前端，不修改 Go 后端接口或通话协议逻辑。
 
 ---
+
+### 56. 上游同步中的 Bark 多目标与短信策略兼容加固
+
+**修改内容**:
+
+- Bark 支持每个 URL 单独绑定设备，URL key 在界面和错误中脱敏；保存时清理过期和重复 scope，测试通知仍覆盖草稿中的所有 URL。
+- Bark 短信、来电、自动任务统一走多目标投递：单个 URL 失败不会阻断其他 URL，错误不包含 Bark URL/key；设置页测试则要求全部目标成功，避免用户误以为配置已全量可用。
+- API Token/MCP、eSIM/QMI、AT Profile 和 IKE 安全修复采用 VoNet 命名和本地迁移边界，MCP 默认关闭，未知 USB 探测默认关闭。
+- 保留 VoNet 原有短信目标策略：有效号码不做国家封禁，HTTP、Telegram、自动任务和 MCP 共用同一入口，避免同步上游后误拒绝 `+86` 或其他运营商号码。
+- 二进制更新完成后使用独立超时上下文原子撤销全部会话和 API Token，客户端立即断开也不会取消撤销；管理员密码轮换继续撤销两类凭据，CLI Token TTL 与 Web/API 统一限制为最长 8760 小时。
+- card-policy reconciler 的身份不匹配和热插拔重连仅允许 `idle/failed` 阶段，避免打断 `sim_ready/access_ready/tunnel_ready/ims_ready/sms_ready`。
+- MCP 短信仍走蜂窝 AT 路径且不写网页会话历史；README 明确该差异以及只读 `GET /api/sms/thread` 的已读副作用。
+
+**验证结果**:
+
+- `go test ./...`、`go vet ./...`、`npm test`（31 项）、`npm run build` 均通过。
+- Linux amd64、arm64、armv7 交叉编译通过。
+- 仅使用合成号码、合成 Token 和合成设备 ID 进行测试，不包含真实 SIM、IMEI、MSISDN、Bark key、密码或抓包数据。
+
+---

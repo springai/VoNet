@@ -23,6 +23,8 @@ type Config struct {
 	SecureCookies       bool
 	ShutdownTimeout     time.Duration
 	MaxRequestBodyBytes int64
+	MCPEnabled          bool
+	ProbeUnknownUSB     bool
 }
 
 type fileConfig struct {
@@ -37,6 +39,8 @@ type fileConfig struct {
 	SecureCookies       *bool   `json:"secure_cookies"`
 	ShutdownTimeout     *string `json:"shutdown_timeout"`
 	MaxRequestBodyBytes *int64  `json:"max_request_body_bytes"`
+	MCPEnabled          *bool   `json:"mcp_enabled"`
+	ProbeUnknownUSB     *bool   `json:"probe_unknown_usb"`
 }
 
 // Default returns the non-secret process configuration. Administrator
@@ -49,6 +53,8 @@ func Default() Config {
 		SecureCookies:       false,
 		ShutdownTimeout:     10 * time.Second,
 		MaxRequestBodyBytes: 1 << 20,
+		MCPEnabled:          false,
+		ProbeUnknownUSB:     false,
 	}
 }
 
@@ -134,6 +140,12 @@ func applyFile(cfg *Config, values fileConfig) error {
 	if values.MaxRequestBodyBytes != nil {
 		cfg.MaxRequestBodyBytes = *values.MaxRequestBodyBytes
 	}
+	if values.MCPEnabled != nil {
+		cfg.MCPEnabled = *values.MCPEnabled
+	}
+	if values.ProbeUnknownUSB != nil {
+		cfg.ProbeUnknownUSB = *values.ProbeUnknownUSB
+	}
 	return nil
 }
 
@@ -174,6 +186,20 @@ func applyEnvironment(cfg *Config) error {
 			return fmt.Errorf("VONET_MAX_REQUEST_BODY_BYTES: %w", err)
 		}
 		cfg.MaxRequestBodyBytes = size
+	}
+	if value, ok := os.LookupEnv("VONET_MCP_ENABLED"); ok {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("VONET_MCP_ENABLED: %w", err)
+		}
+		cfg.MCPEnabled = enabled
+	}
+	if value, ok := os.LookupEnv("VONET_PROBE_UNKNOWN_USB"); ok {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("VONET_PROBE_UNKNOWN_USB: %w", err)
+		}
+		cfg.ProbeUnknownUSB = enabled
 	}
 	return nil
 }

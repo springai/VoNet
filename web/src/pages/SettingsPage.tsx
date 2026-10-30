@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertRegular, CheckmarkRegular } from "@fluentui/react-icons";
-import { api, apiMessage, getSecuritySettings, updateSecuritySettings } from "../api";
-import type { DeveloperSettings, DeviceListItem, DevicesResponse, HTTPSSettings, NotificationSettings, SecuritySettings, SMSSettings, SystemInfo } from "../types";
+import { api, apiMessage, getApiTokens, getSecuritySettings, revokeApiToken, updateSecuritySettings } from "../api";
+import type { ApiTokenListItem, DeveloperSettings, DeviceListItem, DevicesResponse, HTTPSSettings, NotificationSettings, SecuritySettings, SMSSettings, SystemInfo } from "../types";
 import { Button, PageHeader, confirmDialog, message } from "../components/ui";
 import { CardDecor, CardIcon, CardTitle, SecurityCard, SystemInfoCard } from "../components/settings/Cards";
 import type { PasswordForm, UpdateInfo } from "../components/settings/Cards";
 import { NetworkAccessCard } from "../components/settings/NetworkAccessCard";
+import { ApiTokensCard } from "../components/settings/ApiTokensCard";
 import type { NetworkAccessForm } from "../components/settings/NetworkAccessCard";
 import { NotificationDeviceScope, SegmentedTabs } from "../components/settings/controls";
-import { useI18n } from "../lib/i18n";
+import { tf, useI18n } from "../lib/i18n";
 import { useAuth } from "../store/auth";
 import {
   buildBarkPayload,
@@ -96,6 +97,10 @@ export default function SettingsPage() {
   const [loadingDeveloper, setLoadingDeveloper] = useState(false);
   const [savingDeveloper, setSavingDeveloper] = useState(false);
   const [savingSMSLimit, setSavingSMSLimit] = useState(false);
+  const [apiTokens, setApiTokens] = useState<ApiTokenListItem[]>([]);
+  const [tokensError, setTokensError] = useState(false);
+  const [loadingTokens, setLoadingTokens] = useState(false);
+  const [revokingToken, setRevokingToken] = useState<string | null>(null);
   const [smsAutoClear, setSMSAutoClear] = useState(true);
   const [loadingSMSSettings, setLoadingSMSSettings] = useState(false);
   const [savingSMSSettings, setSavingSMSSettings] = useState(false);
@@ -119,6 +124,32 @@ export default function SettingsPage() {
       console.error(t("系统信息读取失败"), e);
     }
   }, []);
+
+  const fetchApiTokens = useCallback(async () => {
+    setLoadingTokens(true);
+    setTokensError(false);
+    try {
+      const data = await getApiTokens();
+      setApiTokens(data.tokens ?? []);
+    } catch {
+      setTokensError(true);
+    } finally {
+      setLoadingTokens(false);
+    }
+  }, []);
+
+  const onRevokeApiToken = useCallback(async (name: string) => {
+    setRevokingToken(name);
+    try {
+      await revokeApiToken(name);
+      message.success(tf("令牌 {name} 已吊销", { name }));
+      await fetchApiTokens();
+    } catch (error) {
+      message.error(apiMessage(error));
+    } finally {
+      setRevokingToken(null);
+    }
+  }, [fetchApiTokens]);
 
   const fetchNotifications = useCallback(async () => {
     setLoadingNotif(true);
@@ -195,7 +226,8 @@ export default function SettingsPage() {
     void fetchNotifications();
     void fetchSecurity();
     void fetchSMSSettings();
-  }, [fetchSystemInfo, fetchNotifications, fetchSecurity, fetchSMSSettings]);
+    void fetchApiTokens();
+  }, [fetchSystemInfo, fetchNotifications, fetchSecurity, fetchSMSSettings, fetchApiTokens]);
 
   useEffect(() => {
     if (systemInfo.developer) {
@@ -519,6 +551,14 @@ export default function SettingsPage() {
           onChange={(patch) => setSecurity((prev) => ({ ...prev, ...patch }))}
           onSave={onSaveSecurity}
         />
+        <ApiTokensCard
+          tokens={apiTokens}
+          loading={loadingTokens}
+          error={tokensError}
+          revoking={revokingToken}
+          onRevoke={(name) => void onRevokeApiToken(name)}
+          onRefresh={() => void fetchApiTokens()}
+        />
         <VoWiFiMTUCard />
         <SMSAutoClearCard
           enabled={smsAutoClear}
@@ -577,7 +617,14 @@ export default function SettingsPage() {
                 <TelegramTab onClear={() => void clearChannel("telegram")} value={forms.telegram} onChange={(p) => updateChannel("telegram", p)} />
               ) : null}
               {activeTab === "bark" ? (
-                <BarkTab value={forms.bark} onChange={(p) => updateChannel("bark", p)} testing={testingBark} onTest={onTestBark} />
+                <BarkTab
+                  value={forms.bark}
+                  onChange={(p) => updateChannel("bark", p)}
+                  testing={testingBark}
+                  onTest={onTestBark}
+                  devices={devices}
+                  devicesFailed={devicesFailed}
+                />
               ) : null}
               {activeTab === "email" ? (
                 <EmailTab onClear={() => void clearChannel("email")} value={forms.email} onChange={(p) => updateChannel("email", p)} testing={testingEmail} onTest={onTestEmail} />

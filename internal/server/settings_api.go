@@ -19,6 +19,7 @@ import (
 	"net/smtp"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -62,6 +63,7 @@ var notificationFields = map[string]map[string]string{
 	},
 	"bark": {
 		"urls": "strings", "group": "string", "icon": "string", "level": "string",
+		"url_scopes": "url_scopes",
 	},
 	"pushplus": {
 		"token": "string", "topic": "string", "channel": "string",
@@ -275,6 +277,9 @@ func decodeNotificationConfig(
 			return false, nil, err
 		}
 	}
+	if err := validateURLScopeTargets(channel, document); err != nil {
+		return false, nil, err
+	}
 	config, err := json.Marshal(document)
 	if err != nil {
 		return false, nil, fmt.Errorf("encode %s notification config: %w", channel, err)
@@ -421,6 +426,10 @@ func validateNotificationField(
 					return fmt.Errorf("%s contains an invalid email address", field)
 				}
 			}
+		}
+	case "url_scopes":
+		if _, err := decodeURLScopes(raw); err != nil {
+			return fmt.Errorf("%s %w", field, err)
 		}
 	case "string_map":
 		var values map[string]string
@@ -602,6 +611,11 @@ func (s *Server) resolveNotificationTestConfig(
 		}
 		resolved[key] = value
 	}
+	// A Bark test goes to every draft URL. Saved per-URL scopes must not
+	// reject a URL that the draft has removed or changed.
+	if channel == "bark" {
+		delete(resolved, "url_scopes")
+	}
 	encoded, err := json.Marshal(resolved)
 	if err != nil {
 		return nil, store.NotificationSetting{}, err
@@ -764,7 +778,7 @@ func sendBarkNotificationTest(ctx context.Context, config map[string]any) error 
 		return err
 	}
 	message := map[string]any{
-			"title": "VoNet",
+		"title": "VoNet",
 		"body":  "vonet notification test",
 	}
 	if group := configString(config, "group"); group != "" {
@@ -777,27 +791,15 @@ func sendBarkNotificationTest(ctx context.Context, config map[string]any) error 
 		message["level"] = level
 	}
 	payload, _ := json.Marshal(message)
-	for _, destination := range configStrings(config, "urls") {
-		parsed, err := validateOutboundURL(ctx, destination, false)
-		if err != nil {
-			return err
-		}
-		request, err := http.NewRequestWithContext(
-			ctx,
-			http.MethodPost,
-			parsed.String(),
-			bytes.NewReader(payload),
-		)
-		if err != nil {
-			return fmt.Errorf("create bark test request: %w", err)
-		}
-		request.Header.Set("Content-Type", "application/json; charset=utf-8")
-		request.Header.Set("User-Agent", "vonet-notification-test/1")
-		if err := performNotificationRequest(client, request, false); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err = sendBarkPayload(
+		ctx,
+		client,
+		configStrings(config, "urls"),
+		payload,
+		"vonet-notification-test/1",
+		true,
+	)
+	return err
 }
 
 func sendTelegramNotificationTest(ctx context.Context, config map[string]any) error {
@@ -1369,6 +1371,120 @@ func configStrings(config map[string]any, key string) []string {
 	default:
 		return nil
 	}
+}
+
+// urlScope narrows one Bark destination URL to a set of device IDs. It is a
+// list rather than a map keyed by URL because the web client recursively
+// rewrites object keys and would corrupt case-sensitive Bark URL keys.
+type urlScope struct {
+	URL       string   `json:"url"`
+	DeviceIDs []string `json:"device_ids"`
+}
+
+func decodeURLScopes(raw json.RawMessage) ([]urlScope, error) {
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err != nil || entries == nil {
+		return nil, errors.New("must be an array of {url, device_ids} objects")
+	}
+	if len(entries) > 32 {
+		return nil, errors.New("cannot contain more than 32 entries")
+	}
+	scopes := make([]urlScope, 0, len(entries))
+	seen := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		for name := range entry {
+			if name != "url" && name != "device_ids" {
+				return nil, fmt.Errorf("entry field %q is not supported", name)
+			}
+		}
+		var scope urlScope
+		if json.Unmarshal(entry["url"], &scope.URL) != nil {
+			return nil, errors.New("entry url must be a string")
+		}
+		scope.URL = strings.TrimSpace(scope.URL)
+		if _, err := parseOutboundURL(scope.URL, false); err != nil {
+			return nil, errors.New("contains an invalid HTTP URL")
+		}
+		if seen[scope.URL] {
+			return nil, errors.New("lists the same URL more than once")
+		}
+		seen[scope.URL] = true
+		if json.Unmarshal(entry["device_ids"], &scope.DeviceIDs) != nil || scope.DeviceIDs == nil {
+			return nil, errors.New("entry device_ids must be an array of device IDs")
+		}
+		for _, id := range scope.DeviceIDs {
+			if strings.TrimSpace(id) == "" {
+				return nil, errors.New("contains an empty device ID")
+			}
+		}
+		scopes = append(scopes, scope)
+	}
+	return scopes, nil
+}
+
+func validateURLScopeTargets(channel string, document map[string]json.RawMessage) error {
+	raw, ok := document["url_scopes"]
+	if !ok {
+		return nil
+	}
+	scopes, err := decodeURLScopes(raw)
+	if err != nil {
+		return fmt.Errorf("%s.url_scopes %w", channel, err)
+	}
+	var urls []string
+	if rawURLs, ok := document["urls"]; ok {
+		_ = json.Unmarshal(rawURLs, &urls)
+	}
+	for _, scope := range scopes {
+		if !slices.ContainsFunc(urls, func(target string) bool { return strings.TrimSpace(target) == scope.URL }) {
+			return fmt.Errorf("%s.url_scopes refers to a URL that is not in %s.urls", channel, channel)
+		}
+	}
+	return nil
+}
+
+func configURLScopes(config map[string]any) (map[string][]string, error) {
+	raw, ok := config["url_scopes"]
+	if !ok {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	scopes, err := decodeURLScopes(encoded)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string][]string, len(scopes))
+	for _, scope := range scopes {
+		result[scope.URL] = scope.DeviceIDs
+	}
+	return result, nil
+}
+
+func notificationDestinations(config map[string]any, deviceID string) []string {
+	if !notificationMatchesDevice(configStrings(config, "device_ids"), deviceID) {
+		return nil
+	}
+	scopes, err := configURLScopes(config)
+	if err != nil {
+		// A malformed scope must fail closed. Treating it as absent would
+		// broaden a restricted URL back to the channel-wide device list.
+		return nil
+	}
+	var destinations []string
+	seen := make(map[string]bool)
+	for _, target := range configStrings(config, "urls") {
+		if ids, scoped := scopes[target]; scoped && !slices.Contains(ids, deviceID) {
+			continue
+		}
+		if !seen[target] {
+			seen[target] = true
+			destinations = append(destinations, target)
+		}
+	}
+	return destinations
 }
 
 func configStringMap(config map[string]any, key string) map[string]string {

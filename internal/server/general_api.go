@@ -49,6 +49,9 @@ func (s *Server) routeGeneralAPI(w http.ResponseWriter, r *http.Request) bool {
 	if s.routeSettingsAPI(w, r, cleanPath) {
 		return true
 	}
+	if s.routeTokensAPI(w, r, cleanPath) {
+		return true
+	}
 	switch cleanPath {
 	case "logs/history":
 		s.handleLogHistory(w, r)
@@ -477,9 +480,11 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	// browser/API session. Revoke every durable token before scheduling the
 	// restart and expire this client's cookies so all users must authenticate
 	// against the newly installed version.
-	if err := s.store.DeleteAllSessions(r.Context()); err != nil {
-		s.logger.Error("revoke sessions after update failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "update_session_revonetion_failed", "The update was installed, but active sessions could not be revoked; restart the service and sign in again.")
+	revocationContext, revokeCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+	defer revokeCancel()
+	if err := s.store.DeleteAllAuthCredentials(revocationContext); err != nil {
+		s.logger.Error("revoke auth credentials after update failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "update_auth_revocation_failed", "The update was installed, but active sessions and API tokens could not be revoked; restart the service and sign in again.")
 		return
 	}
 	s.clearAuthCookies(w)
@@ -488,7 +493,7 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 			"applied":                   true,
 			"version":                   result.Latest,
 			"reauthentication_required": true,
-			"message":                   "Update verified and installed; all sessions were revoked and the service is restarting.",
+			"message":                   "Update verified and installed; all sessions and API tokens were revoked and the service is restarting.",
 		},
 	})
 	if flusher, ok := w.(http.Flusher); ok {

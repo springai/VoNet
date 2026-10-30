@@ -22,6 +22,7 @@ import (
 	"golang.org/x/term"
 
 	"vonet/internal/auth"
+	"vonet/internal/buildinfo"
 	"vonet/internal/config"
 	"vonet/internal/developer"
 	"vonet/internal/device"
@@ -29,9 +30,11 @@ import (
 	"vonet/internal/extensions"
 	"vonet/internal/httpsmode"
 	"vonet/internal/loghub"
+	"vonet/internal/mcp"
 	"vonet/internal/modem"
 	"vonet/internal/nodeadapter"
 	"vonet/internal/pcsc"
+	"vonet/internal/remoteproc"
 	"vonet/internal/server"
 	"vonet/internal/store"
 	"vonet/internal/update"
@@ -356,6 +359,11 @@ func main() {
 		}
 	case "version", "-v", "--version":
 		runVersion()
+	case "token":
+		if err := runToken(rest, os.Stdout); err != nil {
+			logger.Error("token command failed", "error", err)
+			os.Exit(1)
+		}
 	case "update":
 		if err := update.Run(logger, rest); err != nil {
 			logger.Error("update failed", "error", err)
@@ -492,6 +500,7 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 	cardReaders := pcsc.New()
 	deviceLogger := logger.With("category", "hardware")
 	deviceManager, err := device.NewManager(device.Options{
+		Discoverer:  modem.NewSystemDiscovererWithOptions(modem.DiscoveryOptions{ProbeUnknownUSB: cfg.ProbeUnknownUSB}),
 		CardReaders: cardReaders,
 		Logger:      deviceLogger,
 		MBNProfileForICCID: func(ctx context.Context, iccid string) (string, error) {
@@ -593,6 +602,45 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 		}
 	}()
 
+	// MCP is opt-in. Read-only tokens receive a server variant whose tool list
+	// omits write tools entirely.
+	var mcpHandlers *server.MCPHandlers
+	var switchESIM func(context.Context, string, string, string) error
+	if cfg.MCPEnabled {
+		readWrite, mcpErr := mcp.New(mcp.Options{
+			Store:   database,
+			Devices: deviceManager,
+			VoWiFi:  vowifiManager,
+			Logger:  logger,
+			Version: buildinfo.Version,
+			SwitchESIM: func(ctx context.Context, configuredID, iccid, aid string) error {
+				if switchESIM == nil {
+					return errors.New("profile switch service is not initialized")
+				}
+				return switchESIM(ctx, configuredID, iccid, aid)
+			},
+		})
+		if mcpErr != nil {
+			return fmt.Errorf("create MCP server: %w", mcpErr)
+		}
+		readOnly, mcpErr := mcp.New(mcp.Options{
+			Store:    database,
+			Devices:  deviceManager,
+			VoWiFi:   vowifiManager,
+			Logger:   logger,
+			Version:  buildinfo.Version,
+			ReadOnly: true,
+		})
+		if mcpErr != nil {
+			return fmt.Errorf("create read-only MCP server: %w", mcpErr)
+		}
+		mcpHandlers = &server.MCPHandlers{
+			ReadWrite: readWrite.Handler(),
+			ReadOnly:  readOnly.Handler(),
+		}
+		logger.Info("MCP endpoint enabled at /mcp", "requires", "bearer api token")
+	}
+
 	handler, err := server.New(server.Options{
 		Store:               database,
 		Auth:                authService,
@@ -610,10 +658,12 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 		UpdateRepository:    strings.TrimSpace(os.Getenv("VONET_REPO")),
 		UpdateToken:         strings.TrimSpace(os.Getenv("GITHUB_TOKEN")),
 		HTTPS:               httpsManager,
+		MCP:                 mcpHandlers,
 	})
 	if err != nil {
 		return err
 	}
+	switchESIM = handler.SwitchESIMProfile
 
 	onIncomingCall = func(ctx context.Context, call ims.ReceivedCall) error {
 		deviceConfig, _ := database.Device(ctx, call.DeviceID)
@@ -1617,7 +1667,11 @@ func pollDeviceSnapshots(
 				snapshot, refreshErr := manager.Refresh(refreshContext, entry.ID)
 				cancelRefresh()
 				if refreshErr != nil && ctx.Err() == nil {
-					logger.Warn("modem snapshot refresh failed", "device_id", entry.ID, "error", refreshErr)
+					if errors.Is(refreshErr, device.ErrESIMRecovering) || errors.Is(refreshErr, remoteproc.ErrUnavailable) {
+						logger.Debug("modem snapshot refresh deferred", "device_id", entry.ID, "error", refreshErr)
+					} else {
+						logger.Warn("modem snapshot refresh failed", "device_id", entry.ID, "error", refreshErr)
+					}
 				}
 				if refreshErr == nil && ctx.Err() == nil {
 					enforceCardRegion(ctx, logger, database, manager, entry.ID, &snapshot)
@@ -1697,7 +1751,7 @@ func enforceDefaultSafeCardPolicy(
 	logger.Info("new SIM protected by default VoWiFi/airplane policy", "device_id", physicalID, "iccid", iccid)
 }
 
-func reconcileCardPolicies(
+func reconcileCardPoliciesLegacy(
 	ctx context.Context,
 	logger *slog.Logger,
 	database *store.Store,

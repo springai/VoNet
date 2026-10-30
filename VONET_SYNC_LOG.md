@@ -21,6 +21,12 @@
 - **已同步版本**: 12ce8f0 (feat(sms): decode WAP Push MMS notification subjects #141)
 - **已同步版本**: 2d023a7 (Delete docs/E911.zh-CN.md；本地有意保留该文档)
 - **已同步版本**: 4859412 (FIX #181；选择性同步，保留 VoNet 本地等价实现)
+- **已同步版本**: f979e60 (feat(notifications): bind each Bark URL to its own devices)
+- **已同步版本**: a6c0c75 (feat: API Token 认证与 MCP 端点)
+- **已同步版本**: 635e84f (fix(auth): enforce read-only access and coordinate MCP eSIM switches)
+- **已同步版本**: 33ecd4c (fix(device): isolate eSIM recovery and supervise QMI proxy)
+- **已同步版本**: 01087de (feat(modem): add typed AT capability profiles and unknown-USB discovery)
+- **已同步版本**: d1968d1 (fix(ike): sanitize SOCKS5 relay lookup failures)
 ---
 
 ## 待同步提交列表（96a1233 → 4760e33）
@@ -1270,6 +1276,51 @@ Ultra Mobile (ipcc-ultramint-mobile-310026):
 - `go test ./...` 通过。
 - `npm test`、`npm run build` 通过。
 - `python3 -m unittest discover -s scripts -p 'test_auto_release.py' -v` 通过。
+- `git diff --check` 通过。
+
+本次仅完成本地同步和记录更新，不提交、不推送 GitHub。
+
+---
+
+## 2026-10-31 同步上游 f979e60 → d1968d1（6 个提交）
+
+**提交列表**:
+
+| # | Commit | 描述 | 同步重点 |
+|---|--------|------|----------|
+| 1 | f979e60 | feat(notifications): bind each Bark URL to its own devices (#198) | Bark `url_scopes`、按 URL 选择设备、测试与前端模型 |
+| 2 | a6c0c75 | feat: API Token 认证与 MCP 端点 (#194) | `vonet_` API Token、Bearer 认证、MCP 工具接口 |
+| 3 | 635e84f | fix(auth): enforce read-only access and coordinate MCP eSIM switches | 只读 Token 边界、审计、MCP/eSIM 共享切换协调 |
+| 4 | 33ecd4c | fix(device): isolate eSIM recovery and supervise QMI proxy | eSIM 恢复门、QMI proxy 子进程、remoteproc 观测 |
+| 5 | 01087de | feat(modem): typed AT capability profiles and unknown-USB discovery | AT Profile、APDU 方言、ZXIC 能力、未知 USB 探测 |
+| 6 | d1968d1 | fix(ike): sanitize SOCKS5 relay lookup failures | SOCKS5 relay 域名错误脱敏 |
+
+**同步范围与兼容处理**:
+
+- Bark 改用 `url_scopes: [{url, device_ids}]` 列表，保留 URL 大小写敏感性；未知、重复、过期 scope 会被清理，非法 scope 失败关闭。短信、来电和自动任务共用目标解析，测试通知仍向草稿中的所有 URL 发送。
+- Bark 多目标投递逐 URL 隔离失败并隐藏含 key 的 URL；运行时部分成功不触发整组重复重试，设置页测试要求所有目标成功。原 Web 通知设置模型、设备范围控件和多语言文案保持 VoNet 现有风格。
+- API Token 只保存 SHA-256 digest，原始 `vonet_` token 仅创建时显示一次；只读 Token 在路由前拒绝写操作，审计不记录 token。MCP 挂载默认关闭，仅 `VONET_MCP_ENABLED=true` 启用，只读实例不注册写工具。
+- 二进制更新完成后通过独立超时上下文原子撤销全部会话和 API Token，不受客户端断开影响；CLI Token TTL 与 Web/API 统一为最长 8760 小时，只读 `GET /api/sms/thread` 的已读副作用在 README 明确披露。
+- 数据库迁移使用本地空闲版本 `33`，保留 `schemaVersion=33` 和既有 SMS/代理/IMEI 表结构。MCP 与网页 Token 管理不改变管理员会话权限。
+- eSIM/QMI 部分保留本地 `Remove`、`WithSIM`、`watchDone`、slot 1 Primary GW provisioning、自动任务重连保护；只补恢复隔离、维护深度、operation epoch、managed qmi-proxy 回收和 remoteproc owner 观测，不终止共享系统 proxy。
+- card-policy reconciler 的三类自动重连增加 `idle/failed` phase guard，活跃的 `*_ready` 状态不会被打断；qmi-proxy 自有进程标记统一为 `vonet-*`。
+- AT 能力层保留 PCSC、ML307、DJI/Baiwang、WWAN、IMEI Lease 和 USBPath/IMEI 匹配；未知 USB AT 探测默认关闭，`VONET_PROBE_UNKNOWN_USB=true` 才启用。ZXIC 只在已验证能力集上使用 APDU/身份命令。
+- IKE 查询失败只保留安全错误分类，不回显 SOCKS5 relay 域名、resolver 详情或原始错误链；本地 UDP/500→UDP/4500 float、ProxyRoute 和 UDP relay 逻辑保持不变。
+
+**本地功能保护**:
+
+- 英国 O2 VoWiFi、PANI、SMS over IMS、AMR/AMR-WB、DTMF、来电弹窗、SCTS 修正和 multipart `retry_safe` 逻辑未被覆盖。
+- SMS 限流仍为开发者模式可配置的整数下限；VoNet 保持原有“不按国家封禁目标号码”语义。API、Telegram、自动任务和 MCP 共用该策略，因此不会因同步而拒绝 `+86` 或其他运营商号码。
+- PCSC HardwareKind、随机 IMEI、IMEI 池/Lease、DJI/Baiwang IMEI/USBPath 匹配、DITO 身份改写、设备删除生命周期和自动任务连接保护均保留。
+- 抓包脚本、抓包数据、`.env*`、真实 SIM/设备/号码和本地构建产物不进入同步记录或提交。
+
+**验证**:
+
+- `go test ./...` 通过。
+- `go vet ./...` 通过。
+- `npm test`：31/31 通过。
+- `npm run build` 通过。
+- Linux amd64、arm64、armv7（`CGO_ENABLED=0`）交叉编译通过。
 - `git diff --check` 通过。
 
 本次仅完成本地同步和记录更新，不提交、不推送 GitHub。

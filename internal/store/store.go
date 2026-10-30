@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 32
+const schemaVersion = 33
 
 var ErrNotFound = errors.New("store: not found")
 
@@ -230,7 +230,7 @@ func scanAdmin(row rowScanner) (Admin, error) {
 }
 
 // SetAdmin inserts or replaces the single configured administrator and
-// atomically revokes all existing sessions.
+// atomically revokes all existing sessions and API tokens.
 func (s *Store) SetAdmin(ctx context.Context, username string, passwordHash []byte) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -253,6 +253,9 @@ func (s *Store) SetAdmin(ctx context.Context, username string, passwordHash []by
 	if _, err := tx.ExecContext(ctx, "DELETE FROM sessions"); err != nil {
 		return fmt.Errorf("revoke sessions after admin update: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM api_tokens"); err != nil {
+		return fmt.Errorf("revoke api tokens after admin update: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit admin update: %w", err)
 	}
@@ -262,6 +265,26 @@ func (s *Store) SetAdmin(ctx context.Context, username string, passwordHash []by
 func (s *Store) DeleteAllSessions(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, "DELETE FROM sessions"); err != nil {
 		return fmt.Errorf("delete all sessions: %w", err)
+	}
+	return nil
+}
+
+// DeleteAllAuthCredentials atomically revokes browser sessions and durable API
+// tokens after a trusted binary update.
+func (s *Store) DeleteAllAuthCredentials(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin auth credential revocation: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM sessions"); err != nil {
+		return fmt.Errorf("delete all sessions: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM api_tokens"); err != nil {
+		return fmt.Errorf("delete all api tokens: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit auth credential revocation: %w", err)
 	}
 	return nil
 }

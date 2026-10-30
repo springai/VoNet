@@ -484,6 +484,14 @@ export type NotificationConfig<T = Record<string, unknown>> = T & {
   deviceIds?: string[] | null; // Missing in older settings; null means all devices.
 };
 
+export interface ApiTokenListItem {
+  name: string;
+  readOnly: boolean;
+  createdAt: string;
+  lastUsedAt: string;
+  expiresAt: string;
+}
+
 export interface NotificationSettings {
   meow: NotificationConfig<{ enabled: boolean; nickname: string; url: string; imgUrl: string }>;
   telegram: NotificationConfig;

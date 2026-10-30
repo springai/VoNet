@@ -21,6 +21,13 @@ Usage:
   vonet serve        Run the server in the foreground (use from a TTY when
                      vonet without arguments would enter the menu).
   vonet version      Print the build version and exit.
+  vonet token        Manage API bearer tokens for programmatic clients:
+                       vonet token create [--read-only] [--ttl 720h] <name>
+                       vonet token list
+                       vonet token revoke <name>
+                     Flags for all: --database path (default
+                     /opt/vonet/data/vonet.db). The raw token is printed
+                     once at creation; rotate it by revoking and recreating.
   vonet doctor       Diagnose USB modem, AT, QMI, PC/SC and proxy UDP paths.
                      Use --repair-dji-qmi on Linux to restore the factory-ID
                      DJI/Baiwang 2ca3:4006 AT/QMI interface bindings and wake

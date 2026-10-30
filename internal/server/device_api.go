@@ -18,6 +18,7 @@ import (
 	"vonet/internal/modem"
 	"vonet/internal/pcsc"
 	"vonet/internal/pcscimei"
+	"vonet/internal/remoteproc"
 	"vonet/internal/store"
 	"vonet/internal/vowifi"
 	vowifiruntime "vonet/internal/vowifi/runtime"
@@ -2221,6 +2222,10 @@ func (s *Server) writeDeviceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "device_not_found", "device was not found or is no longer present")
 	case errors.Is(err, device.ErrNotStarted):
 		writeError(w, http.StatusServiceUnavailable, "device_manager_not_started", "device manager is not started")
+	case errors.Is(err, device.ErrESIMRecovering):
+		writeError(w, http.StatusConflict, "esim_recovering", "eSIM profile switching or recovery is still in progress; wait before retrying")
+	case errors.Is(err, remoteproc.ErrUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "modem_unavailable", "the modem remote processor is unavailable; restore the modem before retrying")
 	case errors.Is(err, device.ErrNoATPort):
 		writeError(w, http.StatusServiceUnavailable, "at_port_unavailable", "device has no usable AT port")
 	case errors.Is(err, device.ErrDataBackendUnavailable):

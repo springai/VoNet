@@ -764,8 +764,13 @@ func TestHandleESIMShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	flightRecorderVoWiFi := &flightTrackingController{
-		fakeDeviceController: fakeDeviceController{entry: device.Device{ID: "devVoWiFi"}},
+		fakeDeviceController: fakeDeviceController{entry: device.Device{ID: "devVoWiFi", Snapshot: &device.Snapshot{ICCID: "8900000000000000003"}}},
 		switchErr:            device.ErrESIMCommandError,
+	}
+	if err := failDatabaseVoWiFi.UpsertCardPolicy(context.Background(), store.CardPolicy{
+		ICCID: "8900000000000000003", VoWiFiEnabled: true, AirplaneEnabled: true,
+	}); err != nil {
+		t.Fatal(err)
 	}
 	vowifiRecorder := &fakeEsimVoWiFiController{enabled: true}
 	failServerVoWiFi := &Server{
@@ -955,6 +960,15 @@ func TestHandleUpdateApplyInstallsFromTrustedRepository(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+	apiTokenHash := []byte("active-api-token")
+	if _, err := database.CreateAPIToken(
+		context.Background(), "update-token", apiTokenHash, true, time.Time{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/apply", nil)
+	requestContext, cancelRequest := context.WithCancel(request.Context())
+	request = request.WithContext(requestContext)
 	server := &Server{
 		store:            database,
 		logger:           regionTestLogger(),
@@ -963,11 +977,12 @@ func TestHandleUpdateApplyInstallsFromTrustedRepository(t *testing.T) {
 			if options.Repo != update.DefaultRepository || restart {
 				t.Fatalf("apply options = %#v, restart = %v", options, restart)
 			}
+			cancelRequest()
 			return update.CheckResult{Applied: true, Latest: "9.9.9"}, nil
 		},
 	}
 	recorder := httptest.NewRecorder()
-	server.handleUpdateApply(recorder, httptest.NewRequest(http.MethodPost, "/apply", nil))
+	server.handleUpdateApply(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body)
 	}
@@ -977,6 +992,9 @@ func TestHandleUpdateApplyInstallsFromTrustedRepository(t *testing.T) {
 	}
 	if _, err := database.SessionByTokenHash(context.Background(), tokenHash); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("session must be revoked after update, got %v", err)
+	}
+	if _, err := database.APITokenByHash(context.Background(), apiTokenHash); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("API token must be revoked after update, got %v", err)
 	}
 	expired := map[string]bool{}
 	for _, cookie := range recorder.Result().Cookies() {

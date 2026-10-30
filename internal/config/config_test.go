@@ -18,6 +18,8 @@ var configEnvironment = []string{
 	"VONET_SECURE_COOKIES",
 	"VONET_SHUTDOWN_TIMEOUT",
 	"VONET_MAX_REQUEST_BODY_BYTES",
+	"VONET_MCP_ENABLED",
+	"VONET_PROBE_UNKNOWN_USB",
 }
 
 func clearConfigEnvironment(t *testing.T) {
@@ -39,6 +41,60 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Address != "0.0.0.0:7575" {
 		t.Fatalf("Address = %q", cfg.Address)
+	}
+	if cfg.MCPEnabled {
+		t.Fatal("MCP must be disabled by default")
+	}
+	if cfg.ProbeUnknownUSB {
+		t.Fatal("unknown USB serial probing must be opt-in")
+	}
+}
+
+func TestMCPAndUnknownUSBEnvironmentOverrides(t *testing.T) {
+	clearConfigEnvironment(t)
+
+	t.Setenv("VONET_MCP_ENABLED", "true")
+	t.Setenv("VONET_PROBE_UNKNOWN_USB", "true")
+	cfg, err := Load()
+	if err != nil || !cfg.MCPEnabled || !cfg.ProbeUnknownUSB {
+		t.Fatalf("explicit opt-in: %+v %v", cfg, err)
+	}
+
+	t.Setenv("VONET_MCP_ENABLED", "false")
+	t.Setenv("VONET_PROBE_UNKNOWN_USB", "false")
+	cfg, err = Load()
+	if err != nil || cfg.MCPEnabled || cfg.ProbeUnknownUSB {
+		t.Fatalf("explicit opt-out: %+v %v", cfg, err)
+	}
+
+	t.Setenv("VONET_MCP_ENABLED", "invalid")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid VONET_MCP_ENABLED accepted")
+	}
+	t.Setenv("VONET_MCP_ENABLED", "false")
+	t.Setenv("VONET_PROBE_UNKNOWN_USB", "invalid")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid VONET_PROBE_UNKNOWN_USB accepted")
+	}
+}
+
+func TestUnknownUSBProbingRequiresExplicitConfiguration(t *testing.T) {
+	clearConfigEnvironment(t)
+	path := filepath.Join(t.TempDir(), "vonet.json")
+	if err := os.WriteFile(path, []byte(`{"probe_unknown_usb":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VONET_CONFIG", path)
+	if cfg, err := Load(); err != nil || !cfg.ProbeUnknownUSB {
+		t.Fatalf("file opt-in: %+v %v", cfg, err)
+	}
+	t.Setenv("VONET_PROBE_UNKNOWN_USB", "false")
+	if cfg, err := Load(); err != nil || cfg.ProbeUnknownUSB {
+		t.Fatalf("environment override: %+v %v", cfg, err)
+	}
+	t.Setenv("VONET_PROBE_UNKNOWN_USB", "invalid")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid opt-in accepted")
 	}
 }
 
