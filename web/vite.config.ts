@@ -10,10 +10,21 @@ export default defineConfig({
     chunkSizeWarningLimit: 1100,
     rollupOptions: {
       output: {
-        manualChunks: {
-          echarts: ["echarts"],
-          "react-vendor": ["react", "react-dom", "react-router-dom"],
-          icons: ["@fluentui/react-icons"],
+        manualChunks(id) {
+          if (id.indexOf("/node_modules/echarts/") >= 0 || id.indexOf("/node_modules/zrender/") >= 0) {
+            return "echarts";
+          }
+          if (
+            id.indexOf("/node_modules/react/") >= 0 ||
+            id.indexOf("/node_modules/react-dom/") >= 0 ||
+            id.indexOf("/node_modules/react-router") >= 0
+          ) {
+            return "react-vendor";
+          }
+          if (id.indexOf("/node_modules/@fluentui/react-icons/") >= 0) {
+            return "icons";
+          }
+          return undefined;
         },
       },
     },
