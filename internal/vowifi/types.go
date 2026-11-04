@@ -135,6 +135,7 @@ func (state State) clone() State {
 // HomeMCC and HomeMNC must be supplied by the SIM reader; the orchestrator does
 // not guess MNC length or a phone number from IMSI.
 type SIMIdentity struct {
+	DeviceID        string
 	ICCID           string
 	IMSI            string
 	ProvisionedIMSI string
@@ -195,6 +196,11 @@ type RadioSnapshot struct {
 	CellularDataEnabled bool
 	OperatingMode       int
 	PureAirplanePolicy  bool
+	// ICCID and DeviceGeneration bind radio restoration evidence to the exact
+	// SIM and USB enumeration that produced it. Adapters without hardware
+	// generations may leave DeviceGeneration empty.
+	ICCID            string
+	DeviceGeneration string
 }
 
 type ProxyMode string

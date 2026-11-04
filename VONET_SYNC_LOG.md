@@ -1324,3 +1324,48 @@ Ultra Mobile (ipcc-ultramint-mobile-310026):
 - `git diff --check` 通过。
 
 本次仅完成本地同步和记录更新，不提交、不推送 GitHub。
+
+---
+
+## 2026-11-04 同步上游 849c362 → 384a447（5 个提交）
+
+**提交列表**:
+
+| # | Commit | 描述 | 同步重点 |
+|---|--------|------|----------|
+| 1 | 849c362 | feat(device): add AT-backed cellular host data with policy-routed leases | AT PDP、udhcpc lease、fwmark 路由、AT/QMI 切换和恢复 |
+| 2 | 9e87021 | feat(vowifi): add hardened ZXIC AT adapter support | 共享 AT core、ZXIC dialect、CLCC capability |
+| 3 | 4ad7662 | feat(auth): add SSO foundation and enforce JWKS key operations | OIDC/OAuth2、JWKS `key_ops`、SSO store |
+| 4 | fb59ba6 | feat(auth): add SSO login and settings integration | SSO 登录、管理员身份绑定、设置页和浏览器测试 |
+| 5 | 384a447 | fix(sso): patch JOSE security alerts and clarify redirect guards | go-jose 4.1.7、JWKS/redirect 安全修复 |
+
+**同步与兼容处理**:
+
+- AT host data 使用前台 BusyBox `udhcpc`、60 秒首次租约和受保护的 IPv4/DNS/fwmark 路由；续租保持 rule，清理按 interface owner 执行。
+- `SetNetwork` 先探测并停用活动 PDP，再配置 PDP；AT/QMI backend、ICCID、physicalID 或 generation 变化会关闭旧 session 并创建新 generation。
+- Stop、设备发现、radio reset、eSIM/profile reset、MBN 选择和 developer cleanup 统一调用双后端清理；MBN 变更前必须先释放 host/QMI session。
+- 共享 AT core 保留 `PureAirplanePolicy`、`HomePLMN`、`RestoreCellularData=false`、ISIM strict、typed `ExecuteAPDU` 和 EC20 错误别名。
+- ZXIC 仅对验证过的 `19d2:0536` 启用；adapter binding/checkpoint 使用 deviceID、USB generation 和 ICCID 隔离，操作期间固定 physical ID/generation。
+- `SupportsCLCC` 接入网页通话、来电轮询和 Telegram 操作；不支持 CLCC 的 ZXIC 不会重复占用控制通道。
+- SSO 使用 VoNet migration 34/schema 34，保留 migration 33 的 API Token 和全部本地表。`go-jose` 固定为 4.1.7。
+- SSO 默认不改变密码登录；只有配置并绑定外部身份后才可登录。SSO 设置只接受浏览器 Session + CSRF，Bearer/API Token 不能管理。
+- 共享 redirect 向量同时约束 Go 和前端；拒绝 `//`、`/\`、编码歧义、控制字符和递归登录路径。
+- 凭据 epoch 阻止管理员重置/更新撤销后迟到的 Session/API Token 写入；更新撤销同时清理 Session、API Token 和 pending SSO flow。
+- 前端只增量加入 SSOCard、登录按钮、ZXIC 类型和安全 redirect，保留 VoNet 重构 UI、全局来电弹窗和 SMS 限流“大于等于 1”规则。
+
+**部署要求**:
+
+- AT host data 需要 Linux、iproute2、BusyBox `udhcpc`、接口独占和 IPv4；Docker/systemd 需要相应网络权限。
+- SSO 生产部署需要可信 HTTPS IdP、精确 `PublicOrigin`、`VONET_SECURE_COOKIES=true` 和根路径回调。
+- schema 34 升级前备份 SQLite、WAL/SHM、TLS、插件和 `/etc/vonet/env`；恢复备份后必须撤销旧凭据并清理 pending flow。
+- `docker-compose.sso-test.yml`、SSO CI、Playwright 1.64.1、两份 lockfile 和忽略规则已同步为 VoNet 命名。
+
+**验证**:
+
+- `go test ./...` 通过。
+- `npm test`：47/47 通过。
+- `npm run test:e2e`：7/7 通过；`docker compose -f docker-compose.sso-test.yml config` 通过。
+- `npm run build`、`go vet ./...`、Linux amd64/arm64/armv7 交叉编译通过。
+- `git diff --check` 通过。
+
+本次仅完成本地同步和记录更新，不提交、不推送 GitHub。

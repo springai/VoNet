@@ -96,6 +96,13 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request, config stor
 		}})
 		return true
 	}
+	// Some ZXIC firmware rejects AT+CLCC with a vendor "command not
+	// recognized" result. Report that capability without touching the modem.
+	if !s.supportsCLCC(r.Context(), physicalID) {
+		writeError(w, http.StatusNotImplemented, "clcc_unsupported",
+			"this modem firmware does not implement the call list query (AT+CLCC)")
+		return true
+	}
 	response, err := s.devices.ExecuteAT(r.Context(), physicalID, "AT+CLCC")
 	if err != nil {
 		s.writeDeviceError(w, err)
@@ -351,6 +358,20 @@ func (s *Server) hangupVoWiFiAfter(deviceID, callID string, duration time.Durati
 	if err := controller.HangupCall(ctx, deviceID, callID); err != nil {
 		s.logger.Warn("automatic VoWiFi call hangup failed", "device_id", deviceID, "call_id", callID, "error", err)
 	}
+}
+
+// supportsCLCC consults the controller's chipset capability when available.
+// Controllers without the capability retain historical polling, and provider
+// errors fall back to the modem's own answer.
+func (s *Server) supportsCLCC(ctx context.Context, deviceID string) bool {
+	capability, ok := s.devices.(interface {
+		SupportsCLCC(context.Context, string) (bool, error)
+	})
+	if !ok {
+		return true
+	}
+	supported, err := capability.SupportsCLCC(ctx, deviceID)
+	return err != nil || supported
 }
 
 func (s *Server) callTransport(deviceID string) string {

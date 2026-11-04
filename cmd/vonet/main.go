@@ -364,6 +364,11 @@ func main() {
 			logger.Error("token command failed", "error", err)
 			os.Exit(1)
 		}
+	case "auth-cleanup":
+		if err := runAuthCleanup(rest, os.Stdout); err != nil {
+			logger.Error("auth cleanup failed", "error", err)
+			os.Exit(1)
+		}
 	case "update":
 		if err := update.Run(logger, rest); err != nil {
 			logger.Error("update failed", "error", err)
@@ -679,6 +684,7 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 		return nil
 	}
 	go handler.StartLogRetentionLoop(pollContext, time.Minute)
+	handler.StartSSOCleanup(pollContext)
 	go handler.StartSMSSyncLoop(pollContext, 15*time.Second)
 	handler.StartCellularDataReconciler(pollContext)
 	handler.StartTelegramBot(pollContext)
@@ -692,9 +698,11 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 			Handler:           handler,
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       15 * time.Second,
-			WriteTimeout:      30 * time.Second,
-			IdleTimeout:       90 * time.Second,
-			MaxHeaderBytes:    1 << 20,
+			// SSO provider verification has a 30-second budget and still needs
+			// time to return a controlled callback or settings error.
+			WriteTimeout:   40 * time.Second,
+			IdleTimeout:    90 * time.Second,
+			MaxHeaderBytes: 1 << 20,
 		}
 	}
 	plainHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1008,7 +1016,7 @@ func configureVoWiFiRuntime(
 		Store:   database,
 		Devices: deviceManager,
 	}
-	ec20Adapter, err := vowifi.NewEC20Adapter(mapper, vowifi.EC20AdapterOptions{
+	atAdapterOptions := vowifi.ATModemAdapterOptions{
 		// The test deployment is deliberately non-cellular. VoWiFi teardown
 		// may restore CFUN, but it must never reactivate a PDP context.
 		RestoreCellularData: false,
@@ -1019,7 +1027,15 @@ func configureVoWiFiRuntime(
 			deviceConfig, configErr := database.Device(context.Background(), deviceID)
 			return configErr == nil && deviceConfig.VoWiFiEnabled
 		},
-	})
+		HomePLMN: func(_ string, iccid, _ string) (string, string, bool) {
+			return vowifi.HomePLMNFromICCID(iccid)
+		},
+	}
+	ec20Adapter, err := vowifi.NewEC20Adapter(mapper, atAdapterOptions)
+	if err != nil {
+		return nil, err
+	}
+	zxicAdapter, err := vowifi.NewZXICAdapter(mapper, atAdapterOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -1068,12 +1084,51 @@ func configureVoWiFiRuntime(
 			// (e.g. EC20 to card reader) reusing the same device ID, the DB
 			// still holds the old DeviceType. The live HardwareKind reflects
 			// the currently connected hardware.
-			adapter := vowifiDeviceAdapter(ec20Adapter)
+			adapter := voWiFiAdapterForDevice(
+				deviceConfig.DeviceType,
+				func(lookupContext context.Context) (device.Device, error) {
+					physicalID, resolveErr := integration.ResolvePhysicalID(
+						lookupContext,
+						database,
+						deviceManager,
+						deviceConfig.ID,
+					)
+					if resolveErr != nil {
+						return device.Device{}, resolveErr
+					}
+					return deviceManager.Get(physicalID)
+				},
+				ec20Adapter,
+				zxicAdapter,
+				pcscLeaseAdapter,
+				nativeQMIAdapter,
+			)
 			hardwareKind := deviceManager.HardwareKindFor(deviceID)
 			if hardwareKind == pcsc.HardwareKind || (hardwareKind == "" && deviceConfig.DeviceType == store.DeviceTypeUSBSIMReader) {
 				adapter = pcscLeaseAdapter
-			} else if deviceConfig.DeviceType == store.DeviceTypeWiFi410 {
+			} else if hardwareKind == "wwan" ||
+				(hardwareKind == "" && deviceConfig.DeviceType == store.DeviceTypeWiFi410) {
 				adapter = nativeQMIAdapter
+			} else if hardwareKind != "" &&
+				(deviceConfig.DeviceType == store.DeviceTypeUSBSIMReader ||
+					deviceConfig.DeviceType == store.DeviceTypeWiFi410) {
+				adapter = newResolvedATVoWiFiAdapter(
+					deviceConfig.DeviceType,
+					func(lookupContext context.Context) (device.Device, error) {
+						physicalID, resolveErr := integration.ResolvePhysicalID(
+							lookupContext,
+							database,
+							deviceManager,
+							deviceConfig.ID,
+						)
+						if resolveErr != nil {
+							return device.Device{}, resolveErr
+						}
+						return deviceManager.Get(physicalID)
+					},
+					ec20Adapter,
+					zxicAdapter,
+				)
 			}
 			return newVoWiFiOrchestrator(factoryContext, deviceConfig, database, adapter, logger, onIncomingCall)
 		},
@@ -1537,6 +1592,9 @@ func provisionDiscoveredDevices(
 }
 
 func provisionedDeviceType(candidate modem.Candidate) string {
+	if modem.ChipsetForUSB(candidate.VendorID, candidate.ProductID) == modem.ChipsetZXIC {
+		return store.DeviceTypeZXIC
+	}
 	if modem.IsML307(candidate) {
 		return store.DeviceTypeML307
 	}

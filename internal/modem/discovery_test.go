@@ -729,11 +729,67 @@ func TestSysFSDiscoveryWWANWithATPortHasNoDiscoveryIssue(t *testing.T) {
 		t.Fatalf("got %d candidates, want 1", len(candidates))
 	}
 	candidate := candidates[0]
+	if candidate.ID != "mhi-wwan0" {
+		t.Fatalf("candidate ID = %q, want mhi-wwan0", candidate.ID)
+	}
 	if candidate.DiscoveryIssue != "" {
 		t.Fatalf("discovery issue = %q, want empty", candidate.DiscoveryIssue)
 	}
 	if !candidate.HasATPort() {
 		t.Fatal("candidate must have an AT port")
+	}
+}
+
+func TestReadIMEIFromATAcceptsResponseFormats(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		response string
+	}{
+		{name: "CGSN", response: "+CGSN: 867123456789012\r\nOK\r\n"},
+		{name: "GSN", response: "+GSN: 867123456789012\r\nOK\r\n"},
+		{name: "bare", response: "867123456789012\r\nOK\r\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			transport := &transcriptTransport{steps: []transportStep{{
+				write:  "AT+CGSN\r",
+				chunks: []string{test.response},
+			}}}
+			originalOpen := openIMEISerialTransport
+			openIMEISerialTransport = func(path string, baudRate int) (Transport, error) {
+				if path != "fixture-at" || baudRate != 115200 {
+					t.Fatalf("open args = (%q, %d)", path, baudRate)
+				}
+				return transport, nil
+			}
+			t.Cleanup(func() { openIMEISerialTransport = originalOpen })
+
+			if got := ReadIMEIFromAT("fixture-at"); got != "867123456789012" {
+				t.Fatalf("IMEI = %q", got)
+			}
+		})
+	}
+}
+
+func TestReadIMEIFromATRejectsInvalidIMEI(t *testing.T) {
+	for _, response := range []string{
+		"+CGSN: 86712345678901X\r\nOK\r\n",
+		"+GSN: 123\r\nOK\r\n",
+		"867123456789012345\r\nOK\r\n",
+		"\r\nOK\r\n",
+	} {
+		transport := &transcriptTransport{steps: []transportStep{{
+			write:  "AT+CGSN\r",
+			chunks: []string{response},
+		}}}
+		originalOpen := openIMEISerialTransport
+		openIMEISerialTransport = func(string, int) (Transport, error) {
+			return transport, nil
+		}
+		got := ReadIMEIFromAT("fixture-at")
+		openIMEISerialTransport = originalOpen
+		if got != "" {
+			t.Fatalf("ReadIMEIFromAT(%q) = %q, want empty", response, got)
+		}
 	}
 }
 

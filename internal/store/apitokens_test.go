@@ -117,6 +117,9 @@ func TestDeleteAllAuthCredentialsRevokesSessionsAndAPITokens(t *testing.T) {
 	if err := database.SetAdmin(ctx, "admin", []byte("hash")); err != nil {
 		t.Fatal(err)
 	}
+	if err := database.SetAdmin(ctx, "admin", []byte("rotated-hash")); err != nil {
+		t.Fatal(err)
+	}
 	sessionHash := []byte("active-session")
 	if err := database.CreateSession(
 		ctx, 1, sessionHash, []byte("csrf"), time.Now().Add(time.Hour),
@@ -125,6 +128,19 @@ func TestDeleteAllAuthCredentialsRevokesSessionsAndAPITokens(t *testing.T) {
 	}
 	tokenHash := []byte("active-api-token")
 	if _, err := database.CreateAPIToken(ctx, "active", tokenHash, true, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.db.ExecContext(ctx, `
+		INSERT INTO sso_flows (
+			id, state_hash, browser_token_hash, purpose, provider_instance_id,
+			config_revision, pkce_verifier, redirect_uri, return_path,
+			created_at, expires_at
+		) VALUES (
+			'restored-flow', randomblob(32), randomblob(32), 'login', 'restored-provider',
+			1, '', 'https://vonet.example/api/auth/sso/callback', '/',
+			1, 4102444800
+		)
+	`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -136,5 +152,44 @@ func TestDeleteAllAuthCredentialsRevokesSessionsAndAPITokens(t *testing.T) {
 	}
 	if _, err := database.APITokenByHash(ctx, tokenHash); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("API token survived auth revocation: %v", err)
+	}
+	var flowCount int
+	if err := database.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sso_flows").Scan(&flowCount); err != nil {
+		t.Fatal(err)
+	}
+	if flowCount != 0 {
+		t.Fatalf("pending SSO flows survived auth revocation: %d", flowCount)
+	}
+}
+
+func TestCredentialEpochRejectsLateSessionAndTokenWrites(t *testing.T) {
+	ctx := context.Background()
+	database := newTokenStore(t)
+	if err := database.SetAdmin(ctx, "admin", []byte("hash")); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetAdmin(ctx, "admin", []byte("rotated-hash")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a request that read epoch 0 before SetAdmin committed epoch 1.
+	if _, err := database.db.ExecContext(ctx, `
+		INSERT INTO api_tokens (name, token_hash, read_only, expires_at, created_at, last_used_at, credential_epoch)
+		VALUES ('late-token', X'11', 0, 0, 1, 0, 0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.db.ExecContext(ctx, `
+		INSERT INTO sessions (token_hash, admin_id, csrf_hash, expires_at, created_at, credential_epoch)
+		VALUES (X'22', 1, X'33', 4102444800, 1, 0)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := database.APITokenByHash(ctx, []byte{0x11}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("late API token authenticated: %v", err)
+	}
+	if _, err := database.SessionByTokenHash(ctx, []byte{0x22}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("late session authenticated: %v", err)
 	}
 }

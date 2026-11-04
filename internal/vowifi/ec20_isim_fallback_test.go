@@ -47,7 +47,7 @@ func (s *isimFallbackTranscript) ExecuteAPDU(
 func TestEC20ISIMStrictDiscoveryAndTransport(t *testing.T) {
 	const fullISIM = "A0000000871004FFFFFFFF8903020000"
 	const fullUSIM = "A0000000871002FFFFFFFF8903020000"
-	identity := SIMIdentity{ICCID: "8901000000000000001", IMSI: "310280000000001"}
+	identity := SIMIdentity{DeviceID: "ec20-1", ICCID: "8901000000000000001", IMSI: "310280000000001"}
 	for _, test := range []struct {
 		name                                                    string
 		knownBasic, fallback, selectFail, authFail, syncFailure bool
@@ -110,8 +110,8 @@ func TestEC20ISIMStrictDiscoveryAndTransport(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			original := ec20SIMBinding{deviceID: "ec20-1", iccid: identity.ICCID, imsi: identity.IMSI, aid: fullUSIM, application: "USIM", basicChannel: test.knownBasic}
-			adapter.bindings[identity.ICCID] = original
+			original := atSIMBinding{deviceID: "ec20-1", iccid: identity.ICCID, imsi: identity.IMSI, aid: fullUSIM, application: "USIM", basicChannel: test.knownBasic}
+			adapter.bindings[adapter.stateKey(context.Background(), identity.DeviceID, identity.ICCID)] = original
 			for attempt := 0; attempt < attempts; attempt++ {
 				result, err := adapter.AuthenticateWithPreference(context.Background(), identity, AKAChallenge{}, "isim_strict")
 				if test.selectFail {
@@ -126,7 +126,7 @@ func TestEC20ISIMStrictDiscoveryAndTransport(t *testing.T) {
 					t.Fatalf("authentication = %#v, %v", result, err)
 				}
 			}
-			binding, _ := adapter.bindingFor(identity)
+			binding, _ := adapter.bindingFor(context.Background(), identity)
 			if test.selectFail || test.authFail {
 				if binding != original {
 					t.Fatalf("failed authentication changed binding: %#v", binding)

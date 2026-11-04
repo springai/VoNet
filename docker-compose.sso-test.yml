@@ -1,0 +1,40 @@
+# Local web/SSO testing on Docker Desktop or OrbStack, without modem devices.
+# Build: docker compose -f docker-compose.sso-test.yml build
+# Initialize once (reads the admin password from stdin):
+#   docker compose -f docker-compose.sso-test.yml run --rm -T \
+#     --entrypoint /opt/vonet/bin/vonet vonet bootstrap-admin
+# Start: docker compose -f docker-compose.sso-test.yml up -d --wait
+# Visit http://127.0.0.1:7575 and use that same origin in SSO settings.
+name: vonet-sso-test
+
+services:
+  vonet:
+    image: vonet:sso-dev
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: 0.1.0-sso-dev
+    container_name: vonet-sso-test
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7575:7575"
+    environment:
+      VONET_CONTAINER: docker
+      VONET_ADDR: 0.0.0.0:7575
+      VONET_DATABASE_PATH: /opt/vonet/data/vonet.db
+      VONET_SECURE_COOKIES: "false"
+      TZ: Asia/Shanghai
+    volumes:
+      - vonet-sso-test-data:/opt/vonet/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7575/readyz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 60s
+      retries: 3
+
+volumes:
+  vonet-sso-test-data:
+    name: vonet-sso-test-data

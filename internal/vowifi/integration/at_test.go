@@ -110,7 +110,7 @@ func TestATMapperExecuteAPDU(t *testing.T) {
 	database := testStore(t)
 	if err := database.UpsertDevice(context.Background(), store.Device{
 		ID:     "living-room",
-		Name:   "UZ901",
+		Name:   "ZXIC",
 		ATPort: "/dev/serial/by-id/usb-zxic-if02",
 	}); err != nil {
 		t.Fatal(err)
@@ -135,6 +135,63 @@ func TestATMapperExecuteAPDU(t *testing.T) {
 	}
 	if string(response) != string([]byte{0x90, 0x00}) {
 		t.Fatalf("ExecuteAPDU response = %X", response)
+	}
+}
+
+func TestATMapperOperationPinsPhysicalIDAndUSBGeneration(t *testing.T) {
+	database := testStore(t)
+	if err := database.UpsertDevice(context.Background(), store.Device{
+		ID:     "living-room",
+		Name:   "ZXIC",
+		ATPort: "/dev/serial/by-id/usb-zxic-if02",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	devices := &fakeATDevices{entries: []device.Device{{
+		ID:         "physical-generation-1",
+		Discovered: true,
+		Candidate: modem.Candidate{
+			USBGeneration: "usb-generation-1",
+			ATPort: modem.Port{
+				Path:       "/dev/ttyUSB2",
+				StablePath: "/dev/serial/by-id/usb-zxic-if02",
+			},
+		},
+	}}}
+	mapper := ATMapper{Store: database, Devices: devices}
+	ctx, physicalID, generation, done, err := mapper.BeginATOperation(
+		context.Background(),
+		"living-room",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	if physicalID != "physical-generation-1" || generation != "usb-generation-1" {
+		t.Fatalf("operation identity = %q/%q", physicalID, generation)
+	}
+
+	// Simulate USB re-enumeration after the operation began. The operation
+	// must continue using the pinned physical modem.
+	devices.entries[0].ID = "physical-generation-2"
+	devices.entries[0].Candidate.USBGeneration = "usb-generation-2"
+	if _, err := mapper.ExecuteAT(ctx, "living-room", "AT"); err != nil {
+		t.Fatal(err)
+	}
+	if devices.executedID != "physical-generation-1" {
+		t.Fatalf("ExecuteAT escaped the pinned operation: %q", devices.executedID)
+	}
+	if _, err := mapper.ExecuteAPDU(
+		ctx,
+		"living-room",
+		modem.APDUCGLA,
+		2,
+		[]byte{0x00, 0x88},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if devices.apduID != "physical-generation-1" {
+		t.Fatalf("ExecuteAPDU escaped the pinned operation: %q", devices.apduID)
 	}
 }
 

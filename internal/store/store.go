@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 33
+const schemaVersion = 34
 
 var ErrNotFound = errors.New("store: not found")
 
@@ -31,19 +31,23 @@ type Store struct {
 }
 
 type Admin struct {
-	ID           int64
-	Username     string
-	PasswordHash []byte
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID              int64
+	Username        string
+	PasswordHash    []byte
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	CredentialEpoch int64
 }
 
 type Session struct {
-	TokenHash []byte
-	CSRFHash  []byte
-	ExpiresAt time.Time
-	CreatedAt time.Time
-	Admin     Admin
+	TokenHash       []byte
+	CSRFHash        []byte
+	ExpiresAt       time.Time
+	CreatedAt       time.Time
+	LoginMethod     string
+	SSOBindingID    string
+	CredentialEpoch int64
+	Admin           Admin
 }
 
 // Open creates the parent directory, opens SQLite, applies safety pragmas and
@@ -86,6 +90,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		}
 	}
 	s := &Store{db: db}
+	if err := s.DeleteExpiredSSOFlows(ctx, time.Now()); err != nil {
+		return closeOnError(err)
+	}
 	// Captured before this process can save an SMS; see StartupSMSMessageID.
 	if s.startupSMSID, err = s.LatestSMSMessageID(ctx); err != nil {
 		return closeOnError(err)
@@ -140,7 +147,8 @@ func migrate(ctx context.Context, db *sql.DB) error {
 					(nextVersion == 19 && strings.Contains(statement, "ADD COLUMN")) ||
 					(nextVersion == 23 && strings.Contains(statement, "ADD COLUMN")) ||
 					(nextVersion == 25 && strings.Contains(statement, "ADD COLUMN mbn_profile")) ||
-					(nextVersion == 31 && strings.Contains(statement, "ADD COLUMN revert_profile"))
+					(nextVersion == 31 && strings.Contains(statement, "ADD COLUMN revert_profile")) ||
+					(nextVersion == 34 && strings.Contains(statement, "ADD COLUMN"))
 				if duplicateAdditiveColumn && strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 					continue
 				}
@@ -189,7 +197,7 @@ func (s *Store) Ready(ctx context.Context) error {
 
 func (s *Store) CurrentAdmin(ctx context.Context) (Admin, error) {
 	return scanAdmin(s.db.QueryRowContext(ctx, `
-		SELECT id, username, password_hash, created_at, updated_at
+		SELECT id, username, password_hash, created_at, updated_at, credential_epoch
 		FROM admins
 		WHERE id = 1
 	`))
@@ -197,7 +205,7 @@ func (s *Store) CurrentAdmin(ctx context.Context) (Admin, error) {
 
 func (s *Store) AdminByUsername(ctx context.Context, username string) (Admin, error) {
 	return scanAdmin(s.db.QueryRowContext(ctx, `
-		SELECT id, username, password_hash, created_at, updated_at
+		SELECT id, username, password_hash, created_at, updated_at, credential_epoch
 		FROM admins
 		WHERE username = ?
 	`, username))
@@ -217,6 +225,7 @@ func scanAdmin(row rowScanner) (Admin, error) {
 		&admin.PasswordHash,
 		&createdAt,
 		&updatedAt,
+		&admin.CredentialEpoch,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Admin{}, ErrNotFound
@@ -240,12 +249,13 @@ func (s *Store) SetAdmin(ctx context.Context, username string, passwordHash []by
 
 	now := time.Now().UTC().Unix()
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO admins (id, username, password_hash, created_at, updated_at)
-		VALUES (1, ?, ?, ?, ?)
+		INSERT INTO admins (id, username, password_hash, created_at, updated_at, credential_epoch)
+		VALUES (1, ?, ?, ?, ?, 0)
 		ON CONFLICT(id) DO UPDATE SET
 			username = excluded.username,
 			password_hash = excluded.password_hash,
-			updated_at = excluded.updated_at
+			updated_at = excluded.updated_at,
+			credential_epoch = admins.credential_epoch + 1
 	`, username, passwordHash, now, now)
 	if err != nil {
 		return fmt.Errorf("set admin: %w", err)
@@ -255,6 +265,9 @@ func (s *Store) SetAdmin(ctx context.Context, username string, passwordHash []by
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM api_tokens"); err != nil {
 		return fmt.Errorf("revoke api tokens after admin update: %w", err)
+	}
+	if err := invalidateSSOAfterAdminUpdate(ctx, tx); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit admin update: %w", err)
@@ -283,6 +296,12 @@ func (s *Store) DeleteAllAuthCredentials(ctx context.Context) error {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM api_tokens"); err != nil {
 		return fmt.Errorf("delete all api tokens: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, "UPDATE admins SET credential_epoch = credential_epoch + 1 WHERE id = 1"); err != nil {
+		return fmt.Errorf("advance credential epoch: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM sso_flows"); err != nil {
+		return fmt.Errorf("delete all sso flows: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit auth credential revocation: %w", err)
 	}
@@ -297,10 +316,14 @@ func (s *Store) CreateSession(
 	expiresAt time.Time,
 ) error {
 	now := time.Now().UTC().Unix()
+	var credentialEpoch int64
+	if err := s.db.QueryRowContext(ctx, "SELECT credential_epoch FROM admins WHERE id = 1").Scan(&credentialEpoch); err != nil {
+		return fmt.Errorf("read credential epoch: %w", err)
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO sessions (token_hash, admin_id, csrf_hash, expires_at, created_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, tokenHash, adminID, csrfHash, expiresAt.UTC().Unix(), now)
+		INSERT INTO sessions (token_hash, admin_id, csrf_hash, expires_at, created_at, credential_epoch)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, tokenHash, adminID, csrfHash, expiresAt.UTC().Unix(), now, credentialEpoch)
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
@@ -319,22 +342,30 @@ func (s *Store) SessionByTokenHash(ctx context.Context, tokenHash []byte) (Sessi
 			s.csrf_hash,
 			s.expires_at,
 			s.created_at,
+			s.login_method,
+			COALESCE(s.sso_binding_id, ''),
+			s.credential_epoch,
 			a.id,
 			a.username,
 			a.created_at,
-			a.updated_at
+			a.updated_at,
+			a.credential_epoch
 		FROM sessions s
 		JOIN admins a ON a.id = s.admin_id
-		WHERE s.token_hash = ?
+		WHERE s.token_hash = ? AND s.credential_epoch = a.credential_epoch
 	`, tokenHash).Scan(
 		&session.TokenHash,
 		&session.CSRFHash,
 		&expiresAt,
 		&createdAt,
+		&session.LoginMethod,
+		&session.SSOBindingID,
+		&session.CredentialEpoch,
 		&session.Admin.ID,
 		&session.Admin.Username,
 		&adminCreatedAt,
 		&adminUpdatedAt,
+		&session.Admin.CredentialEpoch,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrNotFound

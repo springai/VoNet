@@ -26,8 +26,19 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready"})
 		return
 	}
+	if s.sso != nil && !s.sso.CleanupHealth().Healthy {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status": "degraded",
+			"reason": "sso_cleanup",
+		})
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ready"})
+	response := map[string]any{"status": "ready"}
+	if s.sso != nil {
+		response["sso_cleanup_healthy"] = s.sso.CleanupHealth().Healthy
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // handleMetrics exposes only process-level, non-identifying Prometheus data.
@@ -43,10 +54,15 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		ready = 1
 	}
 	cancel()
+	ssoCleanupHealthy := 0
+	if s.sso == nil || s.sso.CleanupHealth().Healthy {
+		ssoCleanupHealthy = 1
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	fmt.Fprint(w, "# HELP vonet_up Whether the process is running.\n# TYPE vonet_up gauge\nvonet_up 1\n")
 	fmt.Fprintf(w, "# HELP vonet_ready Whether the database is ready.\n# TYPE vonet_ready gauge\nvonet_ready %d\n", ready)
+	fmt.Fprintf(w, "# HELP vonet_sso_cleanup_healthy Whether the most recent SSO flow cleanup succeeded.\n# TYPE vonet_sso_cleanup_healthy gauge\nvonet_sso_cleanup_healthy %d\n", ssoCleanupHealthy)
 	fmt.Fprintf(w, "# HELP vonet_uptime_seconds Process uptime.\n# TYPE vonet_uptime_seconds counter\nvonet_uptime_seconds %.0f\n", time.Since(s.startedAt).Seconds())
 	fmt.Fprintf(w, "# HELP vonet_go_goroutines Current Go goroutines.\n# TYPE vonet_go_goroutines gauge\nvonet_go_goroutines %d\n", runtime.NumGoroutine())
 }

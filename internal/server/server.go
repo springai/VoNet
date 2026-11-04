@@ -24,6 +24,7 @@ import (
 	"vonet/internal/httpsmode"
 	"vonet/internal/loghub"
 	"vonet/internal/nodeadapter"
+	"vonet/internal/sso"
 	"vonet/internal/store"
 	"vonet/internal/update"
 	"vonet/internal/vowifi"
@@ -55,45 +56,49 @@ type Options struct {
 	// MCP, when set, mounts the MCP Streamable HTTP endpoint at /mcp behind
 	// bearer-token authentication. nil keeps the endpoint off.
 	MCP *MCPHandlers
+	// SSO optionally injects a flow service for protocol and browser tests.
+	SSO *sso.Service
 }
 
 // Server is the single HTTP handler for the JSON API and embedded SPA.
 type Server struct {
-	store                     *store.Store
-	auth                      *auth.Service
-	devices                   DeviceController
-	vowifi                    VoWiFiController
-	ussdSessions              ussdSessionStore
-	logs                      *loghub.Hub
-	assets                    fs.FS
-	indexHTML                 []byte
-	fileServer                http.Handler
-	logger                    *slog.Logger
-	secureCookies             bool
-	maxRequestBodyBytes       int64
-	startedAt                 time.Time
-	handler                   http.Handler
-	e911Sessions              *e911SessionManager
-	accessMu                  sync.RWMutex
-	access                    parsedAccessConfig
-	loginLimiter              *loginRateLimiter
-	extensions                *extensions.Manager
-	exportProxy               *exportproxy.Manager
-	nodeAdapter               *nodeadapter.Service
-	developerEnabled          bool
-	updateRepository          string
-	updateToken               string
-	updateCheck               func(context.Context, string, string, string) (update.CheckResult, error)
-	updateApply               func(context.Context, *slog.Logger, update.Options, bool) (update.CheckResult, error)
-	updateRestart             func(*slog.Logger) error
-	updateMu                  sync.Mutex
-	updateApplying            bool
-	https                     *httpsmode.Manager
-	mcp                       *MCPHandlers
-	netTraffic                *liveNetTracker
+	store               *store.Store
+	auth                *auth.Service
+	sso                 *sso.Service
+	ssoLimiter          *ssoRateLimiter
+	devices             DeviceController
+	vowifi              VoWiFiController
+	ussdSessions        ussdSessionStore
+	logs                *loghub.Hub
+	assets              fs.FS
+	indexHTML           []byte
+	fileServer          http.Handler
+	logger              *slog.Logger
+	secureCookies       bool
+	maxRequestBodyBytes int64
+	startedAt           time.Time
+	handler             http.Handler
+	e911Sessions        *e911SessionManager
+	accessMu            sync.RWMutex
+	access              parsedAccessConfig
+	loginLimiter        *loginRateLimiter
+	extensions          *extensions.Manager
+	exportProxy         *exportproxy.Manager
+	nodeAdapter         *nodeadapter.Service
+	developerEnabled    bool
+	updateRepository    string
+	updateToken         string
+	updateCheck         func(context.Context, string, string, string) (update.CheckResult, error)
+	updateApply         func(context.Context, *slog.Logger, update.Options, bool) (update.CheckResult, error)
+	updateRestart       func(*slog.Logger) error
+	updateMu            sync.Mutex
+	updateApplying      bool
+	https               *httpsmode.Manager
+	mcp                 *MCPHandlers
+	netTraffic          *liveNetTracker
 	// usbPathConflicts tracks devices that have USBPath conflicts.
 	// Key: device ID, Value: true if device has a conflict
-	usbPathConflicts         map[string]bool
+	usbPathConflicts          map[string]bool
 	hostStats                 *hostStatsSampler
 	publicIPMu                sync.RWMutex
 	publicIPs                 map[string]cachedPublicIP
@@ -137,6 +142,8 @@ func New(options Options) (*Server, error) {
 	server := &Server{
 		store:               options.Store,
 		auth:                options.Auth,
+		sso:                 options.SSO,
+		ssoLimiter:          newSSORateLimiter(),
 		devices:             options.Devices,
 		vowifi:              options.VoWiFi,
 		ussdSessions:        newUSSDSessionStore(),
@@ -166,7 +173,13 @@ func New(options Options) (*Server, error) {
 		updateCheck:         update.CheckLatest,
 		updateApply:         update.ApplyLatest,
 		updateRestart:       update.RestartService,
-		usbPathConflicts:   make(map[string]bool),
+		usbPathConflicts:    make(map[string]bool),
+	}
+	if server.sso == nil {
+		server.sso = sso.New(options.Store, sso.Options{Logger: options.Logger})
+	}
+	if err := server.sso.Cleanup(context.Background()); err != nil {
+		return nil, fmt.Errorf("server: clean expired SSO flows: %w", err)
 	}
 	server.cellularDataRuntime()
 	server.loadAccessConfig(context.Background())
@@ -181,6 +194,13 @@ func New(options Options) (*Server, error) {
 	mux.HandleFunc("/api/auth/login", server.handleLogin)
 	mux.HandleFunc("/api/auth/session", server.handleSession)
 	mux.HandleFunc("/api/auth/logout", server.handleLogout)
+	mux.HandleFunc("/api/auth/providers", server.handleAuthProviders)
+	mux.HandleFunc("/api/auth/sso/start", server.handleSSOStart)
+	mux.HandleFunc("/api/auth/sso/callback", server.handleSSOCallback)
+	mux.HandleFunc("/api/auth/sso/bind", server.handleSSOBind)
+	mux.HandleFunc("/api/auth/sso/binding", server.handleSSOUnbind)
+	mux.HandleFunc("/api/settings/sso", server.handleSSOSettings)
+	mux.HandleFunc("/api/settings/sso/check", server.handleSSOCheck)
 	mux.HandleFunc("/mcp", server.handleMCP)
 	mux.HandleFunc("/api", server.handleAPI)
 	mux.HandleFunc("/api/", server.handleAPI)

@@ -269,15 +269,17 @@ func IsBaiwangDevice(product string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(product)), "baiwang")
 }
 
-// ReadIMEIFromAT opens the given AT serial port, sends AT+CGSN and
-// returns the IMEI string. The port is closed before returning.
-// Returns an empty string (not an error) when the port is unavailable.
+var openIMEISerialTransport = openSerialTransport
+
+// ReadIMEIFromAT opens the given AT serial port, sends AT+CGSN and returns the
+// IMEI string. The port is closed before returning. Returns an empty string
+// (not an error) when the port is unavailable or the response is invalid.
 func ReadIMEIFromAT(atPortPath string) string {
 	atPortPath = strings.TrimSpace(atPortPath)
 	if atPortPath == "" {
 		return ""
 	}
-	transport, err := openSerialTransport(atPortPath, 115200)
+	transport, err := openIMEISerialTransport(atPortPath, 115200)
 	if err != nil {
 		return ""
 	}
@@ -293,22 +295,7 @@ func ReadIMEIFromAT(atPortPath string) string {
 	if err != nil {
 		return ""
 	}
-	// Parse the response: expect "+CGSN: <imei>" or just the raw IMEI.
-	for _, line := range resp.Lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "+CGSN:") {
-			line = strings.TrimPrefix(line, "+CGSN:")
-		} else if strings.HasPrefix(line, "+GSN:") {
-			line = strings.TrimPrefix(line, "+GSN:")
-		} else {
-			continue
-		}
-		line = strings.TrimSpace(line)
-		if len(line) >= 14 && len(line) <= 17 {
-			return line
-		}
-	}
-	return ""
+	return ParseIMEI(resp)
 }
 func IsQuectelUSBModem(vendorID string) bool {
 	return strings.EqualFold(strings.TrimSpace(vendorID), quectelVendorID)
@@ -320,9 +307,9 @@ func IsQuectelUSBModem(vendorID string) bool {
 // model or manufacturer.
 func normalizeUSBIdentity(vendorID, productID, manufacturer, product string) (string, string) {
 	if IsZXICFamily(vendorID, productID) {
-		// ZXIC firmware ships placeholder USB strings; the chipset family is
-		// the only stable identity. The retail model comes from the
-		// platform's +CGMM identity query instead.
+		// ZXIC firmware ships placeholder USB strings; the verified
+		// platform is the only stable identity. The retail model comes from
+		// the platform's +CGMM identity query instead.
 		product = strings.TrimSpace(product)
 		if isUSBIdentityPlaceholder(product) {
 			product = "ZXIC"

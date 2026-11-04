@@ -334,6 +334,10 @@ func (s *Server) pollCellularCalls(ctx context.Context) {
 			continue
 		}
 		pollCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		if !s.supportsCLCC(pollCtx, physicalID) {
+			cancel()
+			continue
+		}
 		response, err := s.devices.ExecuteAT(pollCtx, physicalID, "AT+CLCC")
 		cancel()
 		if err != nil || !response.OK() {

@@ -33,10 +33,16 @@ func (s *Store) CreateAPIToken(
 		expiry = expiresAt.UTC().Unix()
 	}
 	created := time.Now().UTC()
+	var credentialEpoch int64
+	if err := s.db.QueryRowContext(ctx, "SELECT credential_epoch FROM admins WHERE id = 1").Scan(&credentialEpoch); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return APIToken{}, fmt.Errorf("read credential epoch: %w", err)
+		}
+	}
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO api_tokens (name, token_hash, read_only, expires_at, created_at, last_used_at)
-		VALUES (?, ?, ?, ?, ?, 0)
-	`, name, tokenHash, boolToInt(readOnly), expiry, created.Unix())
+		INSERT INTO api_tokens (name, token_hash, read_only, expires_at, created_at, last_used_at, credential_epoch)
+		VALUES (?, ?, ?, ?, ?, 0, ?)
+	`, name, tokenHash, boolToInt(readOnly), expiry, created.Unix(), credentialEpoch)
 	if err != nil {
 		return APIToken{}, fmt.Errorf("create api token: %w", err)
 	}
@@ -91,9 +97,10 @@ func (s *Store) APITokenByName(ctx context.Context, name string) (APIToken, erro
 // credential.
 func (s *Store) APITokenByHash(ctx context.Context, tokenHash []byte) (APIToken, error) {
 	return scanAPIToken(s.db.QueryRowContext(ctx, `
-		SELECT id, name, read_only, expires_at, created_at, last_used_at
-		FROM api_tokens
-		WHERE token_hash = ?
+		SELECT t.id, t.name, t.read_only, t.expires_at, t.created_at, t.last_used_at
+		FROM api_tokens t
+		WHERE t.token_hash = ?
+		  AND t.credential_epoch = COALESCE((SELECT credential_epoch FROM admins WHERE id = 1), 0)
 	`, tokenHash))
 }
 

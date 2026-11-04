@@ -47,7 +47,7 @@ The backend is written in Go, the interface is built with React and TypeScript, 
 | Proxy routing | Upstream SOCKS routing, device bindings, country rules, TCP reachability checks, and UDP Associate checks for WiFi Calling data paths. |
 | Notifications | New inbound SMS forwarding through Telegram, Bark, email, Pushplus, and signed webhooks. Each SMS is delivered as an individual notification. |
 | Telegram bot | Device status, installed-profile listing and switching, WiFi Calling controls, and SMS sending. Sensitive actions require administrator confirmation. |
-| Operations | Authentication, CSRF protection, access policies, audit events, live logs, log retention, health checks, responsive layout, dark mode, and English/Chinese application UI. |
+| Operations | Password and SSO authentication (Pocket ID, GitHub, Generic OAuth2), CSRF protection, access policies, audit events, live logs, log retention, health checks, responsive layout, dark mode, and English/Chinese application UI. |
 | Distribution | Static Linux binaries, systemd installation script, self-update with SHA-256 verification, Docker image, GHCR publishing, and GitHub Actions release builds. |
 
 ## Supported hardware
@@ -267,6 +267,14 @@ Debian/Ubuntu uses `apt install libqmi-utils`; Arch Linux uses
 driver binding or asserting DTR. If the utility is unavailable, the command
 stops with an installation hint and leaves the current device state untouched.
 
+### AT cellular host data
+
+AT-backed ECM/RNDIS data requires Linux, `iproute2`, and BusyBox `udhcpc`.
+VoNet must exclusively manage the modem network interface; disable competing
+DHCP clients and NetworkManager profiles for that interface. VoNet maintains
+an IPv4 DHCP lease and marked policy routes without changing the system
+default route or resolver. This path currently requires IPv4-capable service.
+
 ## Configuration
 
 VoNet reads an optional JSON configuration file from `VONET_CONFIG`, then applies `VONET_*` environment variables. Environment variables take precedence.
@@ -344,6 +352,175 @@ Client configuration (Claude Code as the example):
 
 See [docs/API_MCP_DEVELOPMENT_PLAN.md](docs/API_MCP_DEVELOPMENT_PLAN.md) for
 the design record.
+
+## Single sign-on
+
+The login page can use Pocket ID, GitHub, or a generic OAuth2/OpenID Connect
+provider while password login remains available. SSO stays disabled until a
+provider is configured and its external identity is bound to the single
+administrator.
+
+`PublicOrigin` must contain only the public scheme, host, and optional port.
+The callback is fixed at `/api/auth/sso/callback`. Production deployments must
+use HTTPS and set `VONET_SECURE_COOKIES=true`; HTTP is accepted only for
+loopback development. SSO settings and account binding are browser-session
+operations protected by session-bound CSRF and cannot be managed with API
+tokens or MCP.
+
+The SQLite database stores the provider configuration, binding metadata, and
+a client secret in a setting marked sensitive. Treat database backups and WAL
+files as credential material. Applying a binary update or rotating the
+administrator password revokes sessions, API tokens, and pending SSO flows.
+After restoring a database backup, revoke old credentials and clear pending
+flows before exposing the service again.
+
+### Configure identity providers
+
+In **Settings → Single sign-on (SSO)**, select one provider and follow the
+same lifecycle: save the provider while SSO is disabled, check its
+configuration, bind one external account, and only then enable SSO. Other
+external accounts cannot register or become administrators, including
+accounts that share the bound account's email address.
+
+For Pocket ID:
+
+1. Use an HTTPS root-path origin for VoNet, such as `https://vonet.example.com`,
+   and set `VONET_SECURE_COOKIES=true`. Select **Pocket ID**. The public origin
+   initially uses the browser address; edit **VoNet public origin** when needed.
+   The callback and Copy button are available before credentials are saved:
+   `https://vonet.example.com/api/auth/sso/callback`.
+2. In Pocket ID, create a separate **Confidential** OIDC client for VoNet.
+   Register the exact callback and confirm that the intended user or group may
+   use the client. Give each application its own client and local session.
+3. Enter Pocket ID's exact public `APP_URL` as the Issuer and enter the Client
+   ID and Client Secret issued for that client. VoNet handles scopes and PKCE
+   S256, and selects `client_secret_basic` before `client_secret_post` from
+   validated Discovery metadata. Save while SSO remains disabled.
+4. Check the saved configuration, then bind the account through Pocket ID's
+   Passkey login and consent. The configuration check validates metadata and
+   connectivity; only the real login verifies the secret and user access.
+5. Enable and save SSO, then use a private browser window to verify login,
+   return to the requested page, and complete the first state-changing request.
+
+Issuer matching includes its exact path and trailing slash. Pocket ID binds
+the verified ID Token's `issuer + sub`; UserInfo and email claims are not
+required. Discovery, authorization, token and JWKS endpoints must use the
+configured Issuer origin. A deployment that publishes a different backend
+origin through `INTERNAL_APP_URL` is not supported; keep the public `APP_URL`
+as the Issuer.
+
+For GitHub, create a GitHub.com OAuth App with the same exact callback, select
+**GitHub**, enter its Client ID and Secret, and follow the save, check, bind,
+enable sequence. VoNet uses the fixed GitHub endpoints, defaults to
+`read:user`, requires PKCE S256, and binds the stable numeric account ID.
+GitHub Enterprise is not supported by this preset.
+
+For Generic OAuth2, supply authorization, token and UserInfo URLs in addition
+to client credentials. Configure scopes, the top-level user ID field
+(default `id`), token authentication and PKCE compatibility. UserInfo is
+requested with a Bearer access token; the ID must be a nonempty string or an
+integer, and large integer IDs retain every digit. The defaults are
+`client_secret_post` and PKCE S256. Disable PKCE only for a provider without
+PKCE support. Generic OAuth2 does not perform OIDC ID-token verification.
+
+Changing provider, Client ID, Issuer, or a Generic identity endpoint/user ID
+field creates a new identity namespace. The saved secret is discarded and the
+external binding must be explicitly reset before SSO can be enabled again.
+
+### Network, deployment and TLS
+
+The existing source-network policy also covers all SSO routes. `PublicOrigin`
+is the root-path public origin and is never derived from forwarded Host
+headers. Production requires HTTPS and `VONET_SECURE_COOKIES=true`; HTTP is
+accepted only for loopback development.
+
+The VoNet process must resolve and connect to Discovery, token, JWKS and
+UserInfo endpoints. Every DNS candidate and actual dial address is checked:
+special-use, loopback, link-local, cloud metadata and other privileged
+destinations are rejected. Pocket ID and generic HTTPS endpoints may target
+trusted public or private networks. Generic HTTP token/UserInfo endpoints are
+limited to explicitly configured private backends. GitHub remains public-only.
+
+Private CA certificates must be installed in the host or container trust
+store. There is no TLS verification bypass. A reverse proxy must preserve the
+configured public origin. Root-path deployment is required; VoNet does not
+support publishing SSO beneath a URL prefix and does not derive callback URLs
+from forwarded Host headers.
+
+The supplied Compose deployment uses host networking. Verify DNS, routing and
+CA trust from the actual container instead of assuming bridge-network service
+names are available. For local Vite development, use one consistent loopback
+origin, such as `http://127.0.0.1:5173`, for both the public origin and the
+registered callback. IdP transport exceptions belong only in test fixtures.
+
+### Sessions, CSRF and credentials
+
+Session and CSRF cookies remain `SameSite=Strict`; short-lived SSO flow
+cookies use `SameSite=Lax` for top-level GET callbacks. SSO settings and
+binding operations require a browser session and session-bound CSRF. Bearer
+tokens and MCP cannot manage SSO.
+
+The client secret is stored as a sensitive SQLite setting and is never
+returned to the browser. Third-party access and identity tokens are not
+persisted. Saving or disabling SSO and unbinding an account revoke affected
+SSO sessions; password sessions and API tokens remain valid by policy.
+Changing the administrator password revokes sessions and API tokens, advances
+the credential epoch, cancels pending flows and preserves the external
+binding.
+
+Signing out ends only the current VoNet session. Disabling an account at the
+IdP or signing out of Pocket ID does not immediately revoke an existing VoNet
+session; it expires according to `VONET_SESSION_TTL`, or can be revoked sooner
+by disabling SSO or unbinding the account in VoNet. The public capabilities
+endpoint is `GET /api/auth/providers`.
+
+Configuration revision conflicts return `409 sso_config_changed`; changing an
+identity source returns `409 sso_rebind_required` until the old binding is
+explicitly reset. Existing bindings can also return `409 sso_binding_exists`
+or `409 sso_identity_not_bound` when the requested transition is incomplete.
+
+### Upgrade, backup and rollback
+
+SSO uses VoNet schema 34 while preserving migration 33 API tokens and all
+local business tables. SSO remains disabled until configured and bound.
+Before upgrading, stop the service and back up the complete data directory,
+including SQLite, WAL/SHM, TLS, plugins and `/etc/vonet/env`. A live copy must
+use SQLite's backup API or `.backup`; copying only the main database file is
+not reliable.
+
+After restoring any database backup, run:
+
+```bash
+vonet auth-cleanup --database /opt/vonet/data/vonet.db
+```
+
+This preserves SSO configuration and the external binding, but revokes
+restored sessions and API tokens, advances the credential epoch and removes
+pending SSO flows before the service is exposed. Schema 34 has no automatic
+downgrade; rollback requires restoring the matching pre-upgrade snapshot.
+
+For Docker, update by pulling the image and recreating the container. Before a
+production release, verify the HTTPS root-path callback and secure cookies,
+complete a real Pocket ID Passkey/access-policy test, confirm DNS, routing and
+CA trust from the deployed Compose container, and rehearse the schema 34
+upgrade, `vonet auth-cleanup`, and rollback procedure.
+
+### Cleanup health
+
+VoNet runs SSO flow cleanup at startup and once per minute. When a cleanup run
+fails, `/readyz` returns HTTP `503` with
+`{"status":"degraded","reason":"sso_cleanup"}`, and `/metrics` reports
+`vonet_sso_cleanup_healthy 0`. After a subsequent cleanup succeeds, `/readyz`
+returns HTTP `200` with `"status":"ready"` and `"sso_cleanup_healthy":true`,
+while `/metrics` reports `vonet_sso_cleanup_healthy 1`.
+
+`vonet auth-cleanup` is a standalone operational command for restoring a
+database backup or deliberately retiring restored or stale authentication
+state. It requires users to authenticate again and create new API tokens while
+preserving SSO provider configuration and the external binding, and it emits
+only an aggregate completion result. Keep passwords, session/API token values,
+SSO secrets, and backup/database contents out of logs, support reports and
+health output; `/readyz` and `/metrics` expose aggregate cleanup state only.
 
 ## Telegram bot
 

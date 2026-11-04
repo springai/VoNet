@@ -199,11 +199,12 @@ func newStartedTestManager(
 	opener := &staticOpener{client: client}
 	manager, err := NewManager(Options{
 		Discoverer: staticDiscoverer{candidates: []modem.Candidate{{
-			ID:           id,
-			VendorID:     "2c7c",
-			ProductID:    "0125",
-			Manufacturer: "Quectel",
-			Product:      "EC20",
+			ID:               id,
+			VendorID:         "2c7c",
+			ProductID:        "0125",
+			Manufacturer:     "Quectel",
+			Product:          "EC20",
+			NetworkInterface: "eth-test",
 			ATPort: modem.Port{
 				Path:            "/dev/ttyUSB2",
 				Name:            "ttyUSB2",
@@ -218,6 +219,7 @@ func newStartedTestManager(
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
+	manager.atHostDataLink = fakeATHostDataLink{}
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -225,6 +227,40 @@ func newStartedTestManager(
 		_ = manager.Stop(context.Background())
 	})
 	return manager, id
+}
+
+type fakeATHostDataLink struct {
+	session atHostDataSession
+	err     error
+}
+
+func (link fakeATHostDataLink) Start(context.Context, string) (atHostDataSession, error) {
+	if link.session != nil || link.err != nil {
+		return link.session, link.err
+	}
+	return fakeATHostDataSession{}, nil
+}
+
+type fakeATHostDataSession struct{}
+
+func (fakeATHostDataSession) Status(context.Context) (bool, string, error) {
+	return true, "test host lease ready", nil
+}
+
+func (fakeATHostDataSession) Close(context.Context) error { return nil }
+
+type retryATHostSession struct {
+	failures int
+	closes   int
+}
+
+func (*retryATHostSession) Status(context.Context) (bool, string, error) { return false, "", nil }
+func (session *retryATHostSession) Close(context.Context) error {
+	session.closes++
+	if session.closes <= session.failures {
+		return errors.New("cleanup failed")
+	}
+	return nil
 }
 
 func okResponse(lines ...string) modem.Response {

@@ -29,6 +29,57 @@ type ATMapper struct {
 	Devices ATDeviceController
 }
 
+type resolvedATOperationKey struct{}
+
+type resolvedATOperation struct {
+	configuredID string
+	physicalID   string
+	generation   string
+}
+
+func resolvedOperation(ctx context.Context) (resolvedATOperation, bool) {
+	operation, ok := ctx.Value(resolvedATOperationKey{}).(resolvedATOperation)
+	return operation, ok
+}
+
+// BeginATOperation resolves the configured device once and pins its physical
+// ID and USB generation for the duration of a VoWiFi adapter operation.
+func (mapper ATMapper) BeginATOperation(
+	ctx context.Context,
+	configuredID string,
+) (context.Context, string, string, func(), error) {
+	if operation, ok := resolvedOperation(ctx); ok &&
+		operation.configuredID == strings.TrimSpace(configuredID) {
+		return ctx, operation.physicalID, operation.generation, func() {}, nil
+	}
+	physicalID, err := mapper.resolve(ctx, configuredID)
+	if err != nil {
+		return nil, "", "", nil, err
+	}
+	entry, err := mapper.Devices.Get(physicalID)
+	if err != nil {
+		return nil, "", "", nil, err
+	}
+	operation := resolvedATOperation{
+		configuredID: strings.TrimSpace(configuredID),
+		physicalID:   physicalID,
+		generation:   strings.TrimSpace(entry.Candidate.USBGeneration),
+	}
+	ctx = context.WithValue(ctx, resolvedATOperationKey{}, operation)
+	return ctx, physicalID, operation.generation, func() {}, nil
+}
+
+func (mapper ATMapper) operationPhysicalID(
+	ctx context.Context,
+	configuredID string,
+) (string, error) {
+	if operation, ok := resolvedOperation(ctx); ok &&
+		operation.configuredID == strings.TrimSpace(configuredID) {
+		return operation.physicalID, nil
+	}
+	return mapper.resolve(ctx, configuredID)
+}
+
 type uiccLocker interface {
 	LockUICC()
 	UnlockUICC()
@@ -59,7 +110,7 @@ func (mapper ATMapper) ExecuteAT(
 	configuredID string,
 	command string,
 ) (modem.Response, error) {
-	physicalID, err := mapper.resolve(ctx, configuredID)
+	physicalID, err := mapper.operationPhysicalID(ctx, configuredID)
 	if err != nil {
 		return modem.Response{}, err
 	}
@@ -71,7 +122,7 @@ func (mapper ATMapper) ExecuteSensitiveAT(
 	configuredID string,
 	command string,
 ) (modem.Response, error) {
-	physicalID, err := mapper.resolve(ctx, configuredID)
+	physicalID, err := mapper.operationPhysicalID(ctx, configuredID)
 	if err != nil {
 		return modem.Response{}, err
 	}
@@ -85,7 +136,7 @@ func (mapper ATMapper) ExecuteAPDU(
 	channel int,
 	apdu []byte,
 ) ([]byte, error) {
-	physicalID, err := mapper.resolve(ctx, configuredID)
+	physicalID, err := mapper.operationPhysicalID(ctx, configuredID)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +184,7 @@ func (mapper ATMapper) ReadSMSCenter(ctx context.Context, configuredID string) (
 // identity discovery therefore gains Android-style SPN/GID MVNO selectors
 // without issuing duplicate APDUs on every reconnect.
 func (mapper ATMapper) ReadSIMMetadata(ctx context.Context, configuredID string) (vowifi.SIMMetadata, error) {
-	physicalID, err := mapper.resolve(ctx, configuredID)
+	physicalID, err := mapper.operationPhysicalID(ctx, configuredID)
 	if err != nil {
 		return vowifi.SIMMetadata{}, err
 	}
@@ -159,6 +210,8 @@ type DeviceLister interface {
 // ResolvePhysicalID maps a configured device ID to the live physical device
 // ID using the same scored matching as the AT paths. MCP and other non-HTTP
 // consumers use this so every transport selects the same modem.
+var errAmbiguousPhysicalDevice = errors.New("configured device matches more than one physical device")
+
 func ResolvePhysicalID(
 	ctx context.Context,
 	database *store.Store,
@@ -179,6 +232,7 @@ func ResolvePhysicalID(
 	// two logical devices issuing APDUs to the same SIM.
 	bestID := ""
 	bestScore := 0
+	bestCount := 0
 	for _, entry := range devices.List() {
 		if !entry.Discovered {
 			continue
@@ -187,7 +241,13 @@ func ResolvePhysicalID(
 		if score > bestScore {
 			bestID = entry.ID
 			bestScore = score
+			bestCount = 1
+		} else if score > 0 && score == bestScore {
+			bestCount++
 		}
+	}
+	if bestCount > 1 {
+		return "", errAmbiguousPhysicalDevice
 	}
 	if bestID != "" {
 		return bestID, nil

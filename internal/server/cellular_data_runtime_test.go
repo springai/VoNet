@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"vonet/internal/device"
@@ -48,7 +49,11 @@ func (controller *monitorDeviceController) SetNetwork(_ context.Context, _ strin
 	controller.mu.Lock()
 	controller.setCalls = append(controller.setCalls, request)
 	controller.mu.Unlock()
-	return device.NetworkResult{Enabled: request.Enabled, Backend: "qmi", Interface: "wwan0"}, nil
+	backend := request.Backend
+	if backend == "" {
+		backend = "qmi"
+	}
+	return device.NetworkResult{Enabled: request.Enabled, Backend: backend, Interface: "wwan0"}, nil
 }
 
 func (controller *monitorDeviceController) recordedSetCalls() []device.NetworkRequest {
@@ -133,6 +138,98 @@ func TestCellularDataRuntimeRetriesAndReportsFailure(t *testing.T) {
 	if calls := setter.recordedCalls(); len(calls) != 3 {
 		t.Fatalf("calls = %v, want three attempts", calls)
 	}
+}
+
+func TestCellularDataOperationTimeoutSelectsBackendBudget(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		enabled bool
+		backend string
+		want    time.Duration
+	}{
+		{name: "disable", backend: "at", want: 30 * time.Second},
+		{name: "automatic", enabled: true, want: cellularDataATSetupTimeout},
+		{name: "AT", enabled: true, backend: "AT ", want: cellularDataATSetupTimeout},
+		{name: "QMI", enabled: true, backend: "qmi", want: 75 * time.Second},
+		{name: "QMI case and whitespace", enabled: true, backend: " QMi ", want: 75 * time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := cellularDataOperationTimeout(test.enabled, test.backend); got != test.want {
+				t.Fatalf("timeout = %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestCellularDataRuntimeAllowsSlowATSetupForEmptyAndATBackend(t *testing.T) {
+	for _, backend := range []string{"", "at"} {
+		t.Run("backend="+backend, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				setter := &runtimeNetworkSetter{apply: func(ctx context.Context, _ device.NetworkRequest) (device.NetworkResult, error) {
+					select {
+					case <-time.After(80 * time.Second):
+						return device.NetworkResult{Enabled: true, Backend: "at"}, nil
+					case <-ctx.Done():
+						return device.NetworkResult{}, ctx.Err()
+					}
+				}}
+				runtime := newCellularDataRuntime(setter, nil)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				runtime.start(ctx)
+				request := runtime.request("device", "physical", device.NetworkRequest{Enabled: true, Backend: backend})
+				status, err := runtime.wait(ctx, "device", request.Revision)
+				if err != nil || !status.Connected {
+					t.Fatalf("slow AT setup: status=%+v, err=%v", status, err)
+				}
+			})
+		})
+	}
+}
+
+func TestCellularDataRuntimeQMITimesOutAtExactBoundary(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		setter := &runtimeNetworkSetter{apply: func(ctx context.Context, _ device.NetworkRequest) (device.NetworkResult, error) {
+			<-ctx.Done()
+			return device.NetworkResult{}, ctx.Err()
+		}}
+		runtime := newCellularDataRuntime(setter, nil)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		runtime.start(ctx)
+		started := time.Now()
+		request := runtime.request("device", "physical", device.NetworkRequest{Enabled: true, Backend: "QMI"})
+		_, err := runtime.wait(ctx, "device", request.Revision)
+		if err == nil || time.Since(started) != 75*time.Second {
+			t.Fatalf("QMI setup bound: elapsed=%s, err=%v", time.Since(started), err)
+		}
+	})
+}
+
+func TestCellularDataRuntimeRootCancellationStopsLongATSetup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		setter := &runtimeNetworkSetter{
+			started: make(chan bool, 1),
+			apply: func(ctx context.Context, _ device.NetworkRequest) (device.NetworkResult, error) {
+				<-ctx.Done()
+				return device.NetworkResult{}, ctx.Err()
+			},
+		}
+		runtime := newCellularDataRuntime(setter, nil)
+		ctx, cancel := context.WithCancel(context.Background())
+		runtime.start(ctx)
+		request := runtime.request("device", "physical", device.NetworkRequest{Enabled: true, Backend: "at"})
+		<-setter.started
+		cancel()
+		synctest.Wait()
+		status, err := runtime.wait(context.Background(), "device", request.Revision)
+		if err == nil || status.Connected {
+			t.Fatalf("canceled AT setup: status=%+v, err=%v", status, err)
+		}
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			t.Fatal("runtime context was not canceled")
+		}
+	})
 }
 
 func TestCellularDataRuntimeCallsConnectedCallback(t *testing.T) {
@@ -252,7 +349,7 @@ func TestCellularDataMonitorReconnectsAfterTwoControlPlaneFailures(t *testing.T)
 	}
 }
 
-func TestCellularDataMonitorDoesNotReclaimATBackend(t *testing.T) {
+func TestCellularDataMonitorRecoversATBackendAfterRepeatedFailures(t *testing.T) {
 	ctx := context.Background()
 	database, err := store.Open(ctx, ":memory:")
 	if err != nil {
@@ -270,7 +367,7 @@ func TestCellularDataMonitorDoesNotReclaimATBackend(t *testing.T) {
 			ID: "physical-1", Discovered: true,
 			Snapshot: &device.Snapshot{ICCID: "89441000000000000001", SIMReady: true, PSAttached: true},
 		}},
-		status: device.NetworkStatus{Backend: "qmi", Interface: "wwan0"},
+		status: device.NetworkStatus{Backend: "at", Interface: "wwan0", Detail: "AT host lease is not established"},
 	}
 	server := &Server{store: database, devices: controller, logger: regionTestLogger()}
 	runtime := server.cellularDataRuntime()
@@ -285,7 +382,28 @@ func TestCellularDataMonitorDoesNotReclaimATBackend(t *testing.T) {
 
 	server.monitorCellularDataOnce(ctx)
 	if calls := controller.recordedSetCalls(); len(calls) != 1 {
-		t.Fatalf("AT backend was reclaimed by QMI monitor: calls = %d, want 1", len(calls))
+		t.Fatalf("AT backend reconnected after first failure: calls = %d, want 1", len(calls))
+	}
+	server.monitorCellularDataOnce(ctx)
+	waitContext, cancel = context.WithTimeout(ctx, time.Second)
+	if status, waitErr := runtime.wait(waitContext, "physical-1", initial.Revision+1); waitErr != nil || !status.Connected || status.Phase != "connected" {
+		cancel()
+		t.Fatalf("AT recovery session = %+v, err = %v, want connected phase", status, waitErr)
+	}
+	cancel()
+	if calls := controller.recordedSetCalls(); len(calls) != 2 || calls[1].Backend != "at" {
+		t.Fatalf("AT recovery calls = %#v, want initial plus one AT reconnect", calls)
+	}
+
+	if err := database.UpsertDevice(ctx, store.Device{
+		ID: "physical-1", Name: "EC20", DeviceType: store.DeviceTypePCIeEC20EC25,
+		Interface: "wwan0", DeviceBackend: "at", NetworkEnabled: true, VoWiFiEnabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server.monitorCellularDataOnce(ctx)
+	if calls := controller.recordedSetCalls(); len(calls) != 2 {
+		t.Fatalf("SetNetwork calls with VoWiFiEnabled = %#v, want no additional call", calls)
 	}
 }
 

@@ -339,7 +339,7 @@ func TestEC20AdapterZXICUnquotedCSIMCGLAAndBareCCHO(t *testing.T) {
 	const identityICCID = "8901000000000000001"
 	const identityIMSI = "310280000000001"
 	const fullISIM = "A0000000871004FFFFFFFF8903020000"
-	identity := SIMIdentity{ICCID: identityICCID, IMSI: identityIMSI}
+	identity := SIMIdentity{DeviceID: "zxic-1", ICCID: identityICCID, IMSI: identityIMSI}
 	var challenge AKAChallenge
 	for index := range challenge.RAND {
 		challenge.RAND[index] = byte(index)
@@ -367,7 +367,7 @@ func TestEC20AdapterZXICUnquotedCSIMCGLAAndBareCCHO(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		adapter.bindings[identityICCID] = ec20SIMBinding{
+		adapter.bindings[adapter.stateKey(context.Background(), "zxic-1", identityICCID)] = atSIMBinding{
 			deviceID: "zxic-1", iccid: identityICCID, imsi: identityIMSI,
 			aid: fullISIM, application: "ISIM",
 		}
@@ -423,7 +423,7 @@ func TestEC20AdapterZXICUnquotedCSIMCGLAAndBareCCHO(t *testing.T) {
 		if !bytes.Equal(result.RES, []byte{1, 2, 3, 4, 5, 6, 7, 8}) {
 			t.Fatalf("RES = %x", result.RES)
 		}
-		binding, _ := adapter.bindingFor(identity)
+		binding, _ := adapter.bindingFor(context.Background(), identity)
 		if !binding.basicChannel {
 			t.Fatal("explicit CCHO rejection did not select the basic channel")
 		}

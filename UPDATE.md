@@ -1588,3 +1588,30 @@ ike: IKE_AUTH EAP round 1: ike: responder reported fatal notification 10500
 - 仅使用合成号码、合成 Token 和合成设备 ID 进行测试，不包含真实 SIM、IMEI、MSISDN、Bark key、密码或抓包数据。
 
 ---
+
+### 57. AT host data、ZXIC 与 SSO 上游同步兼容加固
+
+**修改内容**:
+
+- 增加 AT PDP 主机数据、BusyBox `udhcpc` 租约、IPv4/fwmark 策略路由、AT/QMI 双后端切换和崩溃恢复清理。
+- 保留并扩展本地设备能力：HardwareKind 优先、PCSC IMEI Lease、DJI/Baiwang、DITO/CTEXCEL/O2、eSIM/MBN、自动任务和设备删除生命周期。
+- 引入共享 AT core 与验证版 ZXIC adapter；EC20 兼容入口、错误别名、`ExecuteAPDU`、ISIM strict、HomePLMN 和 RF fail-closed 策略保持不变。
+- adapter binding、checkpoint、physical resolver 和 runtime data session 使用 deviceID/USB generation/ICCID 隔离，避免同 ICCID 多设备和热切换混用。
+- 引入 SSO/OIDC/JWKS 与 Pocket ID、GitHub、Generic OAuth2；migration 使用 VoNet 34，保留 API Token/MCP/只读权限和密码登录。
+- 增加 credential epoch、SSO flow 撤销、安全 redirect、`go-jose` 4.1.7 和浏览器/服务器共享安全向量。
+- 前端增量加入 SSO 设置/登录和 ZXIC 提示，保留重构 UI、全局来电弹窗、`MODEM · PC/SC · PANEL` 和 SMS 限流大于等于 1。
+
+**验证结果**:
+
+- `go test ./...`、`go vet ./...`、`npm test`（47 项）、`npm run build` 通过。
+- `npm run test:e2e`（7 项）和 SSO Docker Compose 配置检查通过。
+- Linux amd64、arm64、armv7 交叉编译通过。
+- `git diff --check` 通过。
+
+**安全与部署约束**:
+
+- AT host data 需要 Linux、iproute2、BusyBox `udhcpc`、接口独占和网络权限。
+- SSO 需要可信 HTTPS IdP、`VONET_SECURE_COOKIES=true`、根路径回调和敏感数据库备份保护。
+- schema 34 无自动降级；升级前必须备份数据库/WAL/TLS/插件/环境文件。
+
+---

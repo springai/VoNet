@@ -1,12 +1,95 @@
 package server
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"vonet/internal/device"
 	"vonet/internal/modem"
+	"vonet/internal/store"
 )
+
+type pollCLCCCapabilityController struct {
+	fakeDeviceController
+	entries          []device.Device
+	supported        map[string]bool
+	capabilityChecks map[string]int
+	commands         map[string][]string
+}
+
+func (controller *pollCLCCCapabilityController) List() []device.Device {
+	return append([]device.Device(nil), controller.entries...)
+}
+
+func (controller *pollCLCCCapabilityController) Get(id string) (device.Device, error) {
+	for _, entry := range controller.entries {
+		if entry.ID == id {
+			return entry, nil
+		}
+	}
+	return device.Device{}, device.ErrNotFound
+}
+
+func (controller *pollCLCCCapabilityController) SupportsCLCC(_ context.Context, physicalID string) (bool, error) {
+	controller.capabilityChecks[physicalID]++
+	return controller.supported[physicalID], nil
+}
+
+func (controller *pollCLCCCapabilityController) ExecuteAT(_ context.Context, physicalID, command string) (modem.Response, error) {
+	controller.commands[physicalID] = append(controller.commands[physicalID], command)
+	return modem.Response{Command: command, Final: "OK"}, nil
+}
+
+func TestPollCellularCallsSkipsUnsupportedCLCCAndPollsOtherDevices(t *testing.T) {
+	server := regionServer(t, "310260123456789")
+	controller := &pollCLCCCapabilityController{
+		entries: []device.Device{
+			{ID: "unsupported", Discovered: true},
+			{ID: "supported", Discovered: true},
+		},
+		supported: map[string]bool{
+			"unsupported": false,
+			"supported":   true,
+		},
+		capabilityChecks: make(map[string]int),
+		commands:         make(map[string][]string),
+	}
+	server.devices = controller
+	for _, config := range []store.Device{
+		{
+			ID:             "unsupported",
+			Name:           "A Unsupported",
+			DeviceType:     store.DeviceTypePCIeEC20EC25,
+			NetworkEnabled: true,
+		},
+		{
+			ID:             "supported",
+			Name:           "B Supported",
+			DeviceType:     store.DeviceTypePCIeEC20EC25,
+			NetworkEnabled: true,
+		},
+	} {
+		if err := server.store.UpsertDevice(context.Background(), config); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	server.pollCellularCalls(context.Background())
+
+	if got := controller.commands["unsupported"]; len(got) != 0 {
+		t.Fatalf("unsupported device commands = %v, want none", got)
+	}
+	got := controller.commands["supported"]
+	if len(got) != 1 || got[0] != "AT+CLCC" {
+		t.Fatalf("supported device commands = %v, want one AT+CLCC", got)
+	}
+	if controller.capabilityChecks["unsupported"] != 1 ||
+		controller.capabilityChecks["supported"] != 1 {
+		t.Fatalf("capability checks = %#v, want one check per device", controller.capabilityChecks)
+	}
+}
 
 func TestIncomingCallNotificationTextFormatting(t *testing.T) {
 	now := time.Date(2026, 8, 20, 10, 30, 0, 0, time.UTC)

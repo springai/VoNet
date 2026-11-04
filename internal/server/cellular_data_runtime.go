@@ -128,6 +128,7 @@ type cellularDataSession struct {
 	generation uint64
 	physicalID string
 	identity   string // current ICCID/Profile identity when known
+	backend    string
 	phase      cellularDataSessionPhase
 	watchdog   *cellularDataWatchdog
 }
@@ -152,7 +153,20 @@ var cellularDataMonitorInterval = time.Minute
 const (
 	cellularDataMonitorProbeTimeout = 5 * time.Second
 	cellularDataMonitorFailureLimit = 2
+	cellularDataATSetupTimeout      = 6 * time.Minute
 )
+
+func cellularDataOperationTimeout(enabled bool, backend string) time.Duration {
+	if !enabled {
+		return 30 * time.Second
+	}
+	if strings.EqualFold(strings.TrimSpace(backend), "qmi") {
+		return 75 * time.Second
+	}
+	// Empty backend means automatic selection. AT attach, activation and the
+	// first DHCP lease are sequential, so the AT budget must cover that path.
+	return cellularDataATSetupTimeout
+}
 
 // cellularDataRuntime serializes and coalesces desired data-state changes per
 // configured device. Hardware transitions use a server-owned context, so a
@@ -416,9 +430,7 @@ func (s *Server) monitorCellularData(ctx context.Context, physicalID string, imm
 			continue
 		}
 		backend := strings.ToLower(strings.TrimSpace(request.Backend))
-		if backend != "" && backend != "qmi" {
-			// NetworkStatus observes the process-owned QMI session. AT-backed
-			// sessions have no equivalent live observer yet.
+		if backend != "" && backend != "qmi" && backend != "at" {
 			continue
 		}
 		releaseWatchdog, admitted := runtime.acquireWatchdog(config.ID, status.Revision)
@@ -504,11 +516,22 @@ func (runtime *cellularDataRuntime) requestLocked(
 		}
 		runtime.entries[configID] = entry
 	}
-	entry.physicalID = physicalID
-	entry.request = request
 	if identity == "" {
 		identity = entry.identity
 	}
+	if entry.session != nil && (identity == "" || strings.EqualFold(entry.session.identity, identity)) &&
+		physicalID != "" && entry.session.physicalID != physicalID {
+		identity = entry.session.identity
+	}
+	sessionChanged := entry.session != nil &&
+		((identity != "" && !strings.EqualFold(entry.session.identity, identity)) ||
+			(physicalID != "" && entry.session.physicalID != physicalID))
+	if sessionChanged {
+		runtime.closeSessionLocked(entry)
+		entry.session = nil
+	}
+	entry.physicalID = physicalID
+	entry.request = request
 	if identity != "" {
 		entry.identity = identity
 	}
@@ -524,7 +547,7 @@ func (runtime *cellularDataRuntime) requestLocked(
 	entry.status.UpdatedAt = time.Now().UTC()
 	if request.Enabled {
 		if entry.session == nil || entry.session.phase == cellularDataSessionClosed {
-			entry.session = runtime.newSessionLocked(physicalID, entry.identity)
+			entry.session = runtime.newSessionLocked(physicalID, entry.identity, request.Backend)
 		} else if entry.session.phase == cellularDataSessionClosing {
 			// A new enable request may arrive while the old QMI stop is still
 			// returning. Keep the old session in closing until the worker has
@@ -550,12 +573,13 @@ func (runtime *cellularDataRuntime) requestLocked(
 	return entry.status
 }
 
-func (runtime *cellularDataRuntime) newSessionLocked(physicalID, identity string) *cellularDataSession {
+func (runtime *cellularDataRuntime) newSessionLocked(physicalID, identity, backend string) *cellularDataSession {
 	runtime.nextSessionGeneration++
 	return &cellularDataSession{
 		generation: runtime.nextSessionGeneration,
 		physicalID: physicalID,
 		identity:   strings.TrimSpace(identity),
+		backend:    strings.TrimSpace(backend),
 		phase:      cellularDataSessionStarting,
 		watchdog:   newCellularDataWatchdog(),
 	}
@@ -569,7 +593,7 @@ func (runtime *cellularDataRuntime) beginClosingLocked(entry *cellularDataRuntim
 	entry.session.watchdog.stop()
 }
 
-func (runtime *cellularDataRuntime) activateSessionLocked(entry *cellularDataRuntimeEntry, physicalID, identity string) {
+func (runtime *cellularDataRuntime) activateSessionLocked(entry *cellularDataRuntimeEntry, physicalID, identity, backend string) {
 	if entry == nil {
 		return
 	}
@@ -577,9 +601,10 @@ func (runtime *cellularDataRuntime) activateSessionLocked(entry *cellularDataRun
 		if identity == "" {
 			identity = entry.identity
 		}
-		entry.session = runtime.newSessionLocked(physicalID, identity)
+		entry.session = runtime.newSessionLocked(physicalID, identity, backend)
 	}
 	entry.session.physicalID = physicalID
+	entry.session.backend = strings.TrimSpace(backend)
 	if identity != "" {
 		entry.session.identity = identity
 		entry.identity = identity
@@ -689,7 +714,11 @@ func (runtime *cellularDataRuntime) monitorCandidate(configID string) (cellularD
 	if entry == nil {
 		return cellularDataRuntimeStatus{}, device.NetworkRequest{}, false
 	}
-	return entry.status, entry.request, true
+	request := entry.request
+	if entry.session != nil && entry.session.backend != "" {
+		request.Backend = entry.session.backend
+	}
+	return entry.status, request, true
 }
 
 func (runtime *cellularDataRuntime) acquireWatchdog(configID string, revision uint64) (func(), bool) {
@@ -946,7 +975,7 @@ func (runtime *cellularDataRuntime) run(configID string, entry *cellularDataRunt
 			// The previous disable operation has returned. The old session is
 			// now closed and a new logical session may own the next enable.
 			runtime.closeSessionLocked(entry)
-			entry.session = runtime.newSessionLocked(entry.physicalID, entry.identity)
+			entry.session = runtime.newSessionLocked(entry.physicalID, entry.identity, entry.request.Backend)
 		}
 		revision := entry.status.Revision
 		physicalID := entry.physicalID
@@ -956,10 +985,7 @@ func (runtime *cellularDataRuntime) run(configID string, entry *cellularDataRunt
 			closingWatchdog = entry.session.watchdog
 		}
 		root := runtime.root
-		operationTimeout := 75 * time.Second
-		if !request.Enabled {
-			operationTimeout = 30 * time.Second
-		}
+		operationTimeout := cellularDataOperationTimeout(request.Enabled, request.Backend)
 		operationContext, cancel := context.WithTimeout(root, operationTimeout)
 		entry.cancel = cancel
 		runtime.mu.Unlock()
@@ -1034,7 +1060,7 @@ func (runtime *cellularDataRuntime) run(configID string, entry *cellularDataRunt
 			entry.status.Connected = result.Enabled
 			entry.status.LastError = ""
 			if result.Enabled {
-				runtime.activateSessionLocked(entry, physicalID, entry.identity)
+				runtime.activateSessionLocked(entry, physicalID, entry.identity, result.Backend)
 				entry.status.Phase = "connected"
 			} else {
 				runtime.closeSessionLocked(entry)
@@ -1108,14 +1134,14 @@ func (runtime *cellularDataRuntime) observe(configID string, desired, connected 
 		entry.status.Phase = "disabled"
 	} else if connected {
 		if entry.session == nil || entry.session.phase == cellularDataSessionClosed {
-			entry.session = runtime.newSessionLocked(entry.physicalID, entry.identity)
+			entry.session = runtime.newSessionLocked(entry.physicalID, entry.identity, entry.request.Backend)
 		}
 		entry.session.phase = cellularDataSessionActive
 		entry.session.watchdog.start(entry.session.generation)
 		entry.status.Phase = "connected"
 	} else {
 		entry.status.Phase = "failed"
-		entry.status.LastError = "live QMI packet session or host route is not ready"
+		entry.status.LastError = "cellular packet session or host route is not ready"
 	}
 	runtime.signalLocked(entry)
 	return entry.status

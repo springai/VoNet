@@ -71,6 +71,7 @@ type Manager struct {
 	qmiRadioOpener                qmiRadioSessionOpener
 	remoteprocObserver            func(string) (remoteproc.Observation, error)
 	qmiDataOpener                 qmiDataSessionOpener
+	atHostDataLink                atHostDataLink
 	nativeQMIRegistrationMu       sync.Mutex
 	nativeQMIRegistrationInFlight map[string]struct{}
 	nativeQMISIMRecoveryMu        sync.Mutex
@@ -148,6 +149,10 @@ type managedDevice struct {
 	dataSessionHandle    uint32
 	dataSessionControl   string
 	dataEventCancel      context.CancelFunc
+	dataBackend          string
+	atHostSession        atHostDataSession
+	atHostDataIdentity   string
+	atHostDataGeneration uint64
 	candidate            modem.Candidate
 	atProfile            modem.ATProfile
 	apduDialect          *modem.ATAPDUDialect
@@ -211,6 +216,7 @@ func NewManager(options Options) (*Manager, error) {
 
 		qmiRadioOpener:                openQMIRadioSession,
 		qmiDataOpener:                 openQMIDataSession,
+		atHostDataLink:                newATHostDataLink(),
 		nativeQMIRegistrationInFlight: make(map[string]struct{}),
 		networkEventSubscribers:       make(map[chan string]struct{}),
 		deviceEventSubscribers:        make(map[chan DeviceLifecycleEvent]struct{}),
@@ -267,7 +273,9 @@ func (manager *Manager) Stop(ctx context.Context) error {
 		}
 		state.opMu.Unlock()
 		state.dataMu.Lock()
-		invalidateQMINetworkSession(state, manager.candidateFor(state))
+		if cleanupErr := invalidateNetworkSessions(state, manager.candidateFor(state)); cleanupErr != nil {
+			closeErrors = append(closeErrors, cleanupErr)
+		}
 		state.dataMu.Unlock()
 	}
 	return errors.Join(closeErrors...)
@@ -447,7 +455,7 @@ func (manager *Manager) Discover(ctx context.Context) ([]Device, error) {
 		}
 		state.opMu.Unlock()
 		state.dataMu.Lock()
-		invalidateQMINetworkSession(state, manager.candidateFor(state))
+		_ = invalidateNetworkSessions(state, manager.candidateFor(state))
 		state.dataMu.Unlock()
 	}
 	manager.resetChangedClients()
@@ -581,7 +589,7 @@ func (manager *Manager) resetChangedClients() {
 		}
 		state.opMu.Unlock()
 		state.dataMu.Lock()
-		invalidateQMINetworkSession(state, manager.candidateFor(state))
+		_ = invalidateNetworkSessions(state, manager.candidateFor(state))
 		state.dataMu.Unlock()
 	}
 }
@@ -1056,6 +1064,27 @@ func (manager *Manager) ExecuteAT(
 	return response, err
 }
 
+// SupportsCLCC reports whether the device firmware implements the 3GPP call
+// list query. Unknown devices keep the historical polling behavior, while a
+// verified profile can prevent repeated vendor "command not recognized"
+// errors from consuming the control channel.
+func (manager *Manager) SupportsCLCC(ctx context.Context, id string) (bool, error) {
+	manager.mu.RLock()
+	state := manager.devices[id]
+	manager.mu.RUnlock()
+	if state == nil {
+		return true, nil
+	}
+	if err := lockMutexContext(ctx, &state.opMu); err != nil {
+		return true, err
+	}
+	defer state.opMu.Unlock()
+	if state.atProfile.Identity == nil {
+		return true, nil
+	}
+	return state.atProfile.Identity.SupportsCLCC(), nil
+}
+
 // ExecuteSensitiveAT runs an AT command whose payload contains short-lived
 // authentication material. The original transport error is returned to the
 // caller, but it is never retained in the device snapshot because a
@@ -1237,8 +1266,12 @@ func (manager *Manager) Reboot(ctx context.Context, id string) error {
 		return err
 	}
 	state.dataMu.Lock()
-	invalidateQMINetworkSession(state, manager.candidateFor(state))
+	cleanupErr := invalidateNetworkSessions(state, manager.candidateFor(state))
 	state.dataMu.Unlock()
+	if cleanupErr != nil {
+		manager.setResult(id, state, nil, cleanupErr)
+		return cleanupErr
+	}
 	commandCtx, cancel := manager.withTimeout(ctx, manager.longTimeout)
 	defer cancel()
 	_, err = client.Execute(commandCtx, "AT+CFUN=1,1")
@@ -1287,8 +1320,12 @@ func (manager *Manager) softResetForProfileSwitch(ctx context.Context, id string
 // softResetSIMLocked 要求持有 opMu，使模式验证与 SIM 重置不能被其他模组操作插入。
 func (manager *Manager) softResetSIMLocked(ctx context.Context, id string, state *managedDevice, client modem.Client) error {
 	state.dataMu.Lock()
-	invalidateQMINetworkSession(state, manager.candidateFor(state))
+	cleanupErr := invalidateNetworkSessions(state, manager.candidateFor(state))
 	state.dataMu.Unlock()
+	if cleanupErr != nil {
+		manager.setResult(id, state, nil, cleanupErr)
+		return cleanupErr
+	}
 	commandCtx, cancel := context.WithTimeout(ctx, manager.commandTimeout)
 	defer cancel()
 
@@ -1358,6 +1395,21 @@ func (manager *Manager) command(
 	commandCtx, cancel := manager.withTimeout(ctx, manager.commandTimeout)
 	defer cancel()
 	response, err := client.Execute(commandCtx, command)
+	if err != nil {
+		return response, fmt.Errorf("%s: %w", command, err)
+	}
+	return response, nil
+}
+
+func (manager *Manager) timedCommand(
+	ctx context.Context,
+	client modem.Client,
+	command string,
+	timeout time.Duration,
+) (modem.Response, error) {
+	commandContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	response, err := client.Execute(commandContext, command)
 	if err != nil {
 		return response, fmt.Errorf("%s: %w", command, err)
 	}

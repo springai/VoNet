@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowRightRegular,
@@ -10,15 +10,55 @@ import { useAuth } from "../store/auth";
 import { useI18n } from "../lib/i18n";
 import { message } from "../components/ui/message";
 import { BrandLogo } from "../components/shell/BrandLogo";
+import { getSSOProviders } from "../api";
+import type { SSOProviders } from "../types";
+import { safeRedirect } from "../lib/safeRedirect";
+import { ssoErrorMessage, SSO_RESULT_MESSAGES } from "../lib/sso";
 
 export default function LoginPage() {
   const { login } = useAuth();
   const { t } = useI18n();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [working, setWorking] = useState(false);
+  const [providers, setProviders] = useState<SSOProviders | null>(null);
+  const [ssoNotice, setSSONotice] = useState<{ error: boolean; text: string } | null>(null);
+  const redirect = safeRedirect(searchParams.get("redirect"), window.location.origin);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const retryDelays = [1000, 2000, 4000];
+    const load = (attempt = 0) => {
+      void getSSOProviders().then((data) => {
+        if (!cancelled) setProviders(data);
+      }).catch(() => {
+        if (cancelled || attempt >= retryDelays.length) return;
+        timer = setTimeout(() => load(attempt + 1), retryDelays[attempt]);
+      });
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    const error = searchParams.get("sso_error");
+    const result = searchParams.get("sso_result");
+    if (!error && !result) return;
+    if (error) setSSONotice({ error: true, text: ssoErrorMessage(error) });
+    else if (result && Object.hasOwn(SSO_RESULT_MESSAGES, result)) {
+      setSSONotice({ error: false, text: SSO_RESULT_MESSAGES[result as keyof typeof SSO_RESULT_MESSAGES] });
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete("sso_error");
+    next.delete("sso_result");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -32,8 +72,7 @@ export default function LoginPage() {
     setWorking(false);
     if (ok) {
       message.success(t("欢迎回来"));
-      const redirect = searchParams.get("redirect");
-      navigate(redirect ? decodeURIComponent(redirect) : "/", { replace: true });
+      navigate(redirect, { replace: true });
     } else {
       message.error(t("登录失败，请检查凭证"));
     }
@@ -86,6 +125,11 @@ export default function LoginPage() {
             <h2>{t("登录")}</h2>
             <p>{t("欢迎回来")}</p>
           </div>
+          {ssoNotice ? (
+            <div role={ssoNotice.error ? "alert" : "status"} className="reborn-login-notice">
+              {t(ssoNotice.text)}
+            </div>
+          ) : null}
 
           <form className="reborn-login-form" onSubmit={submit}>
             <label>
@@ -120,6 +164,15 @@ export default function LoginPage() {
               {working ? <i className="reborn-button-loader" /> : <ArrowRightRegular />}
             </button>
           </form>
+          {providers?.sso.enabled ? (
+            <a
+              className="reborn-login-submit"
+              href={`/api/auth/sso/start?${new URLSearchParams({ redirect }).toString()}`}
+            >
+              <span>{t("通过 {provider} 登录").replace("{provider}", providers.sso.displayName || "SSO")}</span>
+              <ArrowRightRegular />
+            </a>
+          ) : null}
 
           <div className="reborn-login-auth-foot">
             <span>VoNet © 2026</span>

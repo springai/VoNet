@@ -60,6 +60,7 @@ func TestRegionBlockReason(t *testing.T) {
 
 func TestSetNetworkAllowedForChinaRegionSIM(t *testing.T) {
 	client := &transcriptClient{steps: []clientStep{
+		{command: "AT+CGACT?", response: okResponse("+CGACT: 1,0")},
 		{command: `AT+CGDCONT=1,"IPV4V6","internet"`, response: okResponse()},
 		{command: "AT+CGATT=1", response: okResponse()},
 		{command: "AT+CGACT=1,1", response: okResponse()},
@@ -80,6 +81,7 @@ func TestSetNetworkAllowedForChinaRegionSIM(t *testing.T) {
 
 func TestSetNetworkAllowedForServedRegionSIM(t *testing.T) {
 	client := &transcriptClient{steps: []clientStep{
+		{command: "AT+CGACT?", response: okResponse("+CGACT: 1,0")},
 		{command: `AT+CGDCONT=1,"IPV4V6","internet"`, response: okResponse()},
 		{command: "AT+CGATT=1", response: okResponse()},
 		{command: "AT+CGACT=1,1", response: okResponse()},
@@ -102,6 +104,7 @@ func TestSetNetworkAllowedForServedRegionSIM(t *testing.T) {
 // only a confirmed blocked MCC blocks service (fail-open).
 func TestSetNetworkAllowedWhenSIMRegionUnknown(t *testing.T) {
 	client := &transcriptClient{steps: []clientStep{
+		{command: "AT+CGACT?", response: okResponse("+CGACT: 1,0")},
 		{command: `AT+CGDCONT=1,"IPV4V6","internet"`, response: okResponse()},
 		{command: "AT+CGATT=1", response: okResponse()},
 		{command: "AT+CGACT=1,1", response: okResponse()},

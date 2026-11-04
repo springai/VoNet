@@ -40,6 +40,44 @@ func TestFillConfigFromPhysicalClassifiesDJI4G(t *testing.T) {
 	}
 }
 
+// The verified ZXIC USB identity must be reclassified both when discovered and
+// when an existing configuration adopts the physical device.
+func TestFillConfigFromPhysicalClassifiesZXIC(t *testing.T) {
+	config := store.Device{DeviceType: store.DeviceTypePCIeEC20EC25}
+	entry := device.Device{Candidate: modem.Candidate{
+		VendorID:  "19d2",
+		ProductID: "0536",
+	}}
+
+	fillConfigFromPhysical(&config, entry)
+
+	if config.DeviceType != store.DeviceTypeZXIC {
+		t.Fatalf("DeviceType = %q, want %q", config.DeviceType, store.DeviceTypeZXIC)
+	}
+	if got := discoveredDeviceType(entry.Candidate); got != store.DeviceTypeZXIC {
+		t.Fatalf("discoveredDeviceType = %q, want %q", got, store.DeviceTypeZXIC)
+	}
+}
+
+// A sibling product under a known vendor does not inherit the verified ZXIC
+// dialect without the exact hardware identity.
+func TestFillConfigFromPhysicalIgnoresUnverifiedZxicProduct(t *testing.T) {
+	config := store.Device{DeviceType: store.DeviceTypePCIeEC20EC25}
+	entry := device.Device{Candidate: modem.Candidate{
+		VendorID:  "19d2",
+		ProductID: "ffff",
+	}}
+
+	fillConfigFromPhysical(&config, entry)
+
+	if config.DeviceType == store.DeviceTypeZXIC {
+		t.Fatalf("unverified product was classified as %q", config.DeviceType)
+	}
+	if got := discoveredDeviceType(entry.Candidate); got == store.DeviceTypeZXIC {
+		t.Fatalf("unverified discovered product was classified as %q", got)
+	}
+}
+
 func TestConfiguredDeviceSummaryIgnoresVoWiFiRuntimeFromPreviousSIM(t *testing.T) {
 	database, err := store.Open(context.Background(), ":memory:")
 	if err != nil {

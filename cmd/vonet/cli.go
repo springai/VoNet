@@ -28,6 +28,10 @@ Usage:
                      Flags for all: --database path (default
                      /opt/vonet/data/vonet.db). The raw token is printed
                      once at creation; rotate it by revoking and recreating.
+  vonet auth-cleanup Revoke restored or stale sessions, API tokens and pending
+                     SSO flows while preserving SSO configuration and bindings.
+                     Flags: --database path (default
+                     /opt/vonet/data/vonet.db).
   vonet doctor       Diagnose USB modem, AT, QMI, PC/SC and proxy UDP paths.
                      Use --repair-dji-qmi on Linux to restore the factory-ID
                      DJI/Baiwang 2ca3:4006 AT/QMI interface bindings and wake

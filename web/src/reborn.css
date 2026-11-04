@@ -322,6 +322,20 @@ body {
 .reborn-login-submit:hover { background: #075cae; transform: translateY(-1px); }
 .reborn-login-submit:active { transform: translateY(0); }
 .reborn-login-submit:disabled { cursor: wait; opacity: 0.72; }
+.reborn-login-notice {
+  margin: 0 0 16px;
+  padding: 11px 13px;
+  border: 1px solid var(--rb-border);
+  border-radius: 6px;
+  color: var(--rb-ink);
+  background: var(--rb-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.reborn-login-notice[role="alert"] {
+  border-color: color-mix(in srgb, #d97706 38%, var(--rb-border));
+  background: color-mix(in srgb, #f59e0b 9%, var(--rb-soft));
+}
 .reborn-button-loader {
   width: 18px;
   height: 18px;

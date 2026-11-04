@@ -47,7 +47,7 @@ VoNet 是一款面向 Quectel EC20/EC25 系列蜂窝模组的开源 Web 控制�
 | 代理路由 | 上游 SOCKS 路由、设备绑定、国家规则、TCP 可达性检查以及面向 WiFi Calling 数据路径的 UDP Associate 检查。 |
 | 通知 | 通过 Telegram、Bark、邮件、Pushplus 以及签名 Webhook 转发新入站短信，每条短信单独推送。 |
 | Telegram 机器人 | 设备状态、已安装配置文件列表与切换、WiFi Calling 控制以及短信发送。敏感操作需要管理员确认。 |
-| 运维 | 鉴权、CSRF 防护、访问策略、审计事件、实时日志、日志留存、健康检查、响应式布局、深色模式以及中英文应用界面。 |
+| 运维 | 密码与 SSO 鉴权（Pocket ID、GitHub、Generic OAuth2）、CSRF 防护、访问策略、审计事件、实时日志、日志留存、健康检查、响应式布局、深色模式以及中英文应用界面。 |
 | 分发 | 静态 Linux 二进制、systemd 安装脚本、带 SHA-256 校验的自更新、Docker 镜像、GHCR 发布以及 GitHub Actions 发布构建。 |
 
 ## 支持的硬件
@@ -214,6 +214,13 @@ VoNet 使用 `qmicli` 验证 QMI 控制通道是否就绪，并使用 `qmi-proxy
 
 `vonet doctor --repair-dji-qmi` 会在更改任何 USB 驱动绑定或置位 DTR 之前检查 `qmicli`。如果该工具不可用，命令会停止并给出安装提示，保持设备当前状态不变。
 
+### AT 蜂窝主机数据
+
+AT 模式的 ECM/RNDIS 数据依赖 Linux、`iproute2` 和 BusyBox `udhcpc`。
+VoNet 必须独占管理模组网络接口；请关闭该接口上的其他 DHCP 客户端和
+NetworkManager 配置。VoNet 只维护 IPv4 DHCP 租约和标记策略路由，不修改
+系统默认路由或全局 DNS。当前该路径仅支持 IPv4 服务。
+
 ## 配置
 
 VoNet 先从 `VONET_CONFIG` 读取可选的 JSON 配置文件，再应用 `VONET_*` 环境变量。环境变量优先级更高。
@@ -226,6 +233,8 @@ VoNet 先从 `VONET_CONFIG` 读取可选的 JSON 配置文件，再应用 `VONET
 | `VONET_SECURE_COOKIES` | `false` | 在使用 HTTPS 时将会话 Cookie 标记为安全。 |
 | `VONET_SHUTDOWN_TIMEOUT` | `10s` | 优雅关闭超时时间。 |
 | `VONET_MAX_REQUEST_BODY_BYTES` | `1048576` | API 请求体最大字节数。 |
+| `VONET_MCP_ENABLED` | `false` | 启用 `/mcp` AI 客户端端点。 |
+| `VONET_PROBE_UNKNOWN_USB` | `false` | 显式选择后才用 AT 命令探测未知 USB 串口设备。 |
 | `VONET_REPO` | `springai/VoNet` | 自更新器使用的受信任 GitHub 仓库，格式为 `owner/name`。 |
 | `GITHUB_TOKEN` | 空 | 可选的 GitHub token，用于私有仓库或更高的 API 限额。 |
 
@@ -234,6 +243,192 @@ VoNet 先从 `VONET_CONFIG` 读取可选的 JSON 配置文件，再应用 `VONET
 管理员凭据仅存储在 SQLite 中。使用 `vonet bootstrap-admin` 对空数据库执行一次初始化；环境变量和 JSON 配置不能设置或覆盖管理员用户名或密码。
 
 请勿将 Telegram token、SMTP 密码、Webhook 密钥、SIM 凭据或其他私密数据存放在仓库中。请通过应用设置或受保护的环境文件来配置它们。
+
+## API Token 与 MCP
+
+非浏览器客户端访问相同的 `/api/...` 端点时，使用
+`Authorization: Bearer vonet_...` API Token，不使用浏览器 Session Cookie 或
+CSRF 流程。API Token 只接受 `vonet_...` 形式的 Token，不能用管理员密码或
+浏览器 Cookie 代替；`/api/auth/*`、SSO 管理和管理员密码管理仍只接受浏览器
+Session，并继续受 Session 绑定 CSRF 保护。
+
+```bash
+vonet token create --read-only --ttl 720h ci-runner  # Token 仅在此处显示一次
+curl -H "Authorization: Bearer vonet_..." http://127.0.0.1:7575/api/devices
+```
+
+使用 `vonet token list` 查看 Token 清单，使用 `vonet token revoke <name>`
+撤销 Token。API Token 以管理员权限执行；`--read-only` Token 只能使用
+`GET`、`HEAD` 和 `OPTIONS` 操作，不能发送短信、切换 eSIM Profile、触发重连
+或执行其他会改变硬件状态的已记录操作。唯一的已记录数据库副作用是
+`GET /api/sms/thread` 会把对应消息标记为已读。轮换管理员密码或应用二进制
+更新会撤销全部 Session 和 Token。请在首次执行 `bootstrap-admin` 后创建
+Token；远程 Bearer 客户端还需要来源地址被访问策略允许，默认 `internal`
+模式只服务私有网络。
+
+`VONET_MCP_ENABLED` 默认为 `false`。设为 `true`（或在配置文件中设置
+`mcp_enabled: true`）后，VoNet 会在 `http://<host>:7575/mcp` 通过 Streamable
+HTTP transport 暴露 MCP 端点，并要求 Bearer Token 鉴权。工具覆盖设备状态、
+短信会话和受保护的短信发送、eSIM Profile 列表与协调切换，以及 WiFi Calling
+状态和重连。eSIM 能力仅限列出已安装 Profile 和切换已安装 Profile：
+`esim_list_profiles` 对只读和读写 Token 均可用，`esim_switch_profile` 是写
+工具，只注册在 read-write server 上，需要不带 `--read-only` 的 Token。
+read-only Token 收到的工具列表会完全隐藏 `sms_send`、`esim_switch_profile`
+和 `vowifi_reconnect` 等写工具，而不是把它们列为禁用状态。
+
+原始 AT、eSIM 下载/删除/重命名、SIM PIN、网络选择和系统更新等敏感操作不会
+暴露给 MCP，工具输出不包含 IMSI、SIM PIN 或激活码。MCP 短信发送沿用 VoNet
+网页界面的目的地策略和全局限速，但不限制目的国家。MCP 消息使用蜂窝 AT
+路径，不写入网页会话历史，因此不会复现网页界面的 IMS 优先/O2 SMS 行为。
+
+Claude Code 客户端配置示例：
+
+```json
+{
+  "mcpServers": {
+    "vonet": {
+      "type": "http",
+      "url": "http://192.168.1.10:7575/mcp",
+      "headers": { "Authorization": "Bearer vonet_..." }
+    }
+  }
+}
+```
+
+设计记录参见 [API_MCP_DEVELOPMENT_PLAN.md](API_MCP_DEVELOPMENT_PLAN.md)。
+
+## 单点登录
+
+登录页支持 Pocket ID、GitHub 和通用 OAuth2/OpenID Connect 提供方，密码登录
+始终保留。只有完成提供方配置并把外部身份绑定到唯一管理员后，SSO 才会启用。
+
+`PublicOrigin` 只能包含对外的 scheme、host 和可选端口，回调固定为
+`/api/auth/sso/callback`。生产环境必须使用 HTTPS 并设置
+`VONET_SECURE_COOKIES=true`；HTTP 仅允许 loopback 开发环境。SSO 设置和账号
+绑定只允许浏览器 Session 操作，并受 Session 绑定 CSRF 保护；API Token 和
+MCP 不能管理 SSO。
+
+SQLite 数据库保存提供方配置、绑定元数据和标记为敏感的 Client Secret。
+数据库备份及 WAL 文件必须按凭据材料保护。二进制更新或管理员密码轮换会撤销
+Session、API Token 和未完成的 SSO flow。恢复数据库备份后，必须先撤销旧凭据
+并清理未完成 flow，再开放服务。
+
+### 配置身份提供方
+
+在**设置 → 单点登录（SSO）**中选择一个提供方，并统一按以下顺序操作：保持
+SSO 关闭时保存配置、检查配置、绑定一个外部账号，最后才启用 SSO。其他外部
+账号不能注册或成为管理员，即使邮箱与已绑定账号相同也不会自动合并。
+
+配置 Pocket ID：
+
+1. 为 VoNet 配置 HTTPS 根路径入口，例如 `https://vonet.example.com`，并设置
+   `VONET_SECURE_COOKIES=true`。选择 **Pocket ID**；公开地址初始使用浏览器
+   访问地址，需要时编辑 **VoNet 公开地址**。保存凭据前即可复制回调地址：
+   `https://vonet.example.com/api/auth/sso/callback`。
+2. 在 Pocket ID 为 VoNet 单独创建 **Confidential** OIDC Client，登记精确回调
+   地址，并确认目标用户或用户组获准使用该客户端。每个应用使用独立客户端和
+   本地会话。
+3. 在 VoNet 填写 Pocket ID 精确的公开 `APP_URL` 作为 Issuer，并填入该客户端的
+   Client ID 和 Client Secret。VoNet 处理 Scopes 和 PKCE S256，并根据已验证的
+   Discovery 元数据优先选择 `client_secret_basic`，其次 `client_secret_post`。
+   保持 SSO 关闭并保存。
+4. 检查已保存的配置，然后通过 Pocket ID Passkey 登录和授权绑定账号。配置检查
+   只验证元数据和可达性；真实登录才能验证 Client Secret 和用户访问权限。
+5. 启用并保存 SSO，在隐身窗口验证登录、返回原页面以及登录后的第一次写操作。
+
+Issuer 按路径和尾斜杠精确匹配。Pocket ID 使用已验证 ID Token 的 `issuer + sub`
+关联账号，不依赖 UserInfo 或邮箱。Discovery、授权、Token 和 JWKS 必须使用配置
+的 Issuer origin。通过 `INTERNAL_APP_URL` 发布不同 origin 后端的部署不受支持，
+Issuer 应继续填写公开 `APP_URL`。
+
+GitHub：在 GitHub.com 新建 OAuth App，登记相同的精确回调地址；选择
+**GitHub**，填写 Client ID 和 Secret，并依次执行保存、检查、绑定、启用。
+端点固定为 GitHub.com，默认 scope 为 `read:user`，强制 PKCE S256，并以稳定
+数值账号 ID 绑定。此预设不支持 GitHub Enterprise。
+
+Generic OAuth2：除客户端凭据外，还需填写授权、Token 和 UserInfo URL，并配置
+Scopes、顶层用户 ID 字段（默认 `id`）、Token 认证和 PKCE 兼容选项。UserInfo
+通过 Bearer access token 请求；用户 ID 必须为非空字符串或整数，大整数保留全部
+数字。默认使用 `client_secret_post` 和 PKCE S256，只有提供方确实不支持 PKCE
+时才关闭。Generic OAuth2 不执行 OIDC ID Token 校验。
+
+更换 Provider、Client ID、Issuer 或 Generic 身份端点/用户 ID 字段会切换身份
+命名空间。旧 Secret 会被清除，必须显式重置绑定后才能再次启用 SSO。
+
+### 网络、部署与 TLS
+
+现有来源网络策略继续覆盖全部 SSO 路由。`PublicOrigin` 是根路径公开地址，不会从
+转发 Host 推导。生产环境必须使用 HTTPS 和 `VONET_SECURE_COOKIES=true`，HTTP 仅
+允许 loopback 开发环境。
+
+VoNet 进程必须能够解析并连接 Discovery、Token、JWKS 和 UserInfo。每个 DNS
+候选地址和实际拨号地址都会校验；loopback、link-local、云元数据、特殊用途和
+特权网络会被拒绝。Pocket ID 与 Generic HTTPS 可使用受信任的公网或私网地址；
+Generic HTTP Token/UserInfo 仅允许显式配置的私网后端；GitHub 固定端点仅允许公网。
+
+私有 CA 必须安装到宿主机或容器信任库，不提供跳过 TLS 校验的开关。反向代理必须
+保持已配置的公开 origin。首期只支持根路径部署，不支持把 SSO 发布在 URL 前缀下，
+回调地址也不从转发 Host 头推导。
+
+当前 Compose 使用 host network，应在实际容器内验证 DNS、路由和 CA 信任，不能
+假定桥接网络的 service name 可用。本地 Vite 开发时统一使用一个 loopback origin，
+例如 `http://127.0.0.1:5173`，并让公开地址与身份平台登记的回调保持一致；IdP
+出站网络例外仅用于测试 fixture。
+
+### Session、CSRF 与凭据
+
+Session 和 CSRF Cookie 保持 `SameSite=Strict`，短期 SSO flow Cookie 使用
+`SameSite=Lax` 以支持顶层 GET 回调。SSO 设置和绑定操作只允许浏览器 Session，
+写操作还要求 Session 绑定 CSRF；Bearer Token 和 MCP 不能管理 SSO。
+
+Client Secret 以 sensitive SQLite setting 保存，不会回显给浏览器。第三方访问
+Token 和身份 Token 不落盘。保存、停用 SSO 或解绑会撤销受影响的 SSO Session；
+按现有策略保留密码 Session 和 API Token。修改管理员密码会撤销 Session/API
+Token、推进 credential epoch、取消 pending flow，并保留外部绑定。
+
+普通退出只结束当前 VoNet 会话。在 IdP 停用账号或退出 Pocket ID 不会立即撤销
+已有 VoNet 会话；它会按 `VONET_SESSION_TTL` 到期，也可通过在 VoNet 停用 SSO
+或解绑立即撤销。公开登录能力接口为 `GET /api/auth/providers`。
+
+配置版本冲突返回 `409 sso_config_changed`；身份源变化返回
+`409 sso_rebind_required`，必须显式清除旧绑定。转换尚未完成时也可能返回
+`409 sso_binding_exists` 或 `409 sso_identity_not_bound`。
+
+### 升级、备份与回滚
+
+SSO 使用 VoNet schema 34，同时保留 migration 33 API Token 和全部本地业务表。
+完成配置和绑定前，SSO 始终禁用。升级前应停止服务并备份完整数据目录，包括
+SQLite、WAL/SHM、TLS、插件和 `/etc/vonet/env`。在线备份必须使用 SQLite backup
+API 或 `.backup`，不能只复制主数据库文件。
+
+恢复任何数据库备份后、开放服务前，执行：
+
+```bash
+vonet auth-cleanup --database /opt/vonet/data/vonet.db
+```
+
+该命令保留 SSO 配置和外部绑定，但会撤销恢复出来的 Session/API Token、推进
+credential epoch 并清空 pending SSO flow。Schema 34 没有自动降级；回滚必须恢复
+与旧二进制匹配的升级前快照。
+
+Docker 升级应拉取镜像并重建容器。生产发布前应验证 HTTPS 根路径回调和安全
+Cookie、完成真实 Pocket ID Passkey/访问策略联调、从部署所用 Compose 容器确认
+DNS/路由/CA 信任，并演练 schema 34 升级、`vonet auth-cleanup` 和回滚流程。
+
+### Cleanup health
+
+VoNet 在启动时执行一次 SSO flow 清理，此后每分钟执行一次。清理失败时，
+`/readyz` 返回 HTTP `503` 和
+`{"status":"degraded","reason":"sso_cleanup"}`，`/metrics` 报告
+`vonet_sso_cleanup_healthy 0`。后续清理成功后，`/readyz` 返回 HTTP `200`、
+`"status":"ready"` 和 `"sso_cleanup_healthy":true`，`/metrics` 报告
+`vonet_sso_cleanup_healthy 1`。
+
+`vonet auth-cleanup` 是恢复数据库备份或有意退役恢复/过期鉴权状态时使用的
+独立运维命令。它要求用户重新登录并创建新的 API Token，同时保留 SSO 提供方
+配置和外部绑定，并只输出聚合完成结果。密码、Session/API Token 值、SSO
+秘密以及备份和数据库内容不得写入日志、支持工单或健康输出；`/readyz` 和
+`/metrics` 只暴露聚合清理状态。
 
 ## Telegram 机器人
 
