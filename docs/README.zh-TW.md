@@ -200,7 +200,7 @@ VoNet 先從 `VONET_CONFIG` 讀取可選的 JSON 配置檔，再套用 `VONET_*`
 | `VONET_ADDR` | `0.0.0.0:7575` | HTTP 監聽位址。 |
 | `VONET_DATABASE_PATH` | `./data/vonet.db` | SQLite 資料庫路徑。 |
 | `VONET_SESSION_TTL` | `24h` | 驗證工作階段有效期。 |
-| `VONET_SECURE_COOKIES` | `false` | 在使用 HTTPS 時將工作階段 Cookie 標記為安全。 |
+| `VONET_SECURE_COOKIES` | `false` | 可選的全域強制 Secure 覆寫；未啟用時，各 HTTP/HTTPS 入口會自動選擇 Cookie 保護。 |
 | `VONET_SHUTDOWN_TIMEOUT` | `10s` | 優雅關閉逾時時間。 |
 | `VONET_MAX_REQUEST_BODY_BYTES` | `1048576` | API 請求主體最大位元組數。 |
 | `VONET_REPO` | `springai/VoNet` | 自我更新器使用的受信任 GitHub 倉庫，格式為 `owner/name`。 |
@@ -249,6 +249,29 @@ docker pull ghcr.io/mengmengcode/vonet:latest
 ```
 
 拉取新映像後重建容器。
+
+## SSO 多瀏覽器入口與回滾
+
+同一份已儲存的 SSO 設定和外部繫結可服務已設定的 HTTPS 公開 origin，以及明確
+設定的本地/私有 HTTP 或 HTTPS 瀏覽器入口。請在身分提供者登記每個完整回呼
+URL（`/api/auth/sso/callback`）。回呼會在建立 flow 時凍結，經由其他入口返回的
+回呼會被拒絕。HTTP 僅接受 localhost、loopback 和字面私有 IP，不接受私有 DNS
+名稱或任意公開 HTTP host。IPv6 host 使用瀏覽器的壓縮拼法，包括十六進位
+IPv4-mapped 位址。
+
+Session 和 CSRF Cookie 均為 host-only。多個入口共用 SSO 設定和外部繫結，但
+Session 不跨 host 共用。每個入口會依傳輸方式或受信任的
+`X-Forwarded-Proto` 自動選擇 Secure Cookie。`VONET_SECURE_COOKIES=true` 會對
+所有入口強制 Secure；純 HTTP 入口無法簽發必要 Cookie，因此會阻止登入或工作
+階段更新。反向代理必須保留原始 `Host`，並清除不受信任的 `Forwarded` 與
+`X-Forwarded-*` 標頭。
+
+VoNet 使用 schema 35，同時保留 migration 33 API Token、migration 34 SSO 儲存
+和所有本地業務表；schema 35 僅新增 `sessions.secure_cookies`。還原資料庫後，
+請在開放服務前執行
+`vonet auth-cleanup --database /opt/vonet/data/vonet.db`。此命令保留 SSO 設定和
+外部繫結，但會撤銷 Session/API Token 並清除待處理 flow。Schema 35 不會自動
+降級；回滾必須還原與升級前相符的快照。
 
 ## 開發
 

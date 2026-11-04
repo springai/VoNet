@@ -7,6 +7,43 @@
 
 ---
 
+### 58. SSO Cookie 传输策略与 schema 35 同步
+
+**修改内容**:
+
+- 同步 VoCat-reference `384a447..70b0e69` 中 SSO 浏览器入口、Cookie 传输策略、IPv6 公开地址和文档增量；VoNet 保留 migration 33 API Token、migration 34 SSO 表和全部本地业务表。
+- VoNet schema 35 只为 `sessions` 增加 `secure_cookies INTEGER NOT NULL DEFAULT 0 CHECK (secure_cookies IN (0,1))`，逐会话记录登录入口已确认的 Secure Cookie 传输策略。旧 Session 和 API Token 原样保留，不根据数据库备份猜测其传输策略，也不允许把已有策略自动降级。
+- `Login` 和 `CreateSession` 使用显式 `secureCookies` 参数；`CreateSession` 在事务内读取管理员 credential epoch 并写入 Session，避免与密码轮换并发时提交迟到凭据。
+- 直接 TLS、受信任 TLS 反代和同源 HTTPS 浏览器提示只会加强 Cookie 保护。`VONET_SECURE_COOKIES=true` 会强制 Secure Cookie，因此纯 HTTP 的普通私网浏览器或 API 客户端可能无法保存/回传 Cookie；HTTP 开发入口应改用 HTTPS，或仅在明确接受该限制时强制开启。
+- 反代必须保留浏览器 `Host`，只向受信任代理开放并发送单一明确的 `X-Forwarded-Proto: https`。系统不从 `X-Forwarded-Host` 推导入口，忽略未受信任、重复或含多个协议值的转发头。
+- Session/CSRF Cookie 保持 host-only；不同 HTTP 私网、IPv6、域名或 TLS 入口分别建立会话，不通过 Domain 共享。SSO 流 Cookie 仍只覆盖 `/api/auth/sso`，API Token 与浏览器入口相互独立。
+- SSO 公开地址按浏览器表示规范化 IPv6（包括压缩形式和 IPv4-mapped IPv6），不同 IPv6 主机或端口仍拒绝；Generic OAuth2 的纯 HTTP 后端只有在所有 DNS 地址持续为私网且不指向特权/元数据地址时才允许。
+- CI/release/docker smoke 增加 schema 34 到 35、`auth-cleanup`、TLS 反代、HTTP 私网、IPv6、`docker compose config --quiet` 和容器内 CLI 验证。构建顺序固定为先生成 `web/dist`，再执行 Go 构建，确保 `go:embed` 包含最新前端。
+
+**auth-cleanup 保留语义**:
+
+- `vonet auth-cleanup --database ...` 正常打开数据库时保持现有迁移语义，会把 schema 34 快照升级到 schema 35，并撤销恢复的 Session/API Token 和 pending SSO flow、推进 credential epoch。
+- `vonet auth-cleanup --database ... --no-migrate` 只打开已有的 SQLite 数据库，不执行 schema 迁移；它用于恢复 schema 34 快照后的凭据清理，完成清理后 `user_version` 仍为 34。
+- SSO provider 配置与已绑定外部身份继续保留，不把撤销凭据误当成解绑或删除 SSO 配置。
+- 恢复数据库后必须在开放服务前执行清理；密码、Session/API Token、SSO secret 和数据库内容不得写入日志或 smoke 输出。
+
+**验证结果**:
+
+- `cmd/vonet` bootstrap/auth-cleanup 测试适配新签名，并保留 Session/API Token/pending flow 撤销、epoch 推进和 SSO binding/config 保存断言。
+- 全量 Go 测试覆盖 `store/auth/server/sso` 的 schema 34 到 35、TLS Cookie、HTTP 私网和 IPv6 向量。
+- release 使用真实 `vonet auth-cleanup --database` 二进制 smoke；Docker amd64/arm64 镜像各自执行容器内 smoke。
+- `docker compose -f docker-compose.sso-test.yml config --quiet` 和 workflow 静态检查纳入验证。
+
+**备份与回滚**:
+
+- schema 35 无自动降级。升级前停止写入并使用 SQLite backup API 或 `.backup` 生成一致快照；手工冷备份必须把主数据库、`-wal`、`-shm` 作为同一组复制，同时备份 TLS、插件和 `/etc/vonet/env`。
+- 回滚必须恢复与旧二进制匹配的完整快照。只恢复主数据库而保留较新的 WAL/SHM 可能重放 schema 35 写入或产生混合状态，禁止这种组合。
+- 恢复 schema 34 快照后若要启动旧二进制，必须使用匹配的旧二进制执行 `auth-cleanup`，或使用新二进制执行 `vonet auth-cleanup --database /opt/vonet/data/vonet.db --no-migrate`。该步骤撤销恢复凭据但保留 SSO 配置和外部绑定，且不会升级 schema。
+- 禁止先用会执行迁移的新二进制运行普通 `auth-cleanup` 把 schema 34 快照升级到 schema 35，再启动旧二进制。新二进制的普通 `auth-cleanup` 只用于 schema 35 快照或明确接受升级到 schema 35 的恢复流程。
+- 发布 smoke 必须确认 Compose 文件可解析、镜像内 CLI 可创建并清理独立数据库，且最终二进制在 `web/dist` 构建完成后生成。
+
+---
+
 ## 本地修改列表
 
 ### 1. 读卡器设备强制使用 HardwareKind 判断（而非 DeviceType）
@@ -1613,5 +1650,30 @@ ike: IKE_AUTH EAP round 1: ike: responder reported fatal notification 10500
 - AT host data 需要 Linux、iproute2、BusyBox `udhcpc`、接口独占和网络权限。
 - SSO 需要可信 HTTPS IdP、`VONET_SECURE_COOKIES=true`、根路径回调和敏感数据库备份保护。
 - schema 34 无自动降级；升级前必须备份数据库/WAL/TLS/插件/环境文件。
+
+---
+
+### 59. 上游 17 次提交最终对比与回滚/发布加固
+
+**修改内容**:
+
+- 对 `VoCat-reference` 的 `384a447..70b0e69` 共 17 次提交、42 个文件逐文件复核。SSO/OIDC、Cookie 传输策略、IPv6/private origin、CSRF、API Token 和迁移测试均已同步，没有覆盖或删除 HardwareKind、PCSC IMEI、DJI/Baiwang、DITO/CTEXCEL/O2、VoWiFi、通话、SMS、代理、节点转换、全局来电弹窗或现有 UI 自研功能。
+- VoNet schema 映射保持 migration 33 API Token、migration 34 SSO/credential epoch，并新增 migration 35，仅为 `sessions` 添加 `secure_cookies`。CreateSession、Secure policy、CSRF 替换和 API Token 创建均在事务中绑定当前 credential epoch。
+- 新增 `auth-cleanup --no-migrate` 和 `store.OpenWithoutMigration`。恢复 schema 34 快照后可在不升级数据库的前提下撤销 Session、API Token 和 pending SSO flow，同时保留 SSO 配置与外部 binding，使旧二进制仍可启动。
+- 补充 Session/API Token 创建、`DeleteAllAuthCredentials`、清理事务回滚和并发 CSRF 轮换的回归测试；Secure Cookie 只能单向升级，不能回退。
+- tag release 增加 `npm test`、Playwright Chromium 安装和 `npm run test:e2e`；SSO CI 覆盖 `v*` tag。Docker amd64/arm64 smoke 增加完整迁移与 schema 34 WAL/SHM 快照的两阶段验证。
+- 修正 README、多语言文档和回滚说明：schema 34 快照必须使用 `auth-cleanup --no-migrate` 或匹配的旧二进制清理，禁止先用普通 `auth-cleanup` 升级到 schema 35 后再启动旧版本。
+
+**验证结果**:
+
+- `go test ./internal/store ./cmd/vonet`、`go vet ./...` 通过；凭据与 CSRF 并发专项重复 10 轮通过。
+- `npm test` 49/49，`npm run test:e2e` 11/11，`npm run build` 通过。
+- `auth_restore_smoke.py` 的 schema 34 WAL/SHM 两阶段 smoke、Python 编译、Compose config、actionlint 和 `git diff --check` 通过。
+- 全量 `go test ./...` 仅 `internal/exportproxy` 两项因 Windows 系统保留 TCP 1080 端口失败，其余包通过；`-race` 因本机缺少可用的 CGO C 编译器未执行。
+
+**部署与验证约束**:
+
+- 本机 Docker daemon 不可用，未在本地实际构建/运行 amd64/arm64 双架构镜像；CI 已配置对应 `--platform` matrix 执行相同的迁移、恢复和清理断言。
+- 上游新增 Cookie/迁移测试文件和 `scripts/ci/auth_restore_smoke.py` 必须随代码一并提交，后续提交不得遗漏未跟踪文件。
 
 ---

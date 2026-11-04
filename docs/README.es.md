@@ -208,7 +208,7 @@ VoNet lee un archivo de configuración JSON opcional desde `VONET_CONFIG` y lueg
 | `VONET_ADDR` | `0.0.0.0:7575` | Dirección de escucha HTTP. |
 | `VONET_DATABASE_PATH` | `./data/vonet.db` | Ruta de la base de datos SQLite. |
 | `VONET_SESSION_TTL` | `24h` | Duración de la sesión de autenticación. |
-| `VONET_SECURE_COOKIES` | `false` | Marca las cookies de sesión como seguras cuando se usa HTTPS. |
+| `VONET_SECURE_COOKIES` | `false` | Anulación opcional que fuerza Secure en todas las entradas; sin ella, cada entrada HTTP/HTTPS selecciona su protección automáticamente. |
 | `VONET_SHUTDOWN_TIMEOUT` | `10s` | Tiempo de espera de apagado ordenado. |
 | `VONET_MAX_REQUEST_BODY_BYTES` | `1048576` | Tamaño máximo del cuerpo de solicitud de la API. |
 | `VONET_REPO` | `springai/VoNet` | Repositorio de GitHub de confianza usado por el autoactualizador, en formato `owner/name`. |
@@ -257,6 +257,35 @@ docker pull ghcr.io/mengmengcode/vonet:latest
 ```
 
 Recrear el contenedor después de descargar la nueva imagen.
+
+## Entradas de navegador SSO y reversión
+
+Una configuración de SSO y un vínculo externo guardados pueden atender un origen
+HTTPS público configurado y entradas locales/privadas explícitas por HTTP o
+HTTPS. Registre cada callback completo (`/api/auth/sso/callback`) en el proveedor
+de identidad. El callback se congela al crear el flow y se rechaza cualquier
+retorno por otra entrada. HTTP solo se admite con localhost, loopback e IP
+privadas literales, no con nombres DNS privados ni hosts HTTP públicos. Los
+hosts IPv6 usan la forma comprimida del navegador, incluidas direcciones
+IPv4-mapped hexadecimales.
+
+Las cookies de sesión y CSRF son host-only. Las entradas comparten la
+configuración y el vínculo, pero no las sesiones entre hosts. Cada entrada
+selecciona Secure automáticamente según su transporte o una señal
+`X-Forwarded-Proto` de confianza. `VONET_SECURE_COOKIES=true` fuerza Secure en
+todas las entradas; en una entrada solo HTTP no puede emitir la cookie necesaria
+y bloquea el inicio de sesión o la actualización de sesión. Un reverse proxy
+debe conservar el `Host` original y eliminar los encabezados `Forwarded` y
+`X-Forwarded-*` no confiables.
+
+VoNet usa schema 35 conservando migration 33 para tokens API, migration 34 para
+almacenamiento SSO y todas las tablas locales; schema 35 solo añade
+`sessions.secure_cookies`. Después de restaurar una copia de la base de datos,
+ejecute `vonet auth-cleanup --database /opt/vonet/data/vonet.db` antes de exponer
+el servicio. El comando conserva la configuración y el vínculo, pero revoca
+sesiones y tokens API y elimina flows pendientes. Schema 35 no se degrada
+automáticamente; la reversión requiere restaurar la instantánea previa a la
+actualización.
 
 ## Desarrollo
 

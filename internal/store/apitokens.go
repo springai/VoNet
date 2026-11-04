@@ -33,22 +33,20 @@ func (s *Store) CreateAPIToken(
 		expiry = expiresAt.UTC().Unix()
 	}
 	created := time.Now().UTC()
-	var credentialEpoch int64
-	if err := s.db.QueryRowContext(ctx, "SELECT credential_epoch FROM admins WHERE id = 1").Scan(&credentialEpoch); err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return APIToken{}, fmt.Errorf("read credential epoch: %w", err)
+	var id int64
+	for attempt := 0; attempt < 3; attempt++ {
+		retry, insertErr := s.createAPITokenOnce(
+			ctx, name, tokenHash, readOnly, expiry, created.Unix(), &id,
+		)
+		if insertErr == nil {
+			break
 		}
-	}
-	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO api_tokens (name, token_hash, read_only, expires_at, created_at, last_used_at, credential_epoch)
-		VALUES (?, ?, ?, ?, ?, 0, ?)
-	`, name, tokenHash, boolToInt(readOnly), expiry, created.Unix(), credentialEpoch)
-	if err != nil {
-		return APIToken{}, fmt.Errorf("create api token: %w", err)
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return APIToken{}, fmt.Errorf("read api token id: %w", err)
+		if !retry {
+			return APIToken{}, insertErr
+		}
+		if attempt == 2 {
+			return APIToken{}, fmt.Errorf("create api token: %w", ErrNotFound)
+		}
 	}
 	return APIToken{
 		ID:        id,
@@ -57,6 +55,54 @@ func (s *Store) CreateAPIToken(
 		ExpiresAt: expiresAt,
 		CreatedAt: created,
 	}, nil
+}
+
+func (s *Store) createAPITokenOnce(
+	ctx context.Context,
+	name string,
+	tokenHash []byte,
+	readOnly bool,
+	expiry int64,
+	created int64,
+	id *int64,
+) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin create api token: %w", err)
+	}
+	defer tx.Rollback()
+
+	var credentialEpoch int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE((SELECT credential_epoch FROM admins WHERE id = 1), 0)
+	`).Scan(&credentialEpoch); err != nil {
+		return false, fmt.Errorf("read credential epoch: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO api_tokens (
+			name, token_hash, read_only, expires_at, created_at, last_used_at, credential_epoch
+		)
+		SELECT ?, ?, ?, ?, ?, 0, ?
+		WHERE ? = COALESCE((SELECT credential_epoch FROM admins WHERE id = 1), 0)
+	`, name, tokenHash, boolToInt(readOnly), expiry, created, credentialEpoch, credentialEpoch)
+	if err != nil {
+		return false, fmt.Errorf("create api token: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read api token insert result: %w", err)
+	}
+	if affected != 1 {
+		return true, nil
+	}
+	*id, err = result.LastInsertId()
+	if err != nil {
+		return false, fmt.Errorf("read api token id: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit create api token: %w", err)
+	}
+	return false, nil
 }
 
 // APITokens lists every stored token, oldest first.

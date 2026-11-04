@@ -82,6 +82,7 @@ test("callback URL is available before creating the OIDC client and follows unsa
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(APP + "/api/auth/sso/callback");
   await expect(card(page).getByLabel("Client ID", { exact: true })).toHaveValue("");
   await expect(card(page).getByPlaceholder("Enter a new secret", { exact: true })).toHaveValue("");
+  await expect(card(page).getByLabel("Client ID", { exact: true })).toHaveAttribute("placeholder", "Enter Client ID");
   await expect(card(page).getByText("Enter the Pocket ID instance URL", { exact: true })).toBeVisible();
   await expect(card(page).getByText("Enter the client ID created for VoNet in your identity service", { exact: true })).toBeVisible();
 
@@ -94,6 +95,16 @@ test("callback URL is available before creating the OIDC client and follows unsa
   const persisted = await page.evaluate(async () => (await (await fetch("/api/settings/sso", { credentials: "include" })).json()).data.config);
   expect(persisted.revision).toBe(0);
   expect(persisted.public_origin).toBe("");
+
+  for (const [input, normalized] of [
+    ["http://[::ffff:192.168.1.20]:7575", "http://[::ffff:c0a8:114]:7575"],
+    ["http://[0:0:0:0:0:0:0:1]:7575", "http://[::1]:7575"],
+  ]) {
+    await origin.fill(input);
+    await expect(card(page).getByText(normalized + "/api/auth/sso/callback", { exact: true })).toBeVisible();
+    await copy.click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(normalized + "/api/auth/sso/callback");
+  }
 
   await origin.fill("https://vonet.nas.test:8443/with-a-path");
   await expect(copy).toBeDisabled();
@@ -369,4 +380,170 @@ test("provider metadata failures leave password sign-in usable and cancel retrie
   const attemptsAfterLogin = attempts;
   await page.clock.fastForward(30_000);
   expect(attempts).toBe(attemptsAfterLogin);
+});
+
+test("one saved HTTPS provider serves local HTTP and HTTPS browser logins automatically", async ({ page, browser }) => {
+  await passwordLogin(page);
+  await settings(page);
+  await card(page).getByLabel("Pocket ID Issuer", { exact: true }).fill(IDP);
+  await card(page).getByLabel("Client ID", { exact: true }).fill("vonet-browser-test");
+  await card(page).getByPlaceholder("Enter a new secret", { exact: true }).fill(SECRET);
+  await save(page);
+  await card(page).getByRole("button", { name: "Bind external account", exact: true }).click();
+  await approve(page);
+  await expect(page).toHaveURL(APP + "/settings");
+  await expect(card(page).getByText("Browser test administrator", { exact: true })).toBeVisible();
+  await settings(page);
+  await card(page).getByRole("switch", { name: "Enable SSO sign-in", exact: true }).click();
+  await save(page);
+
+  for (const origin of ["http://127.0.0.1:17477", "http://localhost:17477", APP]) {
+    const context = await browser.newContext({ ignoreHTTPSErrors: true });
+    await prepare(context);
+    const p = await context.newPage();
+    await p.goto(origin + "/login");
+    await p.getByRole("link", { name: "Continue with Pocket ID", exact: true }).click();
+    expect(new URL(p.url()).searchParams.get("redirect_uri")).toBe(origin + "/api/auth/sso/callback");
+    await approve(p);
+    await expect(p).toHaveURL(origin + "/");
+    const session = await checkSession(p);
+    expect(session.status).toBe(200);
+    const cookies = await context.cookies(origin);
+    for (const name of ["vonet_session", "vonet_csrf"]) {
+      const cookie = cookies.find(c => c.name === name);
+      expect(cookie?.secure).toBe(origin.startsWith("https:"));
+      expect(cookie?.sameSite).toBe("Strict");
+    }
+    const result = await p.evaluate(async () => {
+      const session = await (await fetch("/api/auth/session")).json();
+      const response = await fetch("/api/settings/security", { method: "PUT", headers: { "Content-Type": "application/json", "X-CSRF-Token": session.data.csrf_token }, body: JSON.stringify({ mode: "internal" }) });
+      return response.status;
+    });
+    expect(result).toBe(200);
+    const saved = await p.evaluate(async () => (await (await fetch("/api/settings/sso")).json()).data.config);
+    expect(saved.public_origin).toBe(APP);
+
+    // Cookies are host-only: an SSO session created on one entry is invisible on another.
+    const otherOrigin = origin === APP ? "http://127.0.0.1:17477" : APP;
+    await p.goto(otherOrigin + "/login");
+    expect((await checkSession(p)).status).toBe(401);
+    expect((await context.cookies(otherOrigin)).some(c => c.name === "vonet_session")).toBe(false);
+    await p.goto(origin + "/settings");
+    expect((await checkSession(p)).status).toBe(200);
+    await context.close();
+
+    const passwordContext = await browser.newContext({ ignoreHTTPSErrors: true });
+    await prepare(passwordContext);
+    const passwordPage = await passwordContext.newPage();
+    await passwordPage.goto(origin + "/login?redirect=%2Fsettings");
+    await passwordPage.locator('input[autocomplete="username"]').fill("admin");
+    await passwordPage.locator('input[autocomplete="current-password"]').fill(PASSWORD);
+    await passwordPage.locator('button[type="submit"]').click();
+    await expect(passwordPage).toHaveURL(origin + "/settings");
+    expect((await passwordContext.cookies(origin)).find(c => c.name === "vonet_session")?.secure).toBe(origin.startsWith("https:"));
+    expect((await checkSession(passwordPage)).status).toBe(200);
+    await passwordContext.close();
+  }
+});
+
+test("a saved HTTPS SSO draft does not change an existing HTTP password client", async ({ page, browser }) => {
+  await passwordLogin(page);
+  await settings(page);
+  await card(page).getByLabel("VoNet public origin", { exact: true }).fill("https://vonet.test:17477");
+  await card(page).getByLabel("Pocket ID Issuer", { exact: true }).fill(IDP);
+  await card(page).getByLabel("Client ID", { exact: true }).fill("vonet-browser-test");
+  await card(page).getByPlaceholder("Enter a new secret", { exact: true }).fill(SECRET);
+  const saved = await save(page);
+  expect(saved.config.enabled).toBe(false);
+
+  const context = await browser.newContext();
+  await prepare(context);
+  try {
+    const p = await context.newPage();
+    const origin = "http://vonet.test:17477";
+    await p.goto(origin + "/login?redirect=%2Fsettings");
+    await p.locator('input[autocomplete="username"]').fill("admin");
+    await p.locator('input[autocomplete="current-password"]').fill(PASSWORD);
+    await p.locator('button[type="submit"]').click();
+    await expect(p).toHaveURL(origin + "/settings");
+    expect((await checkSession(p)).status).toBe(200);
+    for (const name of ["vonet_session", "vonet_csrf"]) {
+      expect((await context.cookies(origin)).find(c => c.name === name)?.secure).toBe(false);
+    }
+    const statuses = await p.evaluate(async () => {
+      const session = await (await fetch("/api/auth/session")).json();
+      const headers = { "Content-Type": "application/json", "X-CSRF-Token": session.data.csrf_token };
+      const write = await fetch("/api/settings/security", { method: "PUT", headers, body: JSON.stringify({ mode: "internal" }) });
+      const logout = await fetch("/api/auth/logout", { method: "POST", headers });
+      const afterLogout = await fetch("/api/auth/session");
+      return [write.status, logout.status, afterLogout.status];
+    });
+    expect(statuses).toEqual([200, 200, 401]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("HTTPS proxy password cookies stay Secure without enabling proxy-header trust", async ({ page, context }) => {
+  // The TLS fixture strips TLS state before handing requests to the real app.
+  await passwordLogin(page);
+  for (const name of ["vonet_session", "vonet_csrf"]) {
+    expect((await context.cookies(APP)).find(c => c.name === name)?.secure).toBe(true);
+  }
+  await context.clearCookies({ name: "vonet_csrf" });
+  expect((await context.cookies(APP)).some(c => c.name === "vonet_csrf")).toBe(false);
+  const statuses = await page.evaluate(async () => {
+    const response = await fetch("/api/auth/session", { referrerPolicy: "no-referrer" });
+    const session = await response.json();
+    const write = await fetch("/api/settings/security", { method: "PUT", headers: { "Content-Type": "application/json", "X-CSRF-Token": session.data.csrf_token }, body: JSON.stringify({ mode: "internal" }) });
+    return [response.status, write.status];
+  });
+  expect(statuses).toEqual([200, 200]);
+  for (const name of ["vonet_session", "vonet_csrf"]) {
+    expect((await context.cookies(APP)).find(c => c.name === name)?.secure).toBe(true);
+  }
+  await page.goto("http://vonet.test:17477/login");
+  expect((await checkSession(page)).status).toBe(401);
+  await page.goto(APP + "/settings");
+  expect((await checkSession(page)).status).toBe(200);
+});
+
+test("upgrading an HTTP session to HTTPS protects both cookies and preserves the session", async ({ page, context }) => {
+  const httpOrigin = "http://vonet.test:17477";
+  await page.goto(httpOrigin + "/login?redirect=%2Fsettings");
+  await page.locator('input[autocomplete="username"]').fill("admin");
+  await page.locator('input[autocomplete="current-password"]').fill(PASSWORD);
+  await page.locator('button[type="submit"]').click();
+  await expect(page).toHaveURL(httpOrigin + "/settings");
+  expect((await checkSession(page)).status).toBe(200);
+  const original = (await context.cookies(httpOrigin)).find(c => c.name === "vonet_session");
+  expect(original?.secure).toBe(false);
+
+  // The fixture terminates TLS without enabling forwarded-header trust.
+  await page.goto(APP + "/settings");
+  expect((await checkSession(page)).status).toBe(200);
+  for (const name of ["vonet_session", "vonet_csrf"]) {
+    const cookie = (await context.cookies(APP)).find(c => c.name === name);
+    expect(cookie?.secure).toBe(true);
+    expect(cookie?.sameSite).toBe("Strict");
+    expect(cookie?.httpOnly).toBe(name === "vonet_session");
+  }
+  const upgraded = (await context.cookies(APP)).find(c => c.name === "vonet_session");
+  expect(upgraded?.value).toBe(original?.value);
+  // Max-Age is rounded to whole seconds; refreshing must not extend the session.
+  expect(Math.abs(upgraded!.expires - original!.expires)).toBeLessThanOrEqual(1);
+  const writeStatus = await page.evaluate(async () => {
+    const session = await (await fetch("/api/auth/session", { referrerPolicy: "no-referrer" })).json();
+    return (await fetch("/api/settings/security", {
+      method: "PUT", headers: { "Content-Type": "application/json", "X-CSRF-Token": session.data.csrf_token },
+      body: JSON.stringify({ mode: "internal" }),
+    })).status;
+  });
+  expect(writeStatus).toBe(200);
+
+  await page.goto(httpOrigin + "/login");
+  expect((await checkSession(page)).status).toBe(401);
+  expect(await page.evaluate(async () => (await fetch("/api/settings/security")).status)).toBe(401);
+  await page.goto(APP + "/settings");
+  expect((await checkSession(page)).status).toBe(200);
 });

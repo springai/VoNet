@@ -555,12 +555,22 @@ func (s *Store) FinalizeSSOLogin(ctx context.Context, flow SSOFlow, identity SSO
 		return Admin{}, err
 	}
 	now := time.Now().UTC().Unix()
-	_, err = tx.ExecContext(ctx, `INSERT INTO sessions
-		(token_hash, admin_id, csrf_hash, expires_at, created_at, login_method, sso_binding_id, credential_epoch)
-		VALUES (?, ?, ?, ?, ?, 'sso', ?, ?)`, material.TokenHash, admin.ID, material.CSRFHash,
-		material.ExpiresAt.Unix(), now, snapshot.Binding.ID, admin.CredentialEpoch)
+	result, err := tx.ExecContext(ctx, `INSERT INTO sessions
+		(token_hash, admin_id, csrf_hash, expires_at, created_at, login_method, sso_binding_id, secure_cookies, credential_epoch)
+		SELECT ?, ?, ?, ?, ?, 'sso', ?, ?, a.credential_epoch
+		FROM admins a
+		WHERE a.id = ? AND a.credential_epoch = ?`,
+		material.TokenHash, admin.ID, material.CSRFHash, material.ExpiresAt.Unix(), now,
+		snapshot.Binding.ID, material.SecureCookies, admin.ID, admin.CredentialEpoch)
 	if err != nil {
 		return Admin{}, fmt.Errorf("create sso session: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return Admin{}, fmt.Errorf("read sso session insert result: %w", err)
+	}
+	if affected != 1 {
+		return Admin{}, ErrSSOConfigChanged
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE sso_bindings SET last_login_at = ?, updated_at = ? WHERE id = ?`, now, now, snapshot.Binding.ID); err != nil {
 		return Admin{}, fmt.Errorf("touch sso binding: %w", err)

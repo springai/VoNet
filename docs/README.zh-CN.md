@@ -230,7 +230,7 @@ VoNet 先从 `VONET_CONFIG` 读取可选的 JSON 配置文件，再应用 `VONET
 | `VONET_ADDR` | `0.0.0.0:7575` | HTTP 监听地址。 |
 | `VONET_DATABASE_PATH` | `./data/vonet.db` | SQLite 数据库路径。 |
 | `VONET_SESSION_TTL` | `24h` | 鉴权会话有效期。 |
-| `VONET_SECURE_COOKIES` | `false` | 在使用 HTTPS 时将会话 Cookie 标记为安全。 |
+| `VONET_SECURE_COOKIES` | `false` | 可选的全局强制 Secure 覆盖；不启用时各 HTTP/HTTPS 入口自动选择 Cookie 保护。 |
 | `VONET_SHUTDOWN_TIMEOUT` | `10s` | 优雅关闭超时时间。 |
 | `VONET_MAX_REQUEST_BODY_BYTES` | `1048576` | API 请求体最大字节数。 |
 | `VONET_MCP_ENABLED` | `false` | 启用 `/mcp` AI 客户端端点。 |
@@ -302,11 +302,11 @@ Claude Code 客户端配置示例：
 登录页支持 Pocket ID、GitHub 和通用 OAuth2/OpenID Connect 提供方，密码登录
 始终保留。只有完成提供方配置并把外部身份绑定到唯一管理员后，SSO 才会启用。
 
-`PublicOrigin` 只能包含对外的 scheme、host 和可选端口，回调固定为
-`/api/auth/sso/callback`。生产环境必须使用 HTTPS 并设置
-`VONET_SECURE_COOKIES=true`；HTTP 仅允许 loopback 开发环境。SSO 设置和账号
-绑定只允许浏览器 Session 操作，并受 Session 绑定 CSRF 保护；API Token 和
-MCP 不能管理 SSO。
+`PublicOrigin` 只能包含已保存的对外 scheme、host 和可选端口，回调固定为
+`/api/auth/sso/callback`。面向公网的生产入口必须使用 HTTPS；显式配置的
+localhost、loopback 或私网 IP 浏览器入口可使用 HTTP 或 HTTPS。SSO 设置和
+账号绑定只允许浏览器 Session 操作，并受 Session 绑定 CSRF 保护；API Token
+和 MCP 不能管理 SSO。
 
 SQLite 数据库保存提供方配置、绑定元数据和标记为敏感的 Client Secret。
 数据库备份及 WAL 文件必须按凭据材料保护。二进制更新或管理员密码轮换会撤销
@@ -321,9 +321,9 @@ SSO 关闭时保存配置、检查配置、绑定一个外部账号，最后才�
 
 配置 Pocket ID：
 
-1. 为 VoNet 配置 HTTPS 根路径入口，例如 `https://vonet.example.com`，并设置
-   `VONET_SECURE_COOKIES=true`。选择 **Pocket ID**；公开地址初始使用浏览器
-   访问地址，需要时编辑 **VoNet 公开地址**。保存凭据前即可复制回调地址：
+1. 为 VoNet 配置 HTTPS 根路径入口，例如 `https://vonet.example.com`。选择
+   **Pocket ID**；公开地址初始使用浏览器访问地址，需要时编辑 **VoNet 公开
+   地址**。保存凭据前即可复制回调地址：
    `https://vonet.example.com/api/auth/sso/callback`。
 2. 在 Pocket ID 为 VoNet 单独创建 **Confidential** OIDC Client，登记精确回调
    地址，并确认目标用户或用户组获准使用该客户端。每个应用使用独立客户端和
@@ -355,11 +355,36 @@ Scopes、顶层用户 ID 字段（默认 `id`）、Token 认证和 PKCE 兼容�
 更换 Provider、Client ID、Issuer 或 Generic 身份端点/用户 ID 字段会切换身份
 命名空间。旧 Secret 会被清除，必须显式重置绑定后才能再次启用 SSO。
 
+### SSO 多浏览器入口
+
+同一份已保存的提供方配置和外部绑定可服务已配置的 HTTPS 公网入口，以及显式
+配置的本地/私网 HTTP 或 HTTPS 浏览器入口。必须在身份服务登记每个完整的回调
+URL（`/api/auth/sso/callback`）。授权和 Token 交换始终使用 flow 创建时冻结的
+回调；通过其他入口返回的回调会被拒绝。HTTP 仅接受 localhost、loopback 和
+literal 私网 IP，不接受任意公网 HTTP host 或私网 DNS 名称。
+
+IPv6 回调 host 使用浏览器的压缩拼写，包括十六进制 IPv4-mapped 地址。请登记
+设置页显示的回调 URL。展开的 IPv6 拼写可以被识别，但身份服务必须接受规范化
+后的回调 URL。
+
+Session 和 CSRF Cookie 均为 host-only。多个浏览器入口共享 SSO 提供方配置和
+外部绑定，但 Session 不跨 host；通过一个入口登录不会认证另一个主机名或 IP
+literal。直接 TLS、反代后的已配置 HTTPS 公网入口和受信任的
+`X-Forwarded-Proto` 会按入口自动选择 Secure Cookie。
+`VONET_SECURE_COOKIES=true` 是可选的强制 Secure 覆盖；纯 HTTP 入口无法签发
+所需 Cookie，会阻止登录或 Session 刷新。反向代理必须保留原始 `Host`，并从
+客户端请求中清除不受信任的 `Forwarded` 和 `X-Forwarded-*` 头。
+
+Session 和 CSRF Cookie 使用请求传输的保护级别，只能在可识别的 HTTPS 请求上
+升级为 Secure。已有 Session 保留原保护级别；升级后使用 HTTPS 的用户应重新
+登录，使新 Session 记录正确的 Cookie 策略。独立局域网 HTTP 入口无需重启
+进程即可继续使用。HTTP 凭据在传输时不受加密保护。
+
 ### 网络、部署与 TLS
 
 现有来源网络策略继续覆盖全部 SSO 路由。`PublicOrigin` 是根路径公开地址，不会从
-转发 Host 推导。生产环境必须使用 HTTPS 和 `VONET_SECURE_COOKIES=true`，HTTP 仅
-允许 loopback 开发环境。
+转发 Host 推导。当前请求入口负责选择并冻结自己的回调；允许的多个入口共享
+已保存的 SSO 配置和外部绑定。
 
 VoNet 进程必须能够解析并连接 Discovery、Token、JWKS 和 UserInfo。每个 DNS
 候选地址和实际拨号地址都会校验；loopback、link-local、云元数据、特殊用途和
@@ -367,8 +392,8 @@ VoNet 进程必须能够解析并连接 Discovery、Token、JWKS 和 UserInfo。
 Generic HTTP Token/UserInfo 仅允许显式配置的私网后端；GitHub 固定端点仅允许公网。
 
 私有 CA 必须安装到宿主机或容器信任库，不提供跳过 TLS 校验的开关。反向代理必须
-保持已配置的公开 origin。首期只支持根路径部署，不支持把 SSO 发布在 URL 前缀下，
-回调地址也不从转发 Host 头推导。
+保持已配置的公开 origin 和原始 Host，并清除不受信任的转发头。首期只支持根路径
+部署，不支持把 SSO 发布在 URL 前缀下，回调地址也不从转发 Host 头推导。
 
 当前 Compose 使用 host network，应在实际容器内验证 DNS、路由和 CA 信任，不能
 假定桥接网络的 service name 可用。本地 Vite 开发时统一使用一个 loopback origin，
@@ -396,8 +421,10 @@ Token、推进 credential epoch、取消 pending flow，并保留外部绑定。
 
 ### 升级、备份与回滚
 
-SSO 使用 VoNet schema 34，同时保留 migration 33 API Token 和全部本地业务表。
-完成配置和绑定前，SSO 始终禁用。升级前应停止服务并备份完整数据目录，包括
+SSO 使用 VoNet schema 35，同时保留 migration 33 API Token、migration 34 SSO
+存储和全部本地业务表。Schema 35 仅增加 `sessions.secure_cookies`，用于记录
+每个 Session 的 Cookie 传输策略。完成配置和绑定前，SSO 始终禁用。升级前应
+停止服务并备份完整数据目录，包括
 SQLite、WAL/SHM、TLS、插件和 `/etc/vonet/env`。在线备份必须使用 SQLite backup
 API 或 `.backup`，不能只复制主数据库文件。
 
@@ -408,12 +435,12 @@ vonet auth-cleanup --database /opt/vonet/data/vonet.db
 ```
 
 该命令保留 SSO 配置和外部绑定，但会撤销恢复出来的 Session/API Token、推进
-credential epoch 并清空 pending SSO flow。Schema 34 没有自动降级；回滚必须恢复
+credential epoch 并清空 pending SSO flow。Schema 35 没有自动降级；回滚必须恢复
 与旧二进制匹配的升级前快照。
 
 Docker 升级应拉取镜像并重建容器。生产发布前应验证 HTTPS 根路径回调和安全
 Cookie、完成真实 Pocket ID Passkey/访问策略联调、从部署所用 Compose 容器确认
-DNS/路由/CA 信任，并演练 schema 34 升级、`vonet auth-cleanup` 和回滚流程。
+DNS/路由/CA 信任，并演练 schema 35 升级、`vonet auth-cleanup` 和回滚流程。
 
 ### Cleanup health
 

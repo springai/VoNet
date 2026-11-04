@@ -5,6 +5,7 @@ on:
     paths: ["cmd/vonet/**", "internal/auth/**", "internal/store/**", "internal/server/**", "internal/sso/**", "internal/netguard/**", "web/**", "go.mod", "go.sum", ".github/workflows/sso.yml"]
   push:
     branches: [master]
+    tags: ["v*"]
     paths: ["cmd/vonet/**", "internal/auth/**", "internal/store/**", "internal/server/**", "internal/sso/**", "internal/netguard/**", "web/**", "go.mod", "go.sum", ".github/workflows/sso.yml"]
 
 permissions:
@@ -26,9 +27,20 @@ jobs:
       - run: npm --prefix web ci --no-audit --no-fund
       - run: npm --prefix web test
       - run: npm --prefix web run build
-      - run: go test ./...
+      - name: Validate SSO test Compose configuration
+        run: docker compose -f docker-compose.sso-test.yml config --quiet
+      - name: Test schema 34 to 35, auth cleanup, TLS proxy, private HTTP and IPv6
+        run: go test ./internal/store ./internal/auth ./internal/server ./internal/sso ./cmd/vonet
+      - name: Test all Go packages
+        run: go test ./...
+      - name: Smoke schema 34 to 35 migration
+        run: go test ./internal/store -run '^TestMigration35' -count=1
       - run: go vet ./...
       - run: go test -race ./internal/auth ./internal/store ./internal/server ./internal/sso
+      - name: Smoke auth-cleanup command
+        run: |
+          go run ./cmd/vonet auth-cleanup \
+            --database "$RUNNER_TEMP/vonet-auth-cleanup.db"
       - run: npm --prefix web exec -- playwright install --with-deps chromium
       - run: npm --prefix web run test:e2e
       - uses: actions/upload-artifact@v6

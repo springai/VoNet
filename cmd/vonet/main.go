@@ -464,6 +464,12 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 	if err != nil {
 		return fmt.Errorf("configure self-signed HTTPS: %w", err)
 	}
+	if cfg.SecureCookies && !httpsManager.Enabled() {
+		logger.Warn(
+			"VONET_SECURE_COOKIES=true forces Secure cookies; plain HTTP browsers cannot authenticate unless a trusted TLS proxy provides HTTPS",
+			"category", "security",
+		)
+	}
 
 	// The plugin/extension system is gated behind a hidden developer-mode flag.
 	// When off (the default) the manager is never created and the server receives

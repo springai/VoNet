@@ -208,7 +208,7 @@ docker run -d \
 | `VONET_ADDR` | `0.0.0.0:7575` | عنوان الاستماع HTTP. |
 | `VONET_DATABASE_PATH` | `./data/vonet.db` | مسار قاعدة بيانات SQLite. |
 | `VONET_SESSION_TTL` | `24h` | مدة صلاحية جلسة المصادقة. |
-| `VONET_SECURE_COOKIES` | `false` | يضع علامة آمنة على ملفات تعريف ارتباط الجلسة عند استخدام HTTPS. |
+| `VONET_SECURE_COOKIES` | `false` | تجاوز اختياري يفرض الحماية على كل الإدخالات؛ تُضبط حماية Cookie تلقائيًا لكل إدخال HTTP/HTTPS. |
 | `VONET_SHUTDOWN_TIMEOUT` | `10s` | مهلة الإيقاف السلس. |
 | `VONET_MAX_REQUEST_BODY_BYTES` | `1048576` | الحد الأقصى لحجم جسم طلب API. |
 | `VONET_REPO` | `springai/VoNet` | مستودع GitHub الموثوق الذي يستخدمه المحدّث الذاتي، بصيغة `owner/name`. |
@@ -257,6 +257,29 @@ docker pull ghcr.io/mengmengcode/vonet:latest
 ```
 
 أعد إنشاء الحاوية بعد سحب الصورة الجديدة.
+
+## إدخالات SSO متعددة والترجيع
+
+تعمل إعدادات SSO والربط الخارجي المحفوظة مع نقطة HTTPS عامة مهيّأة ومع نقاط
+محلية/خاصة صريحة فوق HTTP أو HTTPS. سجّل كل callback كامل
+(`/api/auth/sso/callback`) لدى مزوّد الهوية. يُجمَّد callback عند إنشاء flow،
+وتُرفض العودة عبر نقطة أخرى. يُقبل HTTP فقط مع localhost وloopback وعناوين
+IP خاصة حرفيّة، وليس مع أسماء DNS خاصة أو أي host عام. تستخدم عناوين IPv6
+صيغة المتصفح المضغوطة، بما في ذلك عناوين IPv4-mapped الست عشرية.
+
+ملفات تعريف ارتباط Session وCSRF تكون host-only، لذلك تتشارك نقاط الدخول
+الإعدادات والربط لكن لا تتشارك Session بين المضيفات. تُختار حماية Secure
+تلقائيًا لكل نقطة حسب النقل أو إشارة `X-Forwarded-Proto` الموثوقة. يفرض
+`VONET_SECURE_COOKIES=true` الحماية على كل النقاط؛ وعند استخدام HTTP فقط يمنع
+إصدار Cookie اللازم ويوقف تسجيل الدخول أو تحديث Session. يجب على reverse
+proxy حفظ `Host` الأصلي وإزالة رؤوس `Forwarded` و`X-Forwarded-*` غير الموثوقة.
+
+يستخدم VoNet schema 35 مع الحفاظ على migration 33 لرموز API وmigration 34
+لتخزين SSO وجميع جداول العمل المحلية؛ وتنشئ schema 35 فقط عمود
+`sessions.secure_cookies`. بعد استعادة نسخة قاعدة بيانات، شغّل
+`vonet auth-cleanup --database /opt/vonet/data/vonet.db` قبل إعادة الخدمة. يحفظ
+الأمر الإعدادات والربط، ويؤجل رموز API وSession ويحذف flow المعلّقة. لا يوجد
+ترجيع تلقائي لـ schema 35؛ استعد النسخة المطابقة السابقة للترقية.
 
 ## التطوير
 

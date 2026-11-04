@@ -284,7 +284,7 @@ VoNet reads an optional JSON configuration file from `VONET_CONFIG`, then applie
 | `VONET_ADDR` | `0.0.0.0:7575` | HTTP listen address. |
 | `VONET_DATABASE_PATH` | `./data/vonet.db` | SQLite database path. |
 | `VONET_SESSION_TTL` | `24h` | Authentication session lifetime. |
-| `VONET_SECURE_COOKIES` | `false` | Marks session cookies as secure when HTTPS is used. |
+| `VONET_SECURE_COOKIES` | `false` | Optional force-Secure override for all browser entries; HTTP/HTTPS cookies otherwise adapt automatically. |
 | `VONET_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown timeout. |
 | `VONET_MAX_REQUEST_BODY_BYTES` | `1048576` | Maximum API request body size. |
 | `VONET_MCP_ENABLED` | `false` | Serve the MCP endpoint at `/mcp` for AI agents. Set `true` to enable it. |
@@ -360,12 +360,12 @@ provider while password login remains available. SSO stays disabled until a
 provider is configured and its external identity is bound to the single
 administrator.
 
-`PublicOrigin` must contain only the public scheme, host, and optional port.
-The callback is fixed at `/api/auth/sso/callback`. Production deployments must
-use HTTPS and set `VONET_SECURE_COOKIES=true`; HTTP is accepted only for
-loopback development. SSO settings and account binding are browser-session
-operations protected by session-bound CSRF and cannot be managed with API
-tokens or MCP.
+`PublicOrigin` must contain only the saved public scheme, host, and optional
+port. The callback is fixed at `/api/auth/sso/callback`. Internet-facing
+production entries must use HTTPS; explicit localhost and private-IP browser
+entries may use HTTP or HTTPS. SSO settings and account binding are
+browser-session operations protected by session-bound CSRF and cannot be
+managed with API tokens or MCP.
 
 The SQLite database stores the provider configuration, binding metadata, and
 a client secret in a setting marked sensitive. Treat database backups and WAL
@@ -384,10 +384,10 @@ accounts that share the bound account's email address.
 
 For Pocket ID:
 
-1. Use an HTTPS root-path origin for VoNet, such as `https://vonet.example.com`,
-   and set `VONET_SECURE_COOKIES=true`. Select **Pocket ID**. The public origin
-   initially uses the browser address; edit **VoNet public origin** when needed.
-   The callback and Copy button are available before credentials are saved:
+1. Use an HTTPS root-path origin for VoNet, such as `https://vonet.example.com`.
+   Select **Pocket ID**. The public origin initially uses the browser address;
+   edit **VoNet public origin** when needed. The callback and Copy button are
+   available before credentials are saved:
    `https://vonet.example.com/api/auth/sso/callback`.
 2. In Pocket ID, create a separate **Confidential** OIDC client for VoNet.
    Register the exact callback and confirm that the intended user or group may
@@ -427,12 +427,44 @@ Changing provider, Client ID, Issuer, or a Generic identity endpoint/user ID
 field creates a new identity namespace. The saved secret is discarded and the
 external binding must be explicitly reset before SSO can be enabled again.
 
+### Multiple browser entries for SSO
+
+One saved provider and account binding can serve the configured HTTPS public
+origin and explicit local/private browser entries over HTTP or HTTPS. Register
+each complete callback URL (`/api/auth/sso/callback`) with the identity
+provider. Authorization and token exchange use the callback frozen at flow
+creation; a callback reached through a different entry is rejected. HTTP is
+accepted only for localhost, loopback and literal private IP addresses, not
+arbitrary public HTTP hosts or private DNS names.
+
+IPv6 callback hosts use the browser's compressed spelling, including
+hexadecimal IPv4-mapped addresses. Register the callback shown in settings
+with the identity provider. Expanded IPv6 spellings are recognized, but the
+provider must accept the normalized callback URL.
+
+Session and CSRF cookies are host-only. Browser entries share the SSO provider
+configuration and external binding, but sessions do not cross hosts: signing
+in through one entry does not authenticate another hostname or IP literal.
+Direct TLS, the configured HTTPS public origin behind a proxy, and trusted
+`X-Forwarded-Proto` select Secure cookies automatically for each entry.
+`VONET_SECURE_COOKIES=true` is an optional force-Secure override; on a pure
+HTTP entry it cannot issue the required cookie and blocks login or session
+refresh. A reverse proxy must preserve the original `Host` and remove untrusted
+`Forwarded` and `X-Forwarded-*` headers from client requests.
+
+Session and CSRF cookies use their request transport and can only upgrade to
+Secure on a recognized HTTPS request. Existing sessions remain usable, but
+their pre-migration transport cannot be inferred; HTTPS users should sign in
+again after upgrade to establish the intended policy. Separate LAN HTTP
+entries remain usable without a process restart. HTTP credentials travel
+without transport encryption.
+
 ### Network, deployment and TLS
 
 The existing source-network policy also covers all SSO routes. `PublicOrigin`
 is the root-path public origin and is never derived from forwarded Host
-headers. Production requires HTTPS and `VONET_SECURE_COOKIES=true`; HTTP is
-accepted only for loopback development.
+headers. The current request entry selects and freezes its callback; saved SSO
+configuration and the external binding are shared across allowed entries.
 
 The VoNet process must resolve and connect to Discovery, token, JWKS and
 UserInfo endpoints. Every DNS candidate and actual dial address is checked:
@@ -443,9 +475,10 @@ limited to explicitly configured private backends. GitHub remains public-only.
 
 Private CA certificates must be installed in the host or container trust
 store. There is no TLS verification bypass. A reverse proxy must preserve the
-configured public origin. Root-path deployment is required; VoNet does not
-support publishing SSO beneath a URL prefix and does not derive callback URLs
-from forwarded Host headers.
+configured public origin and original Host while clearing untrusted forwarding
+headers. Root-path deployment is required; VoNet does not support publishing
+SSO beneath a URL prefix and does not derive callback URLs from forwarded Host
+headers.
 
 The supplied Compose deployment uses host networking. Verify DNS, routing and
 CA trust from the actual container instead of assuming bridge-network service
@@ -481,14 +514,17 @@ or `409 sso_identity_not_bound` when the requested transition is incomplete.
 
 ### Upgrade, backup and rollback
 
-SSO uses VoNet schema 34 while preserving migration 33 API tokens and all
-local business tables. SSO remains disabled until configured and bound.
+SSO uses VoNet schema 35 while preserving migration 33 API tokens, migration
+34 SSO storage, and all local business tables. Schema 35 only adds
+`sessions.secure_cookies` for per-session cookie transport policy. SSO remains
+disabled until configured and bound.
 Before upgrading, stop the service and back up the complete data directory,
 including SQLite, WAL/SHM, TLS, plugins and `/etc/vonet/env`. A live copy must
 use SQLite's backup API or `.backup`; copying only the main database file is
 not reliable.
 
-After restoring any database backup, run:
+After restoring a schema 35 backup for continued use with the current binary,
+run:
 
 ```bash
 vonet auth-cleanup --database /opt/vonet/data/vonet.db
@@ -496,13 +532,29 @@ vonet auth-cleanup --database /opt/vonet/data/vonet.db
 
 This preserves SSO configuration and the external binding, but revokes
 restored sessions and API tokens, advances the credential epoch and removes
-pending SSO flows before the service is exposed. Schema 34 has no automatic
-downgrade; rollback requires restoring the matching pre-upgrade snapshot.
+pending SSO flows before the service is exposed. Schema 35 has no automatic
+downgrade.
+
+When rolling back to a schema 34 snapshot and then starting an older binary,
+keep the service stopped and use the matching older binary's `auth-cleanup`,
+or use the current binary with schema migration disabled:
+
+```bash
+vonet auth-cleanup --database /opt/vonet/data/vonet.db --no-migrate
+```
+
+`--no-migrate` opens the restored SQLite database without applying schema
+migrations, then revokes sessions, API tokens and pending SSO flows while
+preserving SSO configuration and the external binding. Do not run the current
+binary's normal `auth-cleanup` against a schema 34 rollback snapshot: that
+command upgrades it to schema 35 and the older binary must not be started
+against the upgraded database. A rollback also requires the complete matching
+pre-upgrade snapshot, including its consistent WAL/SHM files where applicable.
 
 For Docker, update by pulling the image and recreating the container. Before a
 production release, verify the HTTPS root-path callback and secure cookies,
 complete a real Pocket ID Passkey/access-policy test, confirm DNS, routing and
-CA trust from the deployed Compose container, and rehearse the schema 34
+CA trust from the deployed Compose container, and rehearse the schema 35
 upgrade, `vonet auth-cleanup`, and rollback procedure.
 
 ### Cleanup health
@@ -518,9 +570,11 @@ while `/metrics` reports `vonet_sso_cleanup_healthy 1`.
 database backup or deliberately retiring restored or stale authentication
 state. It requires users to authenticate again and create new API tokens while
 preserving SSO provider configuration and the external binding, and it emits
-only an aggregate completion result. Keep passwords, session/API token values,
-SSO secrets, and backup/database contents out of logs, support reports and
-health output; `/readyz` and `/metrics` expose aggregate cleanup state only.
+only an aggregate completion result. `--no-migrate` is required when cleaning
+a restored schema 34 snapshot that will run an older binary. Keep passwords,
+session/API token values, SSO secrets, and backup/database contents out of
+logs, support reports and health output; `/readyz` and `/metrics` expose
+aggregate cleanup state only.
 
 ## Telegram bot
 

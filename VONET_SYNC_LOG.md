@@ -1224,6 +1224,64 @@ Ultra Mobile (ipcc-ultramint-mobile-310026):
 
 ---
 
+## 2026-11-04 同步 VoCat-reference 384a447..70b0e69（SSO Cookie 与 schema 35）
+
+**同步区间**:
+
+- 参考项目基线：`384a447 fix(sso): patch JOSE security alerts and clarify redirect guards`。
+- 目标终态：`70b0e69 docs(readme): synchronize multilingual documentation with English README`。
+- VoNet 已有 schema 34/SSO 本地迁移边界，因此不照搬参考项目的 schema 编号；本次按 VoNet 本地语义增加 schema 35。
+
+**增量提交**:
+
+| # | Commit | 描述 | VoNet 同步结果 |
+|---|--------|------|----------------|
+| 1 | aaf87e3 | fix(auth): adapt SSO callbacks and cookies to browser entry | 浏览器入口、host-only Session/CSRF、私网/IPv6 入口兼容 |
+| 2 | 25738cf | fix(ui): add a localized SSO client ID placeholder | 保留本地 Web 命名和现有 UI，仅同步文案兼容 |
+| 3 | 0cc64c2 | fix(auth): secure password cookies behind TLS termination | 直接 TLS、可信反代和同源 HTTPS 提示只升级 Cookie 保护 |
+| 4 | 7ab2260 | fix(auth): preserve secure cookie policy across session refreshes | Session 记忆 Secure 策略，刷新时不降级 |
+| 5 | ce95d92 | fix(auth): persist cookie policy before CSRF rotation | CSRF 替换前原子保存 Session 传输策略 |
+| 6 | aa01743 | fix(auth): normalize IPv6 SSO public origins | IPv6 压缩/展开和 IPv4-mapped 表示归一化 |
+| 7 | eba11d5 | fix(auth): upgrade both session cookies to Secure | Session 与 CSRF 同步升级为 Secure |
+| 8 | 70b0e69 | docs(readme): synchronize multilingual documentation with English README | README 多语言由独立文档同步处理，本记录补 schema 35 和回滚边界 |
+
+**VoNet schema 35**:
+
+- migration 35 仅执行 `ALTER TABLE sessions ADD COLUMN secure_cookies INTEGER NOT NULL DEFAULT 0 CHECK (secure_cookies IN (0,1))`。
+- 旧 Session/API Token 不删除、不重建、不根据来源地址猜测 Secure 策略；新值只允许在确认直接 TLS、可信 HTTPS 反代或强制配置后升级。
+- `Login(ctx, username, password, secureCookies)` 与 `CreateSession(ctx, adminID, tokenHash, csrfHash, expiresAt, secureCookies)` 显式传递策略。
+- `CreateSession` 在事务内读取管理员 credential epoch 并插入，防止管理员密码轮换期间的迟到 Session 绕过撤销。
+- migration 33 API Token、migration 34 SSO provider/flow/binding、credential epoch 和所有本地业务表保持不变。
+
+**运行与部署语义**:
+
+- Session/CSRF Cookie 为 host-only，每个 HTTP 私网、IPv6、域名或 TLS 入口拥有独立 Session；不通过 Cookie Domain 跨入口共享，API Token 继续独立工作。
+- `VONET_SECURE_COOKIES=true` 强制所有 Session/CSRF Cookie 为 Secure。纯 HTTP 的普通私网浏览器或客户端可能无法保存和回传 Cookie，HTTP 测试与生产入口必须明确接受该影响或改用 HTTPS。
+- TLS 反代必须保留浏览器 `Host`，并在应用受信任时提供唯一的 `X-Forwarded-Proto: https`。`X-Forwarded-Host` 不参与入口计算；未受信任、重复或多值转发头会被忽略。
+- 同源 HTTPS `Origin`/`Referer` 只能提升 Cookie Secure 属性，不能鉴权、放宽网络策略或选择 SSO callback。
+- SSO IPv6 `PublicOrigin` 按浏览器主机序列化规范化，不同 IPv6 地址或端口不匹配时拒绝。Generic OAuth2 的 HTTP 后端要求所有解析地址持续落在私网，并拒绝 loopback 之外的特权、链路本地和云元数据地址。
+- 构建必须先运行 Web build 生成 `web/dist`，再执行 Go build，保证 `go:embed` 使用本次同步后的前端。
+
+**auth-cleanup 与回滚**:
+
+- 普通 `auth-cleanup` 保持数据库迁移语义，会把 schema 34 升级到 schema 35，并撤销 Session/API Token/pending SSO flow、推进 credential epoch，同时保留 SSO provider 配置和外部 binding。
+- 新增 `auth-cleanup --no-migrate`：只打开恢复的 SQLite 数据库而不执行 schema 迁移，再执行相同凭据清理；用于 schema 34 快照恢复，清理后仍保持 schema 34。
+- schema 35 无自动降级。升级前使用 SQLite backup API 或 `.backup`；冷备份必须把主数据库、`-wal`、`-shm` 作为一致快照，并同时保存 TLS、插件和 `/etc/vonet/env`。
+- 回滚只能恢复与旧二进制匹配的完整快照，不能用旧主数据库搭配较新的 WAL/SHM。恢复 schema 34 快照后保持服务停止，使用匹配旧二进制的 `auth-cleanup`，或执行 `vonet auth-cleanup --database /opt/vonet/data/vonet.db --no-migrate`，再启动旧二进制。
+- 禁止使用会迁移 schema 的新二进制对 schema 34 回滚快照执行普通 `auth-cleanup` 后再启动旧版；普通命令会把快照升级到 schema 35，旧版不得打开该数据库。
+
+**验证范围**:
+
+- `cmd/vonet` bootstrap/auth-cleanup 签名适配和行为回归。
+- `store/auth/server/sso` 的 schema 34 到 35、auth-cleanup、TLS proxy、HTTP 私网、IPv6、Cookie host-only 向量。
+- CI/release 的 Go 测试与真实 `vonet auth-cleanup --database` smoke。
+- Docker amd64/arm64 镜像 runtime/CLI smoke，以及 `docker compose -f docker-compose.sso-test.yml config --quiet`。
+- workflow YAML 静态检查、`gofmt`、`cmd/vonet` 测试和 VoNet/VoCat-reference 跨项目测试对照。
+
+本次仅完成本地同步和记录更新，不提交、不推送 GitHub。
+
+---
+
 ## 2026-10-27 同步审计补漏
 
 - 补全 `README.md` 与 `docs/README.zh-CN.md` 中 OpenWrt `VONET_NFT` host wrapper、

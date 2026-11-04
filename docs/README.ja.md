@@ -200,7 +200,7 @@ VoNet は `VONET_CONFIG` からオプションの JSON 設定ファイルを読�
 | `VONET_ADDR` | `0.0.0.0:7575` | HTTP リッスンアドレス。 |
 | `VONET_DATABASE_PATH` | `./data/vonet.db` | SQLite データベースパス。 |
 | `VONET_SESSION_TTL` | `24h` | 認証セッションの有効期間。 |
-| `VONET_SECURE_COOKIES` | `false` | HTTPS 使用時にセッション Cookie をセキュアとしてマークします。 |
+| `VONET_SECURE_COOKIES` | `false` | 全エントリに Secure を強制する任意設定。無効時は HTTP/HTTPS の各エントリが保護方法を自動選択します。 |
 | `VONET_SHUTDOWN_TIMEOUT` | `10s` | グレースフルシャットダウンのタイムアウト。 |
 | `VONET_MAX_REQUEST_BODY_BYTES` | `1048576` | API リクエストボディの最大サイズ。 |
 | `VONET_REPO` | `springai/VoNet` | 自己更新機能が使用する信頼された GitHub リポジトリ(`owner/name` 形式)。 |
@@ -249,6 +249,32 @@ docker pull ghcr.io/mengmengcode/vonet:latest
 ```
 
 新しいイメージをプルした後、コンテナを再作成します。
+
+## SSO のブラウザエントリとロールバック
+
+保存済みの SSO 設定と外部連携は、設定済みの HTTPS 公開オリジンと、明示した
+ローカル/プライベート HTTP または HTTPS エントリの双方で利用できます。完全な
+コールバック URL (`/api/auth/sso/callback`) は ID プロバイダーにすべて登録して
+ください。コールバックは flow 作成時に固定され、別のエントリ経由の復帰は拒否
+されます。HTTP は localhost、loopback、リテラルのプライベート IP のみ許可され、
+プライベート DNS 名や任意の公開 HTTP ホストでは許可されません。IPv6 ホストは
+16 進表記の IPv4-mapped アドレスを含め、ブラウザーの圧縮表記を使用します。
+
+セッション Cookie と CSRF Cookie は host-only です。エントリ間で SSO 設定と
+外部連携は共有しますが、セッションはホスト間で共有されません。各エントリの
+Secure は、そのトランスポートまたは信頼できる `X-Forwarded-Proto` から自動
+選択されます。`VONET_SECURE_COOKIES=true` は全エントリに Secure を強制します。
+HTTP 単独のエントリでは必要な Cookie を発行できないため、ログインやセッション
+更新を停止します。リバースプロキシは元の `Host` を保持し、信頼できない
+`Forwarded` と `X-Forwarded-*` を除去する必要があります。
+
+VoNet は migration 33 の API トークン、migration 34 の SSO 保存領域、既存の
+業務テーブルを保持した schema 35 を使用します。schema 35 が追加するのは
+`sessions.secure_cookies` のみです。データベース復元後、公開前に
+`vonet auth-cleanup --database /opt/vonet/data/vonet.db` を実行してください。
+このコマンドは SSO 設定と外部連携を保持しますが、セッションと API トークンを
+失効させ、保留中の flow を削除します。schema 35 に自動ダウングレードはなく、
+ロールバックにはアップグレード前の一致するスナップショットの復元が必要です。
 
 ## 開発
 

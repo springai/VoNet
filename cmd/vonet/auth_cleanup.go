@@ -17,13 +17,20 @@ func runAuthCleanup(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("auth-cleanup", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	databasePath := flags.String("database", "/opt/vonet/data/vonet.db", "database path")
+	noMigrate := flags.Bool("no-migrate", false, "open an existing database without schema migration")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
-		return errors.New("usage: vonet auth-cleanup [--database path]")
+		return errors.New("usage: vonet auth-cleanup [--database path] [--no-migrate]")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	database, err := store.Open(ctx, *databasePath)
+	var database *store.Store
+	var err error
+	if *noMigrate {
+		database, err = store.OpenWithoutMigration(ctx, *databasePath)
+	} else {
+		database, err = store.Open(ctx, *databasePath)
+	}
 	if err != nil {
 		return err
 	}

@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 34
+const schemaVersion = 35
 
 var ErrNotFound = errors.New("store: not found")
 
@@ -47,12 +47,24 @@ type Session struct {
 	LoginMethod     string
 	SSOBindingID    string
 	CredentialEpoch int64
+	SecureCookies   bool
 	Admin           Admin
 }
 
 // Open creates the parent directory, opens SQLite, applies safety pragmas and
 // runs the built-in schema migration.
 func Open(ctx context.Context, path string) (*Store, error) {
+	return open(ctx, path, true)
+}
+
+// OpenWithoutMigration opens an existing database and applies connection
+// safety settings without changing its schema. It is intended for maintenance
+// operations such as credential cleanup after restoring an older snapshot.
+func OpenWithoutMigration(ctx context.Context, path string) (*Store, error) {
+	return open(ctx, path, false)
+}
+
+func open(ctx context.Context, path string, migrateSchema bool) (*Store, error) {
 	if err := prepareDatabasePath(path); err != nil {
 		return nil, err
 	}
@@ -81,8 +93,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 			return closeOnError(fmt.Errorf("%s: %w", pragma, err))
 		}
 	}
-	if err := migrate(ctx, db); err != nil {
-		return closeOnError(err)
+	if migrateSchema {
+		if err := migrate(ctx, db); err != nil {
+			return closeOnError(err)
+		}
 	}
 	if isFilesystemPath(path) {
 		if err := os.Chmod(path, 0o600); err != nil {
@@ -90,6 +104,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		}
 	}
 	s := &Store{db: db}
+	if !migrateSchema {
+		return s, nil
+	}
 	if err := s.DeleteExpiredSSOFlows(ctx, time.Now()); err != nil {
 		return closeOnError(err)
 	}
@@ -148,7 +165,8 @@ func migrate(ctx context.Context, db *sql.DB) error {
 					(nextVersion == 23 && strings.Contains(statement, "ADD COLUMN")) ||
 					(nextVersion == 25 && strings.Contains(statement, "ADD COLUMN mbn_profile")) ||
 					(nextVersion == 31 && strings.Contains(statement, "ADD COLUMN revert_profile")) ||
-					(nextVersion == 34 && strings.Contains(statement, "ADD COLUMN"))
+					(nextVersion == 34 && strings.Contains(statement, "ADD COLUMN")) ||
+					(nextVersion == 35 && strings.Contains(statement, "ADD COLUMN"))
 				if duplicateAdditiveColumn && strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 					continue
 				}
@@ -314,20 +332,61 @@ func (s *Store) CreateSession(
 	tokenHash []byte,
 	csrfHash []byte,
 	expiresAt time.Time,
+	secureCookies bool,
 ) error {
-	now := time.Now().UTC().Unix()
-	var credentialEpoch int64
-	if err := s.db.QueryRowContext(ctx, "SELECT credential_epoch FROM admins WHERE id = 1").Scan(&credentialEpoch); err != nil {
-		return fmt.Errorf("read credential epoch: %w", err)
+	for attempt := 0; attempt < 3; attempt++ {
+		retry, err := s.createSession(ctx, adminID, tokenHash, csrfHash, expiresAt, secureCookies)
+		if err == nil {
+			return nil
+		}
+		if !retry {
+			return err
+		}
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO sessions (token_hash, admin_id, csrf_hash, expires_at, created_at, credential_epoch)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, tokenHash, adminID, csrfHash, expiresAt.UTC().Unix(), now, credentialEpoch)
+	return fmt.Errorf("create session: %w", ErrNotFound)
+}
+
+func (s *Store) createSession(
+	ctx context.Context,
+	adminID int64,
+	tokenHash []byte,
+	csrfHash []byte,
+	expiresAt time.Time,
+	secureCookies bool,
+) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("create session: %w", err)
+		return false, fmt.Errorf("begin create session: %w", err)
 	}
-	return nil
+	defer tx.Rollback()
+
+	var credentialEpoch int64
+	if err := tx.QueryRowContext(ctx, "SELECT credential_epoch FROM admins WHERE id = ?", adminID).Scan(&credentialEpoch); err != nil {
+		return false, fmt.Errorf("read credential epoch: %w", err)
+	}
+	now := time.Now().UTC().Unix()
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO sessions (
+			token_hash, admin_id, csrf_hash, expires_at, created_at, secure_cookies, credential_epoch
+		)
+		SELECT ?, ?, ?, ?, ?, ?, a.credential_epoch
+		FROM admins a
+		WHERE a.id = ? AND a.credential_epoch = ?
+	`, tokenHash, adminID, csrfHash, expiresAt.UTC().Unix(), now, secureCookies, adminID, credentialEpoch)
+	if err != nil {
+		return false, fmt.Errorf("create session: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read session insert result: %w", err)
+	}
+	if affected != 1 {
+		return true, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit create session: %w", err)
+	}
+	return false, nil
 }
 
 func (s *Store) SessionByTokenHash(ctx context.Context, tokenHash []byte) (Session, error) {
@@ -345,6 +404,7 @@ func (s *Store) SessionByTokenHash(ctx context.Context, tokenHash []byte) (Sessi
 			s.login_method,
 			COALESCE(s.sso_binding_id, ''),
 			s.credential_epoch,
+			s.secure_cookies,
 			a.id,
 			a.username,
 			a.created_at,
@@ -361,6 +421,7 @@ func (s *Store) SessionByTokenHash(ctx context.Context, tokenHash []byte) (Sessi
 		&session.LoginMethod,
 		&session.SSOBindingID,
 		&session.CredentialEpoch,
+		&session.SecureCookies,
 		&session.Admin.ID,
 		&session.Admin.Username,
 		&adminCreatedAt,
@@ -380,6 +441,47 @@ func (s *Store) SessionByTokenHash(ctx context.Context, tokenHash []byte) (Sessi
 	return session, nil
 }
 
+// RequireSessionSecureCookies permanently upgrades a live session's cookie
+// policy. Missing request metadata on later requests can never undo it.
+func (s *Store) RequireSessionSecureCookies(ctx context.Context, tokenHash []byte) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE sessions
+		SET secure_cookies = 1
+		WHERE token_hash = ?
+		  AND expires_at > ?
+		  AND credential_epoch = (
+			SELECT credential_epoch FROM admins WHERE admins.id = sessions.admin_id
+		  )
+	`, tokenHash, time.Now().UTC().Unix())
+	if err != nil {
+		return fmt.Errorf("secure session cookies: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read secure session update result: %w", err)
+	}
+	if affected != 0 {
+		return nil
+	}
+	var active int
+	var alreadySecure int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(MAX(secure_cookies), 0)
+		FROM sessions
+		WHERE token_hash = ?
+		  AND expires_at > ?
+		  AND credential_epoch = (
+			SELECT credential_epoch FROM admins WHERE admins.id = sessions.admin_id
+		  )
+	`, tokenHash, time.Now().UTC().Unix()).Scan(&active, &alreadySecure); err != nil {
+		return fmt.Errorf("read secure session update result: %w", err)
+	}
+	if active == 0 || alreadySecure != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) UpdateSessionCSRF(ctx context.Context, tokenHash []byte, csrfHash []byte) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE sessions
@@ -392,6 +494,38 @@ func (s *Store) UpdateSessionCSRF(ctx context.Context, tokenHash []byte, csrfHas
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("read session update result: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateSessionCSRFIfUnchanged atomically replaces exactly the CSRF digest the
+// caller authenticated, preventing concurrent refreshes from silently
+// invalidating one another's returned credential.
+func (s *Store) UpdateSessionCSRFIfUnchanged(
+	ctx context.Context,
+	tokenHash []byte,
+	csrfHash []byte,
+	expectedCSRFHash []byte,
+) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE sessions
+		SET csrf_hash = ?
+		WHERE token_hash = ?
+		  AND csrf_hash = ?
+		  AND expires_at > ?
+		  AND credential_epoch = (
+			SELECT credential_epoch FROM admins WHERE admins.id = sessions.admin_id
+		  )
+	`, csrfHash, tokenHash, expectedCSRFHash, time.Now().UTC().Unix())
+	if err != nil {
+		return fmt.Errorf("replace session csrf: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read session csrf update result: %w", err)
 	}
 	if affected == 0 {
 		return ErrNotFound

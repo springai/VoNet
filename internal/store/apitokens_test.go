@@ -122,7 +122,7 @@ func TestDeleteAllAuthCredentialsRevokesSessionsAndAPITokens(t *testing.T) {
 	}
 	sessionHash := []byte("active-session")
 	if err := database.CreateSession(
-		ctx, 1, sessionHash, []byte("csrf"), time.Now().Add(time.Hour),
+		ctx, 1, sessionHash, []byte("csrf"), time.Now().Add(time.Hour), false,
 	); err != nil {
 		t.Fatal(err)
 	}

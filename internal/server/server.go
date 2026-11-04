@@ -293,7 +293,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	credentials, err := s.auth.Login(r.Context(), request.Username, request.Password)
+	secure := s.secureCookiesForRequest(r)
+	credentials, err := s.auth.Login(r.Context(), request.Username, request.Password, secure)
 	if errors.Is(err, auth.ErrInvalidCredentials) {
 		lockout, newlyLocked := s.loginLimiter.recordFailure(limiterKey)
 		s.auditAuth(r, request.Username, "failure")
@@ -313,7 +314,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	s.loginLimiter.recordSuccess(limiterKey)
 	s.auditAuth(r, credentials.Principal.Username, "success")
-	s.setAuthCookies(w, credentials.SessionToken, credentials.CSRFToken, credentials.ExpiresAt)
+	s.setAuthCookies(w, credentials.SessionToken, credentials.CSRFToken, credentials.ExpiresAt, secure)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"data": map[string]any{
 			"user":          credentials.Principal,
@@ -345,6 +346,37 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	if cookie, cookieErr := r.Cookie(csrfCookieName); cookieErr == nil {
 		existingCSRF = cookie.Value
 	}
+	session, err := s.auth.Authenticate(r.Context(), sessionToken)
+	if errors.Is(err, auth.ErrUnauthorized) {
+		s.authenticationRequired(w, r)
+		return
+	}
+	if err != nil {
+		s.logger.Error("load session failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
+		return
+	}
+	secure := session.SecureCookies || s.secureCookiesForRequest(r)
+	if !secure && session.LoginMethod == "sso" {
+		secure, err = s.ssoSessionSecureCookies(r)
+		if err != nil {
+			s.writeSSOError(w, err)
+			return
+		}
+	}
+	// Persist policy upgrades before CSRFToken can replace the stored digest.
+	// A failed policy write must leave the current CSRF credential usable.
+	if secure && !session.SecureCookies {
+		if err := s.store.RequireSessionSecureCookies(r.Context(), session.TokenHash()); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				s.authenticationRequired(w, r)
+				return
+			}
+			s.logger.Error("persist secure cookie policy failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
+			return
+		}
+	}
 	session, csrfToken, err := s.auth.CSRFToken(r.Context(), sessionToken, existingCSRF)
 	if errors.Is(err, auth.ErrUnauthorized) {
 		s.authenticationRequired(w, r)
@@ -355,7 +387,14 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
 		return
 	}
-	s.setCSRFCookie(w, csrfToken, session.ExpiresAt)
+	secure = secure || session.SecureCookies
+	if secure {
+		// Upgrade both browser cookies, including retries after the policy was
+		// persisted but the first response was lost. Keep token and expiry.
+		s.setAuthCookies(w, sessionToken, csrfToken, session.ExpiresAt, true)
+	} else if existingCSRF != csrfToken {
+		s.setCSRFCookie(w, csrfToken, session.ExpiresAt, false)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"data": map[string]any{
 			"user":          session.Principal,
@@ -396,7 +435,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
 		return
 	}
-	s.clearAuthCookies(w)
+	s.clearAuthCookies(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"data": map[string]bool{"logged_out": true},
 	})
@@ -537,7 +576,7 @@ func (s *Server) requireAuthenticated(w http.ResponseWriter, r *http.Request) bo
 // raw {"error":...} document. Frontend fetches explicitly request JSON and
 // are handled by the shared vonet:unauthorized event.
 func (s *Server) authenticationRequired(w http.ResponseWriter, r *http.Request) {
-	s.clearAuthCookies(w)
+	s.clearAuthCookies(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	if (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
 		strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
@@ -558,7 +597,13 @@ func (s *Server) validateDoubleSubmitCSRF(w http.ResponseWriter, r *http.Request
 	return headerToken, true
 }
 
-func (s *Server) setAuthCookies(w http.ResponseWriter, sessionToken string, csrfToken string, expiresAt time.Time) {
+func (s *Server) setAuthCookies(
+	w http.ResponseWriter,
+	sessionToken string,
+	csrfToken string,
+	expiresAt time.Time,
+	secure bool,
+) {
 	maxAge := int(time.Until(expiresAt).Seconds())
 	if maxAge < 1 {
 		maxAge = 1
@@ -570,13 +615,18 @@ func (s *Server) setAuthCookies(w http.ResponseWriter, sessionToken string, csrf
 		Expires:  expiresAt,
 		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   s.secureCookies,
+		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
 	})
-	s.setCSRFCookie(w, csrfToken, expiresAt)
+	s.setCSRFCookie(w, csrfToken, expiresAt, secure)
 }
 
-func (s *Server) setCSRFCookie(w http.ResponseWriter, csrfToken string, expiresAt time.Time) {
+func (s *Server) setCSRFCookie(
+	w http.ResponseWriter,
+	csrfToken string,
+	expiresAt time.Time,
+	secure bool,
+) {
 	maxAge := int(time.Until(expiresAt).Seconds())
 	if maxAge < 1 {
 		maxAge = 1
@@ -588,23 +638,41 @@ func (s *Server) setCSRFCookie(w http.ResponseWriter, csrfToken string, expiresA
 		Expires:  expiresAt,
 		MaxAge:   maxAge,
 		HttpOnly: false,
-		Secure:   s.secureCookies,
+		Secure:   secure,
 		SameSite: http.SameSiteStrictMode,
 	})
 }
 
-func (s *Server) clearAuthCookies(w http.ResponseWriter) {
-	for _, name := range []string{sessionCookieName, csrfCookieName} {
-		http.SetCookie(w, &http.Cookie{
-			Name:     name,
-			Value:    "",
-			Path:     "/",
-			Expires:  time.Unix(1, 0),
-			MaxAge:   -1,
-			HttpOnly: name == sessionCookieName,
-			Secure:   s.secureCookies,
-			SameSite: http.SameSiteStrictMode,
-		})
+func (s *Server) clearAuthCookies(w http.ResponseWriter, r *http.Request) {
+	secure := s.secureCookiesForRequest(r)
+	policyKnown := false
+	if s.store != nil {
+		if cookie, err := r.Cookie(sessionCookieName); err == nil {
+			if session, sessionErr := s.store.SessionByTokenHash(r.Context(), auth.TokenHash(cookie.Value)); sessionErr == nil {
+				secure = session.SecureCookies
+				policyKnown = true
+			}
+		}
+	}
+	policies := []bool{secure}
+	if !policyKnown {
+		// A deleted or expired session leaves no durable policy. Clear both
+		// historical forms so either Cookie variant is reliably removed.
+		policies = append(policies, !secure)
+	}
+	for _, secure := range policies {
+		for _, name := range []string{sessionCookieName, csrfCookieName} {
+			http.SetCookie(w, &http.Cookie{
+				Name:     name,
+				Value:    "",
+				Path:     "/",
+				Expires:  time.Unix(1, 0),
+				MaxAge:   -1,
+				HttpOnly: name == sessionCookieName,
+				Secure:   secure,
+				SameSite: http.SameSiteStrictMode,
+			})
+		}
 	}
 }
 
@@ -711,7 +779,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 					"img-src 'self' data:; connect-src 'self'",
 			)
 		}
-		if s.secureCookies && s.https == nil {
+		if s.https == nil && (r.TLS != nil || s.forwardedHTTPS(r)) {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 		next.ServeHTTP(w, r)

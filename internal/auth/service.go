@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -50,6 +51,15 @@ type Service struct {
 	sessionTTL time.Duration
 	bcryptCost int
 	dummyHash  []byte
+
+	csrfMu           sync.Mutex
+	csrfReplacements map[string]cachedCSRF
+}
+
+type cachedCSRF struct {
+	token     string
+	hash      []byte
+	expiresAt time.Time
 }
 
 type Principal struct {
@@ -65,11 +75,12 @@ type Credentials struct {
 }
 
 type AuthenticatedSession struct {
-	Principal   Principal
-	ExpiresAt   time.Time
-	LoginMethod string
-	tokenHash   []byte
-	csrfHash    []byte
+	Principal     Principal
+	ExpiresAt     time.Time
+	LoginMethod   string
+	SecureCookies bool
+	tokenHash     []byte
+	csrfHash      []byte
 }
 
 // TokenHash returns a copy of the session digest for atomic authorization
@@ -96,10 +107,11 @@ func New(database *store.Store, options Options) (*Service, error) {
 		return nil, fmt.Errorf("auth: generate timing hash: %w", err)
 	}
 	return &Service{
-		store:      database,
-		sessionTTL: options.SessionTTL,
-		bcryptCost: options.BcryptCost,
-		dummyHash:  dummyHash,
+		store:            database,
+		sessionTTL:       options.SessionTTL,
+		bcryptCost:       options.BcryptCost,
+		dummyHash:        dummyHash,
+		csrfReplacements: make(map[string]cachedCSRF),
 	}, nil
 }
 
@@ -161,7 +173,7 @@ func (s *Service) ResetAdminCredentials(ctx context.Context, username string, pa
 	return nil
 }
 
-func (s *Service) Login(ctx context.Context, username string, password string) (Credentials, error) {
+func (s *Service) Login(ctx context.Context, username string, password string, secureCookies bool) (Credentials, error) {
 	admin, err := s.store.AdminByUsername(ctx, strings.TrimSpace(username))
 	if errors.Is(err, store.ErrNotFound) {
 		_ = comparePassword(s.dummyHash, password)
@@ -187,6 +199,7 @@ func (s *Service) Login(ctx context.Context, username string, password string) (
 		hashToken(credentials.SessionToken),
 		hashToken(credentials.CSRFToken),
 		credentials.ExpiresAt,
+		secureCookies,
 	); err != nil {
 		return Credentials{}, err
 	}
@@ -234,17 +247,18 @@ func (s *Service) Authenticate(ctx context.Context, sessionToken string) (Authen
 			ID:       session.Admin.ID,
 			Username: session.Admin.Username,
 		},
-		ExpiresAt:   session.ExpiresAt,
-		LoginMethod: session.LoginMethod,
-		tokenHash:   tokenHash,
-		csrfHash:    session.CSRFHash,
+		ExpiresAt:     session.ExpiresAt,
+		LoginMethod:   session.LoginMethod,
+		SecureCookies: session.SecureCookies,
+		tokenHash:     tokenHash,
+		csrfHash:      session.CSRFHash,
 	}, nil
 }
 
 // RotateCSRF replaces the session-bound CSRF value and returns the new raw
 // token. Only its SHA-256 digest is persisted.
 func (s *Service) RotateCSRF(ctx context.Context, sessionToken string) (AuthenticatedSession, string, error) {
-	return s.CSRFToken(ctx, sessionToken, "")
+	return s.csrfToken(ctx, sessionToken, "", true)
 }
 
 // CSRFToken reuses a valid CSRF cookie or rotates it when the cookie is absent
@@ -255,28 +269,73 @@ func (s *Service) CSRFToken(
 	sessionToken string,
 	existingToken string,
 ) (AuthenticatedSession, string, error) {
+	return s.csrfToken(ctx, sessionToken, existingToken, false)
+}
+
+func (s *Service) csrfToken(
+	ctx context.Context,
+	sessionToken string,
+	existingToken string,
+	forceRotation bool,
+) (AuthenticatedSession, string, error) {
 	session, err := s.Authenticate(ctx, sessionToken)
 	if err != nil {
 		return AuthenticatedSession{}, "", err
 	}
-	if existingToken != "" {
+	if !forceRotation && existingToken != "" {
 		existingHash := hashToken(existingToken)
 		if subtle.ConstantTimeCompare(existingHash, session.csrfHash) == 1 {
 			return session, existingToken, nil
 		}
 	}
+
+	s.csrfMu.Lock()
+	defer s.csrfMu.Unlock()
+
+	// Re-read after acquiring the replacement lock so overlapping refreshes
+	// converge on one current CSRF credential instead of racing rotations.
+	session, err = s.Authenticate(ctx, sessionToken)
+	if err != nil {
+		return AuthenticatedSession{}, "", err
+	}
+	if !forceRotation && existingToken != "" {
+		existingHash := hashToken(existingToken)
+		if subtle.ConstantTimeCompare(existingHash, session.csrfHash) == 1 {
+			return session, existingToken, nil
+		}
+	}
+	key := string(session.tokenHash)
+	now := time.Now()
+	for candidate, cached := range s.csrfReplacements {
+		if !cached.expiresAt.After(now) {
+			delete(s.csrfReplacements, candidate)
+		}
+	}
+	if !forceRotation {
+		if cached, ok := s.csrfReplacements[key]; ok &&
+			cached.expiresAt.After(now) &&
+			subtle.ConstantTimeCompare(cached.hash, session.csrfHash) == 1 {
+			return session, cached.token, nil
+		}
+	}
+
 	csrfToken, err := randomToken()
 	if err != nil {
 		return AuthenticatedSession{}, "", err
 	}
 	csrfHash := hashToken(csrfToken)
-	if err := s.store.UpdateSessionCSRF(ctx, session.tokenHash, csrfHash); err != nil {
+	if err := s.store.UpdateSessionCSRFIfUnchanged(ctx, session.tokenHash, csrfHash, session.csrfHash); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return AuthenticatedSession{}, "", ErrUnauthorized
 		}
 		return AuthenticatedSession{}, "", err
 	}
 	session.csrfHash = csrfHash
+	s.csrfReplacements[key] = cachedCSRF{
+		token:     csrfToken,
+		hash:      append([]byte(nil), csrfHash...),
+		expiresAt: session.ExpiresAt,
+	}
 	return session, csrfToken, nil
 }
 
@@ -303,9 +362,13 @@ func (s *Service) Logout(ctx context.Context, sessionToken string) error {
 	if sessionToken == "" {
 		return nil
 	}
-	if err := s.store.DeleteSession(ctx, hashToken(sessionToken)); err != nil {
+	tokenHash := hashToken(sessionToken)
+	if err := s.store.DeleteSession(ctx, tokenHash); err != nil {
 		return err
 	}
+	s.csrfMu.Lock()
+	delete(s.csrfReplacements, string(tokenHash))
+	s.csrfMu.Unlock()
 	return nil
 }
 

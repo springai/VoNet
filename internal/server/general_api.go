@@ -487,7 +487,7 @@ func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "update_auth_revocation_failed", "The update was installed, but active sessions and API tokens could not be revoked; restart the service and sign in again.")
 		return
 	}
-	s.clearAuthCookies(w)
+	s.clearAuthCookies(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"data": map[string]any{
 			"applied":                   true,
@@ -556,7 +556,7 @@ func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	s.clearAuthCookies(w)
+	s.clearAuthCookies(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"data": map[string]any{"changed": true, "reauthentication_required": true},
 	})

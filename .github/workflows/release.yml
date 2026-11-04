@@ -21,11 +21,26 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Build embedded web UI
+      - name: Set up Go for browser tests
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test and build embedded web UI
         working-directory: web
         run: |
           npm ci --no-audit --no-fund
+          npm test
+          npm exec -- playwright install --with-deps chromium
+          npm run test:e2e
           npm run build
+      - name: Upload browser test failures
+        uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: release-browser-failures
+          path: web/test-results/
+          retention-days: 7
       - name: Upload embedded web UI
         uses: actions/upload-artifact@v6
         with:
@@ -50,8 +65,19 @@ jobs:
         with:
           name: web-dist
           path: web/dist
-      - name: Test
+      - name: Test schema 34 to 35, auth cleanup, TLS proxy, private HTTP and IPv6
+        run: go test ./internal/store ./internal/auth ./internal/server ./internal/sso ./cmd/vonet
+      - name: Test all Go packages
         run: go test ./...
+      - name: Smoke schema 34 to 35 migration
+        run: go test ./internal/store -run '^TestMigration35' -count=1
+      - name: Smoke auth-cleanup binary
+        run: |
+          go build -trimpath -o "$RUNNER_TEMP/vonet-smoke" ./cmd/vonet
+          "$RUNNER_TEMP/vonet-smoke" auth-cleanup \
+            --database "$RUNNER_TEMP/vonet-auth-cleanup.db"
+      - name: Validate SSO test Compose configuration
+        run: docker compose -f docker-compose.sso-test.yml config --quiet
 
   binaries:
     needs: [web, test]

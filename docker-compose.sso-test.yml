@@ -5,6 +5,10 @@
 #     --entrypoint /opt/vonet/bin/vonet vonet bootstrap-admin
 # Start: docker compose -f docker-compose.sso-test.yml up -d --wait
 # Visit http://127.0.0.1:7575 and use that same origin in SSO settings.
+# This loopback HTTP profile exercises private-network HTTP providers and IPv6
+# origin handling in tests without presenting the service as a TLS endpoint.
+# TLS termination is tested separately with trusted X-Forwarded-Proto and Host;
+# production deployments must use HTTPS and secure cookies.
 name: vonet-sso-test
 
 services:

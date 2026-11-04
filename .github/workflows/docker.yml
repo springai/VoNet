@@ -30,6 +30,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Validate SSO test Compose configuration
+        run: docker compose -f docker-compose.sso-test.yml config --quiet
+
       - name: Set up QEMU
         if: matrix.arch == 'arm64'
         uses: docker/setup-qemu-action@v4
@@ -57,6 +60,57 @@ jobs:
             VERSION=0.0.0-smoke
             BUILD_TIME=${{ github.event.repository.updated_at }}
           cache-from: type=gha
+
+      - name: Verify ${{ matrix.platform }} full migration and schema 34 restore cleanup
+        run: |
+          set -euo pipefail
+          smoke="$RUNNER_TEMP/vonet-auth-restore-smoke"
+          mkdir -p \
+            "$smoke/full" \
+            "$smoke/restore-migrate" \
+            "$smoke/restore-cleanup"
+
+          printf '%s\n' smoke-password | docker run --rm -i \
+            --platform '${{ matrix.platform }}' \
+            --user "$(id -u):$(id -g)" \
+            --volume "$smoke:/smoke" \
+            --entrypoint /opt/vonet/bin/vonet \
+            vonet-smoke:${{ matrix.arch }} \
+            bootstrap-admin --database /smoke/full/vonet.db
+          python3 scripts/ci/auth_restore_smoke.py assert-full \
+            "$smoke/full/vonet.db"
+
+          python3 scripts/ci/auth_restore_smoke.py prepare \
+            --source "$smoke/full/vonet.db" \
+            --output "$smoke/restore-migrate/vonet.db"
+          python3 scripts/ci/auth_restore_smoke.py prepare \
+            --source "$smoke/full/vonet.db" \
+            --output "$smoke/restore-cleanup/vonet.db"
+          python3 scripts/ci/auth_restore_smoke.py assert-schema34 \
+            "$smoke/restore-migrate/vonet.db"
+          python3 scripts/ci/auth_restore_smoke.py assert-schema34 \
+            "$smoke/restore-cleanup/vonet.db"
+
+          printf '%s\n' smoke-password | docker run --rm -i \
+            --platform '${{ matrix.platform }}' \
+            --user "$(id -u):$(id -g)" \
+            --volume "$smoke:/smoke" \
+            --entrypoint /opt/vonet/bin/vonet \
+            vonet-smoke:${{ matrix.arch }} \
+            bootstrap-admin --database /smoke/restore-migrate/vonet.db
+          python3 scripts/ci/auth_restore_smoke.py assert-migrated \
+            "$smoke/restore-migrate/vonet.db"
+
+          docker run --rm \
+            --platform '${{ matrix.platform }}' \
+            --user "$(id -u):$(id -g)" \
+            --volume "$smoke:/smoke" \
+            --entrypoint /opt/vonet/bin/vonet \
+            vonet-smoke:${{ matrix.arch }} \
+            auth-cleanup --no-migrate \
+            --database /smoke/restore-cleanup/vonet.db
+          python3 scripts/ci/auth_restore_smoke.py assert-cleaned \
+            "$smoke/restore-cleanup/vonet.db"
 
       - name: Verify ${{ matrix.platform }} runtime, QMI, and smart-card stack
         run: |

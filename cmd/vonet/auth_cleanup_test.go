@@ -21,7 +21,7 @@ func TestAuthCleanupRevokesRestoredCredentialsAndPreservesSSOConfiguration(t *te
 	if err := database.SetAdmin(ctx, "admin", []byte("hash")); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.CreateSession(ctx, 1, []byte("session-hash"), []byte("csrf-hash"), time.Now().Add(time.Hour)); err != nil {
+	if err := database.CreateSession(ctx, 1, []byte("session-hash"), []byte("csrf-hash"), time.Now().Add(time.Hour), false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.CreateAPIToken(ctx, "restored-token", []byte("token-hash"), false, time.Time{}); err != nil {
