@@ -12,12 +12,18 @@ export interface BindingCard {
   stateText?: string;
   current: boolean;
   online: boolean;
+  bindingEligible: boolean;
+  physicalPresent: boolean;
+  controlOnline: boolean;
+  profileKnown: boolean;
+  vowifiReady: boolean;
   source: BindingCardSource;
 }
 
 export interface InventorySnapshot {
   cards: BindingCard[];
   fetchedAt: number;
+  stale?: boolean;
   error?: string;
 }
 
@@ -32,6 +38,17 @@ export function bindingCardKey(deviceId: string, iccid: string) {
 
 export function deviceIsOnline(device: Pick<DeviceListItem, "physicalPresent" | "controlOnline">) {
   return device.physicalPresent !== false && device.controlOnline;
+}
+
+export function deviceVowifiReady(device: DeviceListItem) {
+  if (device.vowifiActive === false) return false;
+  return !!device.vowifiActive || !!device.vowifiRuntime?.tunnelReady;
+}
+
+export function bindingIdentityIsEligible(deviceId: string, iccid: string) {
+  const normalizedDeviceID = deviceId.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(normalizedDeviceID) &&
+    /^\d{18,22}$/.test(iccid.trim());
 }
 
 export function currentDeviceICCID(device: DeviceListItem) {
@@ -56,6 +73,11 @@ export function buildLiveBindingCards(devices: DeviceListItem[], labels: Binding
       stateText: labels.currentInUse,
       current: true,
       online: deviceIsOnline(device),
+      bindingEligible: bindingIdentityIsEligible(device.id, iccid),
+      physicalPresent: device.physicalPresent !== false,
+      controlOnline: !!device.controlOnline,
+      profileKnown: true,
+      vowifiReady: deviceVowifiReady(device),
       source: "live",
     });
   }
@@ -75,6 +97,11 @@ export function buildStoredBindingCards(groups: ProxyBindingGroup[], devices: De
       profileName: group.profileName || group.iccid,
       current: !!liveICCID && liveICCID === group.iccid,
       online: !!device && deviceIsOnline(device),
+      bindingEligible: bindingIdentityIsEligible(group.deviceId, group.iccid),
+      physicalPresent: !!device && device.physicalPresent !== false,
+      controlOnline: !!device?.controlOnline,
+      profileKnown: true,
+      vowifiReady: !!device && deviceVowifiReady(device),
       source: "binding" as const,
     };
   });
@@ -100,6 +127,11 @@ export function buildInventoryBindingCards(
         stateText: profile.stateText,
         current: !!liveICCID && liveICCID === iccid,
         online: deviceIsOnline(device),
+        bindingEligible: bindingIdentityIsEligible(device.id, iccid),
+        physicalPresent: device.physicalPresent !== false,
+        controlOnline: !!device.controlOnline,
+        profileKnown: true,
+        vowifiReady: deviceVowifiReady(device),
         source: "inventory",
       });
     }
@@ -114,22 +146,62 @@ export function buildInventoryBindingCards(
       stateText: labels.currentInUse,
       current: true,
       online: deviceIsOnline(device),
+      bindingEligible: bindingIdentityIsEligible(device.id, liveICCID),
+      physicalPresent: device.physicalPresent !== false,
+      controlOnline: !!device.controlOnline,
+      profileKnown: true,
+      vowifiReady: deviceVowifiReady(device),
       source: "inventory",
     });
   }
   return cards;
 }
 
+export function reconcileInventoryBindingCards(cards: BindingCard[], devices: DeviceListItem[]): BindingCard[] {
+  const deviceById = new Map(devices.map((device) => [device.id, device]));
+  return cards.map((card) => {
+    const device = deviceById.get(card.deviceId);
+    return {
+      ...card,
+      bindingEligible: !!device && bindingIdentityIsEligible(card.deviceId, card.iccid),
+      physicalPresent: !!device && device.physicalPresent !== false,
+      controlOnline: !!device?.controlOnline,
+      online: !!device && deviceIsOnline(device),
+      vowifiReady: !!device && deviceVowifiReady(device),
+    };
+  });
+}
+
+export function failedInventorySnapshot(
+  previous: InventorySnapshot | undefined,
+  device: DeviceListItem,
+  error: string,
+  now = Date.now(),
+): InventorySnapshot {
+  return {
+    cards: previous?.cards || [],
+    fetchedAt: previous?.fetchedAt || now,
+    stale: previous?.stale ?? !deviceIsOnline(device),
+    error,
+  };
+}
+
 function mergeCard(current: BindingCard | undefined, next: BindingCard): BindingCard {
   if (!current) return next;
   const sourceRank: Record<BindingCardSource, number> = { live: 0, binding: 1, inventory: 2 };
   const preferNextName = sourceRank[next.source] >= sourceRank[current.source] && !!next.profileName;
+  const runtimeCard = sourceRank[current.source] <= sourceRank[next.source] ? current : next;
   return {
     ...current,
     profileName: preferNextName && next.profileName ? next.profileName : current.profileName || next.profileName,
     stateText: next.stateText || current.stateText,
     current: current.current || next.current,
-    online: current.online || next.online,
+    online: runtimeCard.online,
+    bindingEligible: current.bindingEligible || next.bindingEligible,
+    physicalPresent: runtimeCard.physicalPresent,
+    controlOnline: runtimeCard.controlOnline,
+    profileKnown: current.profileKnown || next.profileKnown,
+    vowifiReady: runtimeCard.vowifiReady,
     source: sourceRank[next.source] > sourceRank[current.source] ? next.source : current.source,
   };
 }
@@ -155,9 +227,15 @@ export function inventoryReadPlan(
   cachedDeviceIds: Iterable<string>,
   devices: DeviceListItem[],
   force = false,
+  staleDeviceIds: Iterable<string> = [],
 ): DeviceListItem[] {
   const cached = new Set(cachedDeviceIds);
-  return devices.filter((device) => deviceIsOnline(device) && (force || !cached.has(device.id)));
+  const stale = new Set(staleDeviceIds);
+  return devices.filter((device) =>
+    force ||
+    !cached.has(device.id) ||
+    (stale.has(device.id) && deviceIsOnline(device))
+  );
 }
 
 export function selectionAfterRefresh(cards: BindingCard[], selectedKey: string) {
@@ -168,6 +246,17 @@ export interface RequestGuard {
   begin: () => number;
   isCurrent: (token: number) => boolean;
   invalidate: () => void;
+}
+
+export type ProxyBindingReconnectOutcome = "requested" | "deferred" | "failed";
+
+export function proxyBindingReconnectOutcome(state?: {
+  reconnectRequested?: boolean;
+  reconnectError?: string;
+}): ProxyBindingReconnectOutcome {
+  if (state?.reconnectError) return "failed";
+  if (state?.reconnectRequested) return "requested";
+  return "deferred";
 }
 
 export function createRequestGuard(): RequestGuard {

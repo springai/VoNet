@@ -12,27 +12,28 @@ import type {
   SSOUnbindResult,
 } from "./types";
 import { tl } from "./lib/i18n";
+import { camelize, selectAPIPayload } from "./lib/apiPayload";
+
+export { camelize };
 
 const CSRF_KEY = "vonet.csrf";
 
 // Authenticated pages and same-origin plugin frames share this signal. Clear
 // the mutation token immediately so a revoked session cannot leave stale auth
 // state behind in the browser.
-export function notifyUnauthorized() {
+export function notifyUnauthorized(requestStartedAt = Date.now()) {
   try {
     sessionStorage.removeItem(CSRF_KEY);
   } catch {
     /* ignore unavailable storage */
   }
-  window.dispatchEvent(new Event("vonet:unauthorized"));
+  window.dispatchEvent(
+    new CustomEvent("vonet:unauthorized", { detail: { requestStartedAt } }),
+  );
 }
 
 function isMutation(method: string) {
   return !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
-}
-
-function camelizeKey(key: string) {
-  return key.replace(/_([a-z0-9])/g, (_, char: string) => char.toUpperCase());
 }
 
 function snakeizeKey(key: string) {
@@ -40,19 +41,6 @@ function snakeizeKey(key: string) {
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/-/g, "_")
     .toLowerCase();
-}
-
-export function camelize<T>(value: unknown): T {
-  if (Array.isArray(value)) return value.map((item) => camelize(item)) as T;
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
-        camelizeKey(key),
-        camelize(item),
-      ]),
-    ) as T;
-  }
-  return value as T;
 }
 
 function snakeize(value: unknown): unknown {
@@ -111,7 +99,13 @@ async function refreshCSRFToken(): Promise<boolean> {
   }
 }
 
-async function requestAPI<T>(path: string, options: RequestOptions, retryCSRF: boolean): Promise<T> {
+async function requestAPI<T>(
+  path: string,
+  options: RequestOptions,
+  retryCSRF: boolean,
+  unwrapData = true,
+): Promise<T> {
+  const requestStartedAt = Date.now();
   const method = (options.method || "GET").toUpperCase();
   const headers = new Headers(options.headers);
   const formBody = typeof FormData !== "undefined" && options.body instanceof FormData;
@@ -135,7 +129,7 @@ async function requestAPI<T>(path: string, options: RequestOptions, retryCSRF: b
   });
 
   if (options.raw) {
-    if (response.status === 401) notifyUnauthorized();
+    if (response.status === 401) notifyUnauthorized(requestStartedAt);
     return response as T;
   }
   const contentType = response.headers.get("content-type") || "";
@@ -157,22 +151,26 @@ async function requestAPI<T>(path: string, options: RequestOptions, retryCSRF: b
       response.status === 403 &&
       detail.code === "invalid_csrf"
     ) {
-      if (await refreshCSRFToken()) return requestAPI<T>(path, options, false);
-      notifyUnauthorized();
+      if (await refreshCSRFToken()) return requestAPI<T>(path, options, false, unwrapData);
+      notifyUnauthorized(requestStartedAt);
     } else if (response.status === 401) {
-      notifyUnauthorized();
+      notifyUnauthorized(requestStartedAt);
     }
     throw new ApiError(response.status, detail);
   }
-  return (Object.prototype.hasOwnProperty.call(normalized, "data") ? normalized.data : normalized) as T;
+  return selectAPIPayload<T>(normalized, unwrapData);
 }
 
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
   return requestAPI<T>(path, options, true);
 }
 
+export async function apiEnvelope<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  return requestAPI<T>(path, options, true, false);
+}
+
 export async function login(username: string, password: string) {
-  const result = await api<LoginResponse & { user?: { username?: string } }>("/auth/login", {
+  const result = await api<LoginResponse>("/auth/login", {
     method: "POST",
     body: { username, password },
   });

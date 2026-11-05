@@ -106,6 +106,7 @@ type Server struct {
 	automaticTasks            *automaticTaskScheduler
 	smsSyncMu                 sync.Mutex
 	esimSIMResetAttempted     map[string]bool // 由 smsSyncMu 保护；读取成功后允许下一次故障恢复。
+	esimCacheInvalidator      func(context.Context, string) error
 	smsStorageMu              sync.Mutex
 	smsStorage                map[string]device.SMSStorageUsage
 	cellularDataOnce          sync.Once

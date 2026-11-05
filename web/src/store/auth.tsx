@@ -4,15 +4,12 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import * as api from "../api";
-
-export interface AuthUser {
-  username: string;
-  role: string;
-}
+import { isStaleAuthRequest, loginIdentityFromResponse, type AuthUser } from "./authModel";
 
 interface AuthContextValue {
   ready: boolean;
@@ -28,24 +25,31 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [ready, setReady] = useState(false);
+  const loginCompletedAt = useRef(0);
+  const authGeneration = useRef(0);
 
   const refresh = useCallback(async () => {
+    const generation = ++authGeneration.current;
     try {
       const current = await api.session();
+      if (generation !== authGeneration.current) return;
       setUser(current.authenticated ? { username: current.username, role: current.role } : null);
     } catch {
+      if (generation !== authGeneration.current) return;
       setUser(null);
     } finally {
-      setReady(true);
+      if (generation === authGeneration.current) setReady(true);
     }
   }, []);
 
   const login = useCallback(
     async (username: string, password: string) => {
       try {
-        await api.login(username, password);
-        const current = await api.session();
-        setUser({ username: current.username || username, role: current.role || "Administrator" });
+        const result = await api.login(username, password);
+        authGeneration.current += 1;
+        loginCompletedAt.current = Date.now();
+        setUser(loginIdentityFromResponse(result, username));
+        setReady(true);
         return true;
       } catch {
         return false;
@@ -55,6 +59,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    authGeneration.current += 1;
+    loginCompletedAt.current = 0;
     try {
       await api.logout();
     } finally {
@@ -63,7 +69,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const unauthorized = () => {
+    const unauthorized = (event: Event) => {
+      const detail = (event as CustomEvent<{ requestStartedAt?: number }>).detail;
+      if (isStaleAuthRequest(detail?.requestStartedAt, loginCompletedAt.current)) return;
+      authGeneration.current += 1;
       setUser(null);
       setReady(true);
     };

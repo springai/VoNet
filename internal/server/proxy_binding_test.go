@@ -3,7 +3,9 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -60,6 +62,30 @@ func proxyBindingGroupRoutesRequest(t *testing.T, server *Server, id, body strin
 	return response
 }
 
+func proxyBindingGroupCreateRequest(t *testing.T, server *Server, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/proxy-binding-groups",
+		bytes.NewBufferString(body),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.handleProxyBindingGroups(response, request)
+	return response
+}
+
+func proxyBindingResponseData(t *testing.T, response *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var payload struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response %q: %v", response.Body.String(), err)
+	}
+	return payload.Data
+}
+
 func TestProxyBindingChangesRestartStableIMSAndEmptyRoutesUseMCC(t *testing.T) {
 	server, database, controller := newProfileBindingTestServer(t)
 	controller.state = vowifi.State{
@@ -99,6 +125,52 @@ func TestProxyBindingChangesRestartStableIMSAndEmptyRoutesUseMCC(t *testing.T) {
 	}
 	if controller.reconnects != 2 {
 		t.Fatalf("reconnects after MCC fallback = %d, want 2", controller.reconnects)
+	}
+}
+
+func TestProxyBindingGroupReportsAdvisoryReconnectState(t *testing.T) {
+	server, database, controller := newProfileBindingTestServer(t)
+	response := proxyBindingGroupCreateRequest(t, server, `{
+		"device_id":"ec20",
+		"iccid":"8944100000000000001",
+		"profile_name":"Profile",
+		"proxy_ids":["route-1"]
+	}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
+	}
+	data := proxyBindingResponseData(t, response)
+	if data["reconnect_requested"] != true {
+		t.Fatalf("create reconnect metadata = %#v", data)
+	}
+	groupID := fmt.Sprint(data["id"])
+
+	controller.reconnectErr = errors.New("reconnect timeout")
+	response = proxyBindingGroupRoutesRequest(t, server, groupID, `{"proxy_ids":["route-2"]}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("failed reconnect status = %d, body = %s", response.Code, response.Body.String())
+	}
+	data = proxyBindingResponseData(t, response)
+	if data["reconnect_requested"] != false || data["reconnect_error"] != "VoWiFi reconnect request failed" {
+		t.Fatalf("failed reconnect metadata = %#v", data)
+	}
+	saved, err := database.DeviceProxyBindingGroupByID(context.Background(), groupID)
+	if err != nil || len(saved.Routes) != 1 || saved.Routes[0].UpstreamProxyID != "route-2" {
+		t.Fatalf("routes after reconnect failure = %+v, %v", saved.Routes, err)
+	}
+
+	controller.reconnectErr = nil
+	controller.state.ICCID = "8944100000000000002"
+	response = proxyBindingGroupRoutesRequest(t, server, groupID, `{"proxy_ids":["route-1"]}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("deferred reconnect status = %d, body = %s", response.Code, response.Body.String())
+	}
+	data = proxyBindingResponseData(t, response)
+	if data["reconnect_requested"] != false {
+		t.Fatalf("deferred reconnect metadata = %#v", data)
+	}
+	if _, exists := data["reconnect_error"]; exists {
+		t.Fatalf("deferred reconnect unexpectedly reported an error: %#v", data)
 	}
 }
 

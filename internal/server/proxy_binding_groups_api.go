@@ -85,26 +85,26 @@ func (s *Server) handleProxyBindingGroups(w http.ResponseWriter, r *http.Request
 				s.writeStoreError(w, err)
 				return
 			}
-			s.requestProxyBindingRouteChange(group.DeviceID, group.ICCID)
-			writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
+			reconnected, reconnectErr := s.requestProxyBindingRouteChange(group.DeviceID, group.ICCID)
+			writeJSON(w, http.StatusOK, map[string]any{"data": s.proxyBindingReconnectMeta(map[string]any{
 				"device_id":    group.DeviceID,
 				"iccid":        group.ICCID,
 				"profile_name": group.ProfileName,
 				"routes":       []map[string]any{},
-			}})
+			}, reconnected, reconnectErr)})
 			return
 		}
 		if err := s.store.SaveDeviceProxyBindingGroup(r.Context(), group, proxyIDs); err != nil {
 			s.writeStoreError(w, err)
 			return
 		}
-		s.requestProxyBindingRouteChange(group.DeviceID, group.ICCID)
+		reconnected, reconnectErr := s.requestProxyBindingRouteChange(group.DeviceID, group.ICCID)
 		saved, err := s.store.DeviceProxyBindingGroup(r.Context(), group.DeviceID, group.ICCID)
 		if err != nil {
 			s.writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"data": proxyBindingGroupResponse(saved)})
+		writeJSON(w, http.StatusOK, map[string]any{"data": s.proxyBindingReconnectMeta(proxyBindingGroupResponse(saved), reconnected, reconnectErr)})
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
@@ -130,8 +130,8 @@ func (s *Server) handleProxyBindingGroup(w http.ResponseWriter, r *http.Request,
 			s.writeStoreError(w, err)
 			return
 		}
-		s.requestProxyBindingRouteChange(value.DeviceID, value.ICCID)
-		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"deleted": true}})
+		reconnected, reconnectErr := s.requestProxyBindingRouteChange(value.DeviceID, value.ICCID)
+		writeJSON(w, http.StatusOK, map[string]any{"data": s.proxyBindingReconnectMeta(map[string]any{"deleted": true}, reconnected, reconnectErr)})
 	default:
 		w.Header().Set("Allow", "GET, DELETE")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
@@ -166,22 +166,22 @@ func (s *Server) handleProxyBindingGroupRoutes(w http.ResponseWriter, r *http.Re
 			s.writeStoreError(w, err)
 			return
 		}
-		s.requestProxyBindingRouteChange(group.DeviceID, group.ICCID)
+		reconnected, reconnectErr := s.requestProxyBindingRouteChange(group.DeviceID, group.ICCID)
 		group.Routes = nil
-		writeJSON(w, http.StatusOK, map[string]any{"data": proxyBindingGroupResponse(group)})
+		writeJSON(w, http.StatusOK, map[string]any{"data": s.proxyBindingReconnectMeta(proxyBindingGroupResponse(group), reconnected, reconnectErr)})
 		return
 	}
 	if err := s.store.ReplaceDeviceProxyBindingRoutes(r.Context(), id, proxyIDs); err != nil {
 		s.writeStoreError(w, err)
 		return
 	}
-	s.requestProxyBindingRouteChange(group.DeviceID, group.ICCID)
+	reconnected, reconnectErr := s.requestProxyBindingRouteChange(group.DeviceID, group.ICCID)
 	saved, err := s.store.DeviceProxyBindingGroupByID(r.Context(), id)
 	if err != nil {
 		s.writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": proxyBindingGroupResponse(saved)})
+	writeJSON(w, http.StatusOK, map[string]any{"data": s.proxyBindingReconnectMeta(proxyBindingGroupResponse(saved), reconnected, reconnectErr)})
 }
 
 func (s *Server) validateProxyBindingGroupPayload(payload proxyBindingGroupPayload) (store.DeviceProxyBindingGroup, error) {
@@ -219,9 +219,20 @@ func (s *Server) validateProxyBindingGroupPayload(payload proxyBindingGroupPaylo
 
 // Route changes restart Wi-Fi Calling immediately so the persisted route list is
 // re-evaluated from its first candidate, including when IMS is already stable.
-func (s *Server) requestProxyBindingRouteChange(deviceID, iccid string) {
+func (s *Server) requestProxyBindingRouteChange(deviceID, iccid string) (bool, error) {
 	if s.vowifi == nil {
-		return
+		return false, nil
 	}
-	_, _ = s.requestProfileProxyRouteReconnect(deviceID, iccid)
+	return s.requestProfileProxyRouteReconnect(deviceID, iccid)
+}
+
+func (s *Server) proxyBindingReconnectMeta(response map[string]any, requested bool, err error) map[string]any {
+	response["reconnect_requested"] = requested
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("VoWiFi reconnect request failed after proxy binding change", "error", err)
+		}
+		response["reconnect_error"] = "VoWiFi reconnect request failed"
+	}
+	return response
 }

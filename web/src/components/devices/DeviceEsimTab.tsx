@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowSyncRegular, PowerRegular, WarningRegular } from "@fluentui/react-icons";
-import { api, apiMessage } from "../../api";
-import { Button, confirmDialog, message } from "../ui";
+import { api, apiEnvelope, apiMessage } from "../../api";
+import { Button, confirmDialog, message, Tag } from "../ui";
 import { readEventStream, useShowSensitive } from "./shared";
 import { EsimLoadingHero } from "./EsimLoadingHero";
 import { EsimChipHeader } from "./EsimChipHeader";
@@ -10,7 +10,8 @@ import { EsimNotificationsModal } from "./EsimNotificationsModal";
 import { EsimDownloadForm } from "./EsimDownloadForm";
 import { DeleteProfileModal, type DeleteProfileTarget } from "./DeleteProfileModal";
 import { EmptyState } from "../ui";
-import type { EsimChipInfo, EsimDownloadForm as EsimDownloadFormData, EsimNotification, EsimProfileGroup } from "./types";
+import { createEsimMutationGuard, esimDownloadDisabled } from "./esimActionState";
+import type { EsimChipInfo, EsimDownloadForm as EsimDownloadFormData, EsimNotification, EsimProfileGroup, EsimProfilesEnvelope } from "./types";
 import { tf, tl, useI18n } from "../../lib/i18n";
 
 export interface DeviceEsimTabProps {
@@ -76,6 +77,7 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
   const [refreshing, setRefreshing] = useState(false);
   const [chipInfo, setChipInfo] = useState<EsimChipInfo | null>(null);
   const [groups, setGroups] = useState<EsimProfileGroup[]>([]);
+  const [profilesStale, setProfilesStale] = useState(false);
   const [switchingIccid, setSwitchingIccid] = useState<string | null>(null);
   const [deletingIccid, setDeletingIccid] = useState<string | null>(null);
   const [renamingIccid, setRenamingIccid] = useState<string | null>(null);
@@ -104,6 +106,11 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
   formRef.current = form;
   const chipRef = useRef(chipInfo);
   chipRef.current = chipInfo;
+  const availabilityRef = useRef({ deviceOnline, profilesStale });
+  availabilityRef.current = { deviceOnline, profilesStale };
+  const mutationUnavailable = useRef(
+    createEsimMutationGuard(() => availabilityRef.current),
+  ).current;
   const showSpaceNotice = useCallback((aidHex: string | undefined, delta?: { bytes?: number; direction?: string }) => {
     const aid = normAid(aidHex);
     const msg = spaceDeltaText(delta);
@@ -135,13 +142,14 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
       if (refresh) setRefreshing(true);
       else setInitialLoading(true);
       try {
-        const data = await api<{ chipInfo?: EsimChipInfo; profiles?: EsimProfileGroup[] }>(
-          `/devices/${deviceId}/esim${refresh ? "?refresh=true" : ""}`,
+        const data = await api<{ chipInfo?: EsimChipInfo; profiles?: EsimProfileGroup[]; stale?: boolean }>(
+          `/devices/${deviceId}/esim?cached=1${refresh ? "&refresh=true" : ""}`,
           { signal: controller.signal },
         );
         if (seq !== loadSeq.current) return false;
         setChipInfo(data?.chipInfo || null);
         setGroups(data?.profiles || []);
+        setProfilesStale(!!data?.stale);
         setLoadFailure(null);
         for (const timer of recoveryTimers.current) window.clearTimeout(timer);
         recoveryTimers.current = [];
@@ -217,9 +225,12 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
     async (refresh = false) => {
       setRefreshing(true);
       try {
-        const data = await api<EsimProfileGroup[]>(`/devices/${deviceId}/esim/profiles${refresh ? "?refresh=true" : ""}`);
-        const next = Array.isArray(data) ? data : [];
+        const envelope = await apiEnvelope<EsimProfilesEnvelope>(
+          `/devices/${deviceId}/esim/profiles?cached=1${refresh ? "&refresh=true" : ""}`,
+        );
+        const next = Array.isArray(envelope.data) ? envelope.data : [];
         setGroups(next);
+        setProfilesStale(!!envelope.stale);
         return next;
       } catch (e) {
         message.error(apiMessage(e) || t("获取 eSIM Profiles 失败"));
@@ -233,6 +244,7 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
 
   const switchProfile = useCallback(
     async (iccid: string, state: number | undefined, aidHex?: string) => {
+      if (mutationUnavailable()) return;
       const disabling = state === 1;
       const action = disabling ? t("禁用") : t("启用");
       const prompt = disabling
@@ -244,6 +256,7 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
         type: "warning",
       });
       if (!ok) return;
+      if (mutationUnavailable()) return;
       setSwitchingIccid(iccid);
       try {
         const endpoint = disabling ? "disable" : "switch";
@@ -280,19 +293,21 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
         setSwitchingIccid(null);
       }
     },
-    [deviceId, notifyProfileChanged, loadProfiles],
+    [deviceId, mutationUnavailable, notifyProfileChanged, loadProfiles],
   );
 
   const startRename = useCallback((iccid: string, name?: string) => {
+    if (mutationUnavailable()) return;
     setRenamingIccid(iccid);
     setRenameValue(name || "");
-  }, []);
+  }, [mutationUnavailable]);
   const cancelRename = useCallback(() => {
     setRenamingIccid(null);
     setRenameValue("");
   }, []);
   const submitRename = useCallback(
     async (iccid: string, aidHex?: string) => {
+      if (mutationUnavailable()) return;
       const name = renameValue.trim();
       if (!name) {
         message.warning(t("名称不能为空"));
@@ -307,15 +322,17 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
         message.error(apiMessage(e) || t("修改名称失败"));
       }
     },
-    [deviceId, renameValue, loadProfiles],
+    [deviceId, mutationUnavailable, renameValue, loadProfiles],
   );
 
   const openDelete = useCallback((iccid: string, name?: string, aidHex?: string) => {
+    if (mutationUnavailable()) return;
     setDeleteTarget({ iccid, name, aidHex });
     setDeleteInput("");
-  }, []);
+  }, [mutationUnavailable]);
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget) return;
+    if (mutationUnavailable()) return;
     const { iccid, aidHex } = deleteTarget;
     setDeletingIccid(iccid);
     try {
@@ -337,8 +354,9 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
     } finally {
       setDeletingIccid(null);
     }
-  }, [deviceId, deleteTarget, loadOverview, showSpaceNotice, notifyProfileChanged]);
+  }, [deviceId, mutationUnavailable, deleteTarget, loadOverview, showSpaceNotice, notifyProfileChanged]);
   const download = useCallback(async () => {
+    if (esimDownloadDisabled(availabilityRef.current, false)) return;
     const { smdp, matchingId, confirmationCode, aidHex } = formRef.current;
     const aid = aidHex || selectDefaultAid(chipRef.current, "");
     const imei = (deviceImei || "").trim();
@@ -446,6 +464,17 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
     },
     [],
   );
+
+  useEffect(() => {
+    if (profilesStale) {
+      setPolicyIccid(null);
+      setRenamingIccid(null);
+      setRenameValue("");
+      setDeleteTarget(null);
+      downloadAbort.current?.abort();
+    }
+  }, [profilesStale]);
+
   if (initialLoading) {
     return (
       <div className="space-y-5">
@@ -490,11 +519,15 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
           onToggleSensitive={toggleSensitive}
         />
       ) : null}
+      {profilesStale ? (
+        <Tag type="warning">{t("Profile 数据来自缓存，可能不是最新")}</Tag>
+      ) : null}
       {groups.map((g, i) => (
         <EsimEuiccGroup
           key={g.aidHex || g.eid || `group-${i}`}
           deviceId={deviceId}
           deviceOnline={deviceOnline}
+          profilesStale={profilesStale}
           group={g}
           index={i}
           chipInfo={chipInfo}
@@ -510,7 +543,10 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
           onStartRename={startRename}
           onSubmitRename={submitRename}
           onCancelRename={cancelRename}
-          onTogglePolicy={(iccid) => setPolicyIccid((prev) => (prev === iccid ? null : iccid))}
+          onTogglePolicy={(iccid) => {
+            if (mutationUnavailable()) return;
+            setPolicyIccid((prev) => (prev === iccid ? null : iccid));
+          }}
           onDelete={openDelete}
           onPolicyChanged={() => loadOverview(true)}
         />
@@ -527,6 +563,8 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
         <EsimDownloadForm
           form={form}
           chipInfo={chipInfo}
+          deviceOnline={deviceOnline}
+          profilesStale={profilesStale}
           downloading={downloading}
           downloadPct={downloadPct}
           downloadMsg={downloadMsg}
@@ -542,6 +580,7 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
         open={!!deleteTarget}
         target={deleteTarget}
         deleting={!!deletingIccid}
+        operationBlocked={profilesStale || !deviceOnline}
         input={deleteInput}
         onInputChange={setDeleteInput}
         onCancel={() => setDeleteTarget(null)}

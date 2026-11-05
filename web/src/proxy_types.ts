@@ -11,3 +11,8 @@ export interface ProxyBindingGroup {
   profileName: string;
   routes: ProxyBindingRoute[];
 }
+
+export interface ProxyBindingReconnectState {
+  reconnectRequested?: boolean;
+  reconnectError?: string;
+}

@@ -12,10 +12,15 @@ export interface Session {
 
 export interface LoginResponse {
   status: ApiStatus;
+  authenticated?: boolean;
   username?: string;
   role?: string;
   expiresAt?: string;
   csrfToken?: string;
+  user?: {
+    username?: string;
+    role?: string;
+  };
 }
 
 export interface ApiErrorBody {
@@ -471,6 +476,8 @@ export interface EsimEuiccProfiles {
 export interface EsimOverview {
   available?: boolean;
   reason?: string;
+  stale?: boolean;
+  cachedAt?: number;
   chipInfo?: {
     serialNumber?: string;
     skuName?: string;

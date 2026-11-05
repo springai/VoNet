@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { api, apiMessage } from "../../api";
 import type { DeviceListItem, EsimOverview, UpstreamProxy } from "../../types";
-import type { ProxyBindingGroup } from "../../proxy_types";
+import type { ProxyBindingGroup, ProxyBindingReconnectState } from "../../proxy_types";
 import { usePolling } from "../../lib/usePolling";
 import {
   Button,
@@ -38,8 +38,11 @@ import {
   buildLiveBindingCards,
   buildStoredBindingCards,
   createRequestGuard,
+  failedInventorySnapshot,
   inventoryReadPlan,
   mergeBindingCards,
+  proxyBindingReconnectOutcome,
+  reconcileInventoryBindingCards,
   selectionAfterRefresh,
   type BindingCard,
   type InventorySnapshot,
@@ -101,7 +104,10 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
   );
 
   const allCards = useMemo(() => {
-    const cachedCards = Array.from(inventoryCache.current.values()).flatMap((snapshot) => snapshot.cards);
+    const cachedCards = reconcileInventoryBindingCards(
+      Array.from(inventoryCache.current.values()).flatMap((snapshot) => snapshot.cards),
+      devices,
+    );
     return mergeBindingCards(
       buildLiveBindingCards(devices, labels),
       buildStoredBindingCards(groups, devices),
@@ -147,7 +153,10 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
   const refreshInventory = useCallback(async (force = false) => {
     if (inventoryLoadingRef.current) return;
     const token = inventoryGuard.current.begin();
-    const targets = inventoryReadPlan(inventoryCache.current.keys(), devices, force);
+    const staleDeviceIds = Array.from(inventoryCache.current.entries())
+      .filter(([, snapshot]) => snapshot.stale)
+      .map(([deviceID]) => deviceID);
+    const targets = inventoryReadPlan(inventoryCache.current.keys(), devices, force, staleDeviceIds);
     if (targets.length === 0) {
       setInventoryError("");
       return;
@@ -162,20 +171,22 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
 
     await Promise.allSettled(targets.map(async (device) => {
       try {
-        const overview = await api<EsimOverview>(`/devices/${encodeURIComponent(device.id)}/esim`);
+        const overview = await api<EsimOverview>(
+          `/devices/${encodeURIComponent(device.id)}/esim?cached=1`,
+        );
         if (!inventoryGuard.current.isCurrent(token)) return;
         inventoryCache.current.set(device.id, {
           cards: buildInventoryBindingCards(overview, device, labels),
-          fetchedAt: Date.now(),
+          fetchedAt: overview.cachedAt ? overview.cachedAt * 1000 : Date.now(),
+          stale: !!overview.stale || !device.controlOnline,
         });
       } catch (error) {
         if (!inventoryGuard.current.isCurrent(token)) return;
         const previous = inventoryCache.current.get(device.id);
-        inventoryCache.current.set(device.id, {
-          cards: previous?.cards || [],
-          fetchedAt: previous?.fetchedAt || Date.now(),
-          error: apiMessage(error),
-        });
+        inventoryCache.current.set(
+          device.id,
+          failedInventorySnapshot(previous, device, apiMessage(error)),
+        );
         failures.push(device.name || device.id);
       } finally {
         if (inventoryGuard.current.isCurrent(token)) {
@@ -266,13 +277,14 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
     setSaving(true);
     try {
       const proxyIds = editorRoutes.map((route) => route.upstreamProxyId);
+      let result: ProxyBindingReconnectState;
       if (editorGroupId) {
-        await api(`/proxy-binding-groups/${encodeURIComponent(editorGroupId)}/routes`, {
+        result = await api<ProxyBindingReconnectState>(`/proxy-binding-groups/${encodeURIComponent(editorGroupId)}/routes`, {
           method: "PUT",
           body: { proxyIds },
         });
       } else {
-        await api("/proxy-binding-groups", {
+        result = await api<ProxyBindingReconnectState>("/proxy-binding-groups", {
           method: "POST",
           body: {
             deviceId: editorTarget.deviceId,
@@ -282,7 +294,26 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
           },
         });
       }
-      message.success(editorRoutes.length ? t("代理顺序已保存") : t("已清除手动绑定，将使用 MCC 国家规则"));
+      const reconnectOutcome = proxyBindingReconnectOutcome(result);
+      if (reconnectOutcome === "failed") {
+        message.warning(
+          editorRoutes.length
+            ? tf("代理顺序已保存，但立即 VoWiFi 重连失败；将在下次启动或重连时应用：{error}", { error: result.reconnectError || "" })
+            : tf("已清除手动绑定，但立即 VoWiFi 重连失败；将在下次启动或重连时使用 MCC 国家规则：{error}", { error: result.reconnectError || "" }),
+        );
+      } else if (reconnectOutcome === "requested") {
+        message.success(
+          editorRoutes.length
+            ? t("代理顺序已保存，正在重连 VoWiFi")
+            : t("已清除手动绑定，正在重连 VoWiFi"),
+        );
+      } else {
+        message.success(
+          editorRoutes.length
+            ? t("代理顺序已保存，将在下次 VoWiFi 启动或重连时应用")
+            : t("已清除手动绑定，将在下次 VoWiFi 启动或重连时使用 MCC 国家规则"),
+        );
+      }
       await loadGroups(false);
       onChanged();
       setEditorTarget(null);
@@ -306,8 +337,22 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
     if (!ok) return;
     setSaving(true);
     try {
-      await api(`/proxy-binding-groups/${encodeURIComponent(editorGroupId)}`, { method: "DELETE" });
-      message.success(t("代理绑定已删除"));
+      const result = await api<ProxyBindingReconnectState>(
+        `/proxy-binding-groups/${encodeURIComponent(editorGroupId)}`,
+        { method: "DELETE" },
+      );
+      const reconnectOutcome = proxyBindingReconnectOutcome(result);
+      if (reconnectOutcome === "failed") {
+        message.warning(
+          tf("代理绑定已删除，但立即 VoWiFi 重连失败；将在下次启动或重连时生效：{error}", {
+            error: result.reconnectError || "",
+          }),
+        );
+      } else if (reconnectOutcome === "requested") {
+        message.success(t("代理绑定已删除，正在重连 VoWiFi"));
+      } else {
+        message.success(t("代理绑定已删除，将在下次 VoWiFi 启动或重连时生效"));
+      }
       await loadGroups(false);
       onChanged();
       setEditorTarget(null);
@@ -348,6 +393,9 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
     0,
     ...Array.from(inventoryCache.current.values()).map((snapshot) => snapshot.fetchedAt),
   );
+  const hasStaleInventory =
+    Array.from(inventoryCache.current.values()).some((snapshot) => snapshot.stale && snapshot.cards.length > 0) ||
+    allCards.some((card) => card.source === "inventory" && !card.online);
 
   return (
     <section className="ui-card proxy-binding-section mt-6 overflow-hidden">
@@ -516,7 +564,7 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
                           size="small"
                           plain
                           icon={group ? <Pencil className="h-4 w-4" /> : <Link2 className="h-4 w-4" />}
-                          disabled={!card.online}
+                          disabled={!card.bindingEligible}
                           onClick={() => openEditor(card)}
                           aria-label={group ? t("编辑代理顺序") : t("绑定代理")}
                         />
@@ -581,6 +629,9 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
                     })
                   : t("尚未读取 Profile")}
             </span>
+            {hasStaleInventory ? (
+              <Tag type="warning">{t("离线 Profile 为缓存数据，可能不是最新")}</Tag>
+            ) : null}
             {inventoryError ? <span className="text-amber-600 dark:text-amber-400">{inventoryError}</span> : null}
           </div>
 
@@ -598,7 +649,7 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
               <tbody className="divide-y divide-gray-100 dark:divide-white/10">
                 {pickerCards.map((card) => {
                   const existing = groupByKey.get(card.key);
-                  const disabled = !!existing;
+                  const disabled = !!existing || !card.bindingEligible;
                   return (
                     <tr
                       key={card.key}
@@ -631,8 +682,12 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
                       <td className="px-4 py-3">
                         {existing ? (
                           <Tag type="info">{t("已有手动绑定")}</Tag>
-                        ) : (
+                        ) : !card.bindingEligible ? (
+                          <Tag type="warning">{t("缺少可用 ICCID")}</Tag>
+                        ) : card.online ? (
                           <Tag type="primary">{t("可绑定")}</Tag>
+                        ) : (
+                          <Tag type="primary">{t("离线可绑定")}</Tag>
                         )}
                       </td>
                     </tr>
@@ -650,7 +705,12 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
             <Button
               variant="primary"
               icon={<ArrowRight className="h-4 w-4" />}
-              disabled={!selectedPickerCard || !!selectedPickerGroup || inventoryLoading}
+              disabled={
+                !selectedPickerCard ||
+                !selectedPickerCard.bindingEligible ||
+                !!selectedPickerGroup ||
+                inventoryLoading
+              }
               onClick={() => selectedPickerCard && openEditor(selectedPickerCard)}
             >
               {t("配置代理")}
@@ -694,7 +754,16 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
                 <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-xs text-gray-500">
                   <span>{editorTarget.iccid}</span>
                   <StatusDot tone={editorTarget.online ? "success" : "neutral"} animated={editorTarget.online} />
-                  <span>{editorTarget.online ? t("在线") : t("离线，只读")}</span>
+                  <span>
+                    {editorTarget.online
+                      ? t("在线")
+                      : editorTarget.bindingEligible
+                        ? t("设备离线，可编辑")
+                        : t("离线，只读")}
+                  </span>
+                  {!editorTarget.online && editorTarget.bindingEligible ? (
+                    <Tag type="warning">{t("保存后待设备恢复生效")}</Tag>
+                  ) : null}
                 </div>
               </div>
 
@@ -712,7 +781,7 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
                   return (
                     <div
                       key={route.id}
-                      draggable={!saving && editorTarget.online}
+                      draggable={!saving && editorTarget.bindingEligible}
                       onDragStart={() => setDragIndex(index)}
                       onDragEnd={() => {
                         setDragIndex(null);
@@ -744,7 +813,7 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
                             size="small"
                             plain
                             icon={<ArrowUp className="h-4 w-4" />}
-                            disabled={saving || !editorTarget.online || index === 0}
+                            disabled={saving || !editorTarget.bindingEligible || index === 0}
                             onClick={() => moveRoute(index, -1)}
                             aria-label={t("上移")}
                           />
@@ -754,7 +823,7 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
                             size="small"
                             plain
                             icon={<ArrowDown className="h-4 w-4" />}
-                            disabled={saving || !editorTarget.online || index === editorRoutes.length - 1}
+                            disabled={saving || !editorTarget.bindingEligible || index === editorRoutes.length - 1}
                             onClick={() => moveRoute(index, 1)}
                             aria-label={t("下移")}
                           />
@@ -765,7 +834,7 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
                             variant="danger"
                             plain
                             icon={<Trash2 className="h-4 w-4" />}
-                            disabled={saving || !editorTarget.online}
+                            disabled={saving || !editorTarget.bindingEligible}
                             onClick={() => setEditorRoutes((current) => current.filter((_, routeIndex) => routeIndex !== index))}
                             aria-label={t("移除")}
                           />
@@ -786,7 +855,7 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
                   value={selectedProxyId}
                   onChange={setSelectedProxyId}
                   placeholder={t("选择要添加的代理")}
-                  disabled={saving || !editorTarget.online}
+                  disabled={saving || !editorTarget.bindingEligible}
                   options={availableProxies.map((proxy) => ({
                     value: proxy.id,
                     label: `${proxy.name || proxy.id}（${proxy.addr}）`,
@@ -794,7 +863,7 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
                 />
                 <Button
                   icon={<Plus className="h-4 w-4" />}
-                  disabled={saving || !editorTarget.online || !selectedProxyId}
+                  disabled={saving || !editorTarget.bindingEligible || !selectedProxyId}
                   onClick={() => {
                     const proxy = proxies.find((item) => item.id === selectedProxyId);
                     if (!proxy) return;
@@ -818,7 +887,7 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
                     plain
                     icon={<Trash2 className="h-4 w-4" />}
                     loading={saving}
-                    disabled={!editorTarget.online}
+                    disabled={!editorTarget.bindingEligible}
                     onClick={() => void removeGroup()}
                   >
                     {t("删除绑定")}
@@ -830,7 +899,7 @@ export function ProxyBindingSection({ proxies, devices, onChanged }: Props) {
                 <Button
                   variant="primary"
                   loading={saving}
-                  disabled={!editorTarget.online || !routeDirty}
+                  disabled={!editorTarget.bindingEligible || !routeDirty}
                   onClick={() => void save()}
                 >
                   {t("保存顺序")}

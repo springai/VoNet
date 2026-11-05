@@ -3,6 +3,7 @@ import { cx } from "../../lib/utils";
 import { Button, Input, Select } from "../ui";
 import type { EsimChipInfo, EsimDownloadForm } from "./types";
 import { tf, useI18n } from "../../lib/i18n";
+import { esimDownloadDisabled } from "./esimActionState";
 
 // Pre-listed so Tailwind generates them; index by quantized percent.
 const WIDTHS = [
@@ -13,6 +14,8 @@ const WIDTHS = [
 export interface EsimDownloadFormProps {
   form: EsimDownloadForm;
   chipInfo: EsimChipInfo | null;
+  deviceOnline: boolean;
+  profilesStale: boolean;
   downloading: boolean;
   downloadPct: number;
   downloadMsg: string;
@@ -79,7 +82,17 @@ export function EsimDownloadForm(props: EsimDownloadFormProps) {
         </div>
       ) : null}
       <div className="mt-4 flex justify-end">
-        <Button variant="primary" loading={props.downloading} disabled={props.downloading} onClick={props.onDownload} className="!border-0" icon={<ArrowDownloadRegular />}>
+        <Button
+          variant="primary"
+          loading={props.downloading}
+          disabled={esimDownloadDisabled(
+            { deviceOnline: props.deviceOnline, profilesStale: props.profilesStale },
+            props.downloading,
+          )}
+          onClick={props.onDownload}
+          className="!border-0"
+          icon={<ArrowDownloadRegular />}
+        >
           {t("开始下载")}
         </Button>
       </div>

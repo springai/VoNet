@@ -48,11 +48,11 @@ func (s *Server) handleESIM(w http.ResponseWriter, r *http.Request, rest []strin
 			return true
 		}
 		if len(rest) == 2 && r.Method == http.MethodDelete {
-			s.handleEsimDelete(w, r, physicalID, physicalPresent, rest[1])
+			s.handleEsimDelete(w, r, physicalID, physicalPresent, rest[1], configuredID)
 			return true
 		}
 		if len(rest) == 2 && r.Method == http.MethodPatch {
-			s.handleEsimRename(w, r, physicalID, physicalPresent, rest[1])
+			s.handleEsimRename(w, r, physicalID, physicalPresent, rest[1], configuredID)
 			return true
 		}
 		esimUnavailable(w)
@@ -86,14 +86,14 @@ func (s *Server) handleESIM(w http.ResponseWriter, r *http.Request, rest []strin
 			if !requireMethod(w, r, http.MethodPost) {
 				return true
 			}
-			s.handleEsimDisable(w, r, physicalID, physicalPresent)
+			s.handleEsimDisable(w, r, physicalID, physicalPresent, configuredID)
 			return true
 		}
 		if len(rest) == 2 && rest[1] == "download" {
 			if !requireMethod(w, r, http.MethodGet) {
 				return true
 			}
-			s.handleEsimDownload(w, r, physicalID, physicalPresent)
+			s.handleEsimDownload(w, r, physicalID, physicalPresent, configuredID)
 			return true
 		}
 		// Any other provisioning action is not implemented.
@@ -149,28 +149,62 @@ func (s *Server) handleEsimNotificationRetry(w http.ResponseWriter, r *http.Requ
 // esimInfo loads the eUICC profile list. The string result is "ok" (use info),
 // "empty" (no usable eUICC — render the empty state), or "error" (an error
 // response has already been written).
-func (s *Server) esimInfo(w http.ResponseWriter, r *http.Request, physicalID string, physicalPresent bool, configuredID string) (string, []device.EsimInventoryEntry) {
+func (s *Server) esimInfo(r *http.Request, physicalID string, physicalPresent bool, configuredID string) (string, []device.EsimInventoryEntry, error) {
 	if s.devices == nil || !physicalPresent {
-		return "empty", nil
+		return "empty", nil, nil
 	}
 	info, err := s.readESIMInventory(r.Context(), configuredID, physicalID)
 	if err != nil {
 		if errors.Is(err, device.ErrNoEUICC) {
-			return "empty", nil
+			if noteErr := s.noteESIMNoEUICC(r.Context(), configuredID, physicalID); noteErr != nil && s.logger != nil {
+				s.logger.Warn("record missing eUICC state", "device_id", configuredID, "error", noteErr)
+			}
+			return "empty", nil, nil
 		}
-		s.writeDeviceError(w, err)
-		return "error", nil
+		return "error", nil, err
 	}
-	return "ok", info
+	if cacheErr := s.saveEsimProfileCache(
+		r.Context(),
+		configuredID,
+		physicalID,
+		esimInventoryGroups(info),
+	); cacheErr != nil && s.logger != nil {
+		s.logger.Warn("cache eSIM profiles for offline binding", "device_id", configuredID, "error", cacheErr)
+	}
+	return "ok", info, nil
 }
 
 // writeEsimOverview returns { chipInfo, profiles } for the eSIM tab.
 func (s *Server) writeEsimOverview(w http.ResponseWriter, r *http.Request, physicalID string, physicalPresent bool, configuredID string) {
-	status, info := s.esimInfo(w, r, physicalID, physicalPresent, configuredID)
-	switch status {
-	case "error":
+	status, info, err := s.esimInfo(r, physicalID, physicalPresent, configuredID)
+	if err != nil {
+		if r.URL.Query().Get("cached") == "1" {
+			if cached, ok := s.loadEsimProfileCache(r.Context(), configuredID, physicalID); ok {
+				writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
+					"chipInfo":  nil,
+					"profiles":  cached.Profiles,
+					"stale":     true,
+					"cached_at": cached.CachedAt,
+				}})
+				return
+			}
+		}
+		s.writeDeviceError(w, err)
 		return
+	}
+	switch status {
 	case "empty":
+		if r.URL.Query().Get("cached") == "1" {
+			if cached, ok := s.loadEsimProfileCache(r.Context(), configuredID, physicalID); ok {
+				writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
+					"chipInfo":  nil,
+					"profiles":  cached.Profiles,
+					"stale":     true,
+					"cached_at": cached.CachedAt,
+				}})
+				return
+			}
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"chipInfo": nil, "profiles": []any{}}})
 		return
 	}
@@ -178,8 +212,10 @@ func (s *Server) writeEsimOverview(w http.ResponseWriter, r *http.Request, physi
 	groups := esimInventoryGroups(info)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"data": map[string]any{
-			"chipInfo": chipInfo,
-			"profiles": groups,
+			"chipInfo":  chipInfo,
+			"profiles":  groups,
+			"stale":     false,
+			"cached_at": time.Now().Unix(),
 		},
 	})
 }
@@ -278,16 +314,46 @@ func (s *Server) esimChipInfo(r *http.Request, physicalID string) map[string]any
 
 // writeEsimGroups returns just the profile groups for the /esim/profiles call.
 func (s *Server) writeEsimGroups(w http.ResponseWriter, r *http.Request, physicalID string, physicalPresent bool, configuredID string) {
-	status, info := s.esimInfo(w, r, physicalID, physicalPresent, configuredID)
-	switch status {
-	case "error":
+	status, info, err := s.esimInfo(r, physicalID, physicalPresent, configuredID)
+	if err != nil {
+		if r.URL.Query().Get("cached") == "1" {
+			if cached, ok := s.loadEsimProfileCache(r.Context(), configuredID, physicalID); ok {
+				writeJSON(w, http.StatusOK, map[string]any{
+					"data":      cached.Profiles,
+					"stale":     true,
+					"cached_at": cached.CachedAt,
+				})
+				return
+			}
+		}
+		s.writeDeviceError(w, err)
 		return
+	}
+	switch status {
 	case "empty":
-		writeJSON(w, http.StatusOK, map[string]any{"data": []any{}})
+		if r.URL.Query().Get("cached") == "1" {
+			if cached, ok := s.loadEsimProfileCache(r.Context(), configuredID, physicalID); ok {
+				writeJSON(w, http.StatusOK, map[string]any{
+					"data":      cached.Profiles,
+					"stale":     true,
+					"cached_at": cached.CachedAt,
+				})
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"data":      []any{},
+			"stale":     false,
+			"cached_at": time.Now().Unix(),
+		})
 		return
 	}
 	groups := esimInventoryGroups(info)
-	writeJSON(w, http.StatusOK, map[string]any{"data": groups})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data":      groups,
+		"stale":     false,
+		"cached_at": time.Now().Unix(),
+	})
 }
 
 // GetProfilesInfo does not include an EID on every eUICC implementation. The
@@ -341,7 +407,7 @@ func esimGroups(info device.EsimInfo) []map[string]any {
 	}
 }
 
-func (s *Server) handleEsimRename(w http.ResponseWriter, r *http.Request, physicalID string, physicalPresent bool, iccid string) {
+func (s *Server) handleEsimRename(w http.ResponseWriter, r *http.Request, physicalID string, physicalPresent bool, iccid string, configuredID string) {
 	if s.devices == nil {
 		writeError(w, http.StatusServiceUnavailable, "device_manager_unavailable", "device manager is unavailable")
 		return
@@ -370,6 +436,10 @@ func (s *Server) handleEsimRename(w http.ResponseWriter, r *http.Request, physic
 		return
 	}
 	aidHex := firstNonEmpty(request.AIDHex, request.AIDHexCamel)
+	if err := s.invalidateEsimProfileCache(r.Context(), configuredID); err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
 	if err := s.devices.ESIMRenameProfile(r.Context(), physicalID, iccid, nickname, aidHex); err != nil {
 		s.writeDeviceError(w, err)
 		return
@@ -400,6 +470,10 @@ func (s *Server) handleEsimSwitch(w http.ResponseWriter, r *http.Request, config
 	iccid := strings.TrimSpace(request.ICCID)
 	if iccid == "" {
 		writeError(w, http.StatusBadRequest, "invalid_request", "iccid is required")
+		return
+	}
+	if err := s.invalidateEsimProfileCache(r.Context(), configuredID); err != nil {
+		s.writeStoreError(w, err)
 		return
 	}
 	// Profile recovery may outlive the shared HTTP write deadline.
@@ -670,7 +744,7 @@ func (s *Server) restoreProfileSwitchFailureState(ctx context.Context, configure
 	}
 }
 
-func (s *Server) handleEsimDisable(w http.ResponseWriter, r *http.Request, physicalID string, physicalPresent bool) {
+func (s *Server) handleEsimDisable(w http.ResponseWriter, r *http.Request, physicalID string, physicalPresent bool, configuredID string) {
 	if s.devices == nil {
 		writeError(w, http.StatusServiceUnavailable, "device_manager_unavailable", "device manager is unavailable")
 		return
@@ -694,6 +768,10 @@ func (s *Server) handleEsimDisable(w http.ResponseWriter, r *http.Request, physi
 		return
 	}
 	aidHex := firstNonEmpty(request.AIDHex, request.AIDHexCamel)
+	if err := s.invalidateEsimProfileCache(r.Context(), configuredID); err != nil {
+		s.writeStoreError(w, err)
+		return
+	}
 	if err := s.devices.ESIMDisableProfile(r.Context(), physicalID, iccid, aidHex); err != nil {
 		s.writeDeviceError(w, err)
 		return
@@ -701,7 +779,7 @@ func (s *Server) handleEsimDisable(w http.ResponseWriter, r *http.Request, physi
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"status": "disabled", "iccid": iccid, "recovering": true}})
 }
 
-func (s *Server) handleEsimDelete(w http.ResponseWriter, r *http.Request, physicalID string, physicalPresent bool, iccid string) {
+func (s *Server) handleEsimDelete(w http.ResponseWriter, r *http.Request, physicalID string, physicalPresent bool, iccid string, configuredID string) {
 	if s.devices == nil {
 		writeError(w, http.StatusServiceUnavailable, "device_manager_unavailable", "device manager is unavailable")
 		return
@@ -713,6 +791,10 @@ func (s *Server) handleEsimDelete(w http.ResponseWriter, r *http.Request, physic
 	iccid = strings.TrimSpace(iccid)
 	if iccid == "" {
 		writeError(w, http.StatusBadRequest, "invalid_request", "iccid is required")
+		return
+	}
+	if err := s.invalidateEsimProfileCache(r.Context(), configuredID); err != nil {
+		s.writeStoreError(w, err)
 		return
 	}
 	result, err := s.devices.ESIMDeleteProfile(r.Context(), physicalID, iccid, r.URL.Query().Get("aid_hex"))
@@ -736,7 +818,7 @@ func (s *Server) handleEsimDelete(w http.ResponseWriter, r *http.Request, physic
 // confirmation_code/aid_hex/imei) and reads `data: {step,msg,pct,...}` lines.
 // The event field names (step/msg/pct/code/space_delta/warning) match the
 // reference contract byte-for-byte, so the frontend needs no changes.
-func (s *Server) handleEsimDownload(w http.ResponseWriter, r *http.Request, physicalID string, physicalPresent bool) {
+func (s *Server) handleEsimDownload(w http.ResponseWriter, r *http.Request, physicalID string, physicalPresent bool, configuredID string) {
 	if s.devices == nil {
 		writeError(w, http.StatusServiceUnavailable, "device_manager_unavailable", "device manager is unavailable")
 		return
@@ -755,6 +837,10 @@ func (s *Server) handleEsimDownload(w http.ResponseWriter, r *http.Request, phys
 	}
 	if strings.TrimSpace(params.SMDP) == "" {
 		writeError(w, http.StatusBadRequest, "invalid_request", "smdp 为必填项")
+		return
+	}
+	if err := s.invalidateEsimProfileCache(r.Context(), configuredID); err != nil {
+		s.writeStoreError(w, err)
 		return
 	}
 

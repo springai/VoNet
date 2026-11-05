@@ -298,13 +298,14 @@ export async function readEventStream(
   }
   const query = qs.toString();
   const url = `${path.startsWith("/api") ? path : `/api${path}`}${query ? `?${query}` : ""}`;
+  const requestStartedAt = Date.now();
   const response = await fetch(url, {
     method: "GET",
     headers: { Accept: "text/event-stream" },
     credentials: "include",
     signal: handlers.signal,
   });
-  if (response.status === 401) notifyUnauthorized();
+  if (response.status === 401) notifyUnauthorized(requestStartedAt);
   if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
   if (!response.body) throw new Error("No stream body");
 

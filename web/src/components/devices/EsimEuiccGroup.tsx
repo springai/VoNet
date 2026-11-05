@@ -12,6 +12,7 @@ export interface SpaceNotice {
 export interface EsimEuiccGroupProps {
   deviceId: string;
   deviceOnline: boolean;
+  profilesStale: boolean;
   group: EsimProfileGroup;
   index: number;
   chipInfo: EsimChipInfo | null;
@@ -140,6 +141,7 @@ export function EsimEuiccGroup(props: EsimEuiccGroupProps) {
               key={p.iccid}
               deviceId={props.deviceId}
               deviceOnline={props.deviceOnline}
+              profilesStale={props.profilesStale}
               aidHex={group.aidHex}
               profile={p}
               showSensitive={props.showSensitive}

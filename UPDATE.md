@@ -1677,3 +1677,38 @@ ike: IKE_AUTH EAP round 1: ike: responder reported fatal notification 10500
 - 上游新增 Cookie/迁移测试文件和 `scripts/ci/auth_restore_smoke.py` 必须随代码一并提交，后续提交不得遗漏未跟踪文件。
 
 ---
+
+### 60. 离线代理绑定、eSIM Profile 缓存与登录会话竞态修复
+
+**问题背景**:
+
+- VoWiFi 注册或 IKE 失败后，设备运行状态可能临时变为离线，代理中心错误地把“设备在线”当成“允许保存代理绑定”的前置条件，导致 `Reader-*` 等设备无法选择“绑定代理”。
+- 设备离线或 Profile 读取失败后，前端内存缓存会丢失最后已知的 eSIM Profile；页面刷新后未绑定的离线 Profile 无法进入绑定列表。
+- 登录接口已经返回 `auth.login success`，但启动阶段尚未完成的 session/preferences 请求稍后返回 401，覆盖新登录状态并把用户送回登录页。
+
+**修改内容**:
+
+- 代理绑定模型新增 `bindingEligible`，与 `online/physicalPresent/controlOnline/vowifiReady` 分离；只要设备 ID、ICCID/Profile 身份可信，就允许保存、编辑和删除代理路由。
+- 代理绑定列表、Profile 选择器和路由编辑抽屉统一使用绑定资格作为操作门禁；离线保存成功后明确提示将在下次 VoWiFi 启动或重连时应用。
+- 代理绑定写接口返回兼容的 `reconnect_requested/reconnect_error`，保存或删除已成功但立即重连失败时不会误报保存失败；API 只返回统一安全提示，详细错误保留在服务端日志。
+- 新增服务端 last-known eSIM Profile 缓存，使用敏感 `app_settings` 保存，不增加数据库 migration；缓存仅保留 ICCID、Profile 名称、运营商、状态和分类等白名单字段，剥离 EID、AID 和未知字段。
+- Profile 缓存加入稳定硬件身份和 USB generation 校验；无稳定硬件标识时拒绝缓存，设备 ID/读卡器更换不会复用旧 Profile。无效、损坏、版本不匹配或硬件身份不一致的缓存会在读取时清理。
+- `ErrNoEUICC` 连续三次确认后才清理缓存，避免瞬时 PCSC/eUICC 误报删除最后可用 Profile；Profile 切换、重命名、禁用、删除和下载前先成功失效缓存，清理失败会阻止硬件操作。
+- `/devices/{id}/esim?cached=1` 和 `/esim/profiles?cached=1` 支持设备离线或读取临时失败时返回 stale 缓存；普通请求仍保持实时语义。
+- eSIM 页面显示缓存状态，缓存/stale 时禁用切换、改名、删除、策略和下载；状态变化会取消已打开的编辑、删除弹窗并中止下载，所有回调执行前再次校验实时状态。
+- 密码登录以后端 `auth.login` 响应为认证结果，不再由后续 `/auth/session` 决定登录成败；登录响应中的嵌套 `user` 身份统一映射。
+- 401 事件携带请求开始时间，启动阶段的旧 session/preferences 请求不能覆盖新登录；认证代次同时阻止旧 refresh 结果覆盖新状态。
+
+**验证结果**:
+
+- `npm test` 66/66，`npm run build`，`npm run test:e2e` 11/11 通过。
+- `go test ./internal/server`、`go vet ./...` 和 `git diff --check` 通过。
+- 新增测试覆盖离线绑定、缓存 Profile、硬件身份/generation、缓存清理重试、Profile 操作失效、API envelope、eSIM 操作门禁和旧 401 登录竞态。
+
+**安全与部署约束**:
+
+- Profile 缓存位于 VoNet 数据库的敏感 `app_settings` 中，仍需像数据库、WAL、备份和 TLS 材料一样受控。
+- 本机未重新执行全量 `go test ./...`；此前仅 `internal/exportproxy` 因 Windows 系统保留 TCP 1080 端口失败，与本次修改无关。
+- 需要重新构建并部署包含新前端资源的 VoNet 二进制后再进行实机登录、代理绑定和 eSIM 离线缓存验证。
+
+---

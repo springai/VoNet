@@ -99,6 +99,11 @@ export interface EsimProfileGroup {
   aidHex?: string;
   profiles: EsimProfileItem[];
 }
+export interface EsimProfilesEnvelope {
+  data: EsimProfileGroup[];
+  stale?: boolean;
+  cachedAt?: number;
+}
 export interface EsimNotification {
   sequenceNumber: number;
   event?: string;

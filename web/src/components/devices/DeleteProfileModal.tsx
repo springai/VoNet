@@ -11,13 +11,14 @@ export interface DeleteProfileModalProps {
   open: boolean;
   target: DeleteProfileTarget | null;
   deleting: boolean;
+  operationBlocked: boolean;
   input: string;
   onInputChange: (v: string) => void;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
-export function DeleteProfileModal({ open, target, deleting, input, onInputChange, onCancel, onConfirm }: DeleteProfileModalProps) {
+export function DeleteProfileModal({ open, target, deleting, operationBlocked, input, onInputChange, onCancel, onConfirm }: DeleteProfileModalProps) {
   const { t } = useI18n();
   const last4 = (target?.iccid || "").slice(-4);
   return (
@@ -30,7 +31,7 @@ export function DeleteProfileModal({ open, target, deleting, input, onInputChang
       </div>
       <div className="mt-6 flex items-center justify-end gap-3">
         <Button onClick={onCancel}>{t("取消")}</Button>
-        <Button variant="danger" loading={deleting} disabled={input !== last4} onClick={onConfirm}>
+        <Button variant="danger" loading={deleting} disabled={operationBlocked || input !== last4} onClick={onConfirm}>
           {t("确认删除")}
         </Button>
       </div>

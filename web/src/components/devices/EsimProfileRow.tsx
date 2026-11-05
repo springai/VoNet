@@ -3,10 +3,12 @@ import { Button, Input, Tag } from "../ui";
 import { EsimCardPolicyInline } from "./EsimCardPolicyInline";
 import type { EsimProfileItem } from "./types";
 import { useI18n } from "../../lib/i18n";
+import { esimMutationDisabled } from "./esimActionState";
 
 export interface EsimProfileRowProps {
   deviceId: string;
   deviceOnline: boolean;
+  profilesStale: boolean;
   aidHex?: string;
   profile: EsimProfileItem;
   showSensitive: boolean;
@@ -29,6 +31,10 @@ export function EsimProfileRow(props: EsimProfileRowProps) {
   const { t } = useI18n();
   const { profile: p, renaming } = props;
   const active = p.state === 1;
+  const mutationDisabled = esimMutationDisabled({
+    deviceOnline: props.deviceOnline,
+    profilesStale: props.profilesStale,
+  });
   return (
     <>
       <div className="flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-gray-50/50 dark:hover:bg-white/5">
@@ -57,11 +63,11 @@ export function EsimProfileRow(props: EsimProfileRowProps) {
                 autoFocus
                 className="!w-52"
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") props.onSubmitRename();
+                  if (e.key === "Enter" && !mutationDisabled) props.onSubmitRename();
                   else if (e.key === "Escape") props.onCancelRename();
                 }}
               />
-              <Button variant="primary" size="small" onClick={props.onSubmitRename} className="!border-0">
+              <Button variant="primary" size="small" disabled={mutationDisabled} onClick={props.onSubmitRename} className="!border-0">
                 {t("保存")}
               </Button>
               <Button size="small" onClick={props.onCancelRename} className="!border-0">
@@ -72,17 +78,17 @@ export function EsimProfileRow(props: EsimProfileRowProps) {
         </div>
         {!renaming ? (
           <div className="flex flex-shrink-0 items-center gap-2">
-            <Button variant={active ? "warning" : "success"} size="small" plain loading={props.switching} onClick={props.onSwitch}>
+            <Button variant={active ? "warning" : "success"} size="small" plain loading={props.switching} disabled={mutationDisabled} onClick={props.onSwitch}>
               {active ? t("禁用") : t("切换")}
             </Button>
-            <Button variant="primary" size="small" plain onClick={props.onStartRename}>
+            <Button variant="primary" size="small" plain disabled={mutationDisabled} onClick={props.onStartRename}>
               {t("改名")}
             </Button>
-            <Button variant={props.policyOpen ? "primary" : "default"} size="small" plain onClick={props.onTogglePolicy}>
+            <Button variant={props.policyOpen ? "primary" : "default"} size="small" plain disabled={props.profilesStale} onClick={props.onTogglePolicy}>
               {t("策略")}
             </Button>
             <span title={active ? t("当前启用的 Profile 不能删除；请先切换到另一张卡") : undefined}>
-              <Button variant="danger" size="small" plain loading={props.deleting} disabled={active} onClick={props.onDelete}>
+              <Button variant="danger" size="small" plain loading={props.deleting} disabled={active || mutationDisabled} onClick={props.onDelete}>
                 {t("删除")}
               </Button>
             </span>

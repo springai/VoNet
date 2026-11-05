@@ -860,6 +860,10 @@ func (s *Server) handleDevicePath(
 	if len(tail) == 0 {
 		switch r.Method {
 		case http.MethodDelete:
+			if err := s.clearEsimProfileCache(r.Context(), id); err != nil {
+				s.writeStoreError(w, err)
+				return true
+			}
 			if remover, ok := s.vowifi.(VoWiFiDeviceRemover); ok {
 				remover.Remove(r.Context(), id)
 			}

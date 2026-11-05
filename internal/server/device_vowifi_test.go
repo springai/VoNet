@@ -15,15 +15,21 @@ import (
 )
 
 type fakeVoWiFiController struct {
-	state      vowifi.State
-	enabled    []bool
-	reconnects int
-	removed    []string
-	err        error
+	state        vowifi.State
+	enabled      []bool
+	reconnects   int
+	removed      []string
+	err          error
+	stateErr     error
+	reconnectErr error
 }
 
 func (controller *fakeVoWiFiController) State(string) (vowifi.State, error) {
-	return controller.state, controller.err
+	err := controller.err
+	if controller.stateErr != nil {
+		err = controller.stateErr
+	}
+	return controller.state, err
 }
 
 func (controller *fakeVoWiFiController) RequestEnabled(
@@ -36,6 +42,9 @@ func (controller *fakeVoWiFiController) RequestEnabled(
 
 func (controller *fakeVoWiFiController) RequestReconnect(string) (vowifi.State, error) {
 	controller.reconnects++
+	if controller.reconnectErr != nil {
+		return controller.state, controller.reconnectErr
+	}
 	return controller.state, controller.err
 }
 
