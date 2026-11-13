@@ -50,6 +50,9 @@ func TestESIMSwitchReturnsRecoveryErrorDespiteVerifiedIdentity(t *testing.T) {
 		resetErr:            cause,
 	}
 	manager, id := newStartedTestManager(t, client)
+	manager.cacheESIMInfo(id, EsimInfo{AID: isdRAID, Profiles: []EsimProfile{{
+		ICCID: "8900000000000000001",
+	}}})
 	if err := manager.ESIMSwitchProfile(context.Background(), id, "8900000000000000001", ""); !errors.Is(err, cause) {
 		t.Fatalf("switch error = %v, want recovery failure", err)
 	}

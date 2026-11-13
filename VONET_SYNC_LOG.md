@@ -1224,6 +1224,60 @@ Ultra Mobile (ipcc-ultramint-mobile-310026):
 
 ---
 
+## 2026-11-13 同步上游 9919d14（5ber ISD-R 与 eSIM 缓存加固）
+
+**同步区间**:
+
+- 上游提交：`9919d14a444b8c1049c02a538f114d883710aee3`
+- 上游主题：发现 5ber 可插拔 eUICC 的 ISD-R，并为无 AID 的 MCP 切卡解析所属 ISD-R。
+
+**同步范围**:
+
+| 文件 | 同步方式 | 说明 |
+|---|---|---|
+| `internal/device/esim.go` | 上游 patch + VoNet 加固 | 增加 `fiveBerISDRAID`，按标准、XeSIM、5ber 顺序发现；严格解析目标 ICCID 所属 ISD-R |
+| `internal/device/esim_download.go` | 补充 | `ESIMInventory()` 成功后写入多 ISD-R manager 缓存 |
+| `internal/device/manager.go` | 补充 | USB identity、USB generation、硬件类型变化和设备消失时清理 eSIM 缓存 |
+| `internal/device/esim_pcsc_test.go` | 测试适配 | fake PCSC card 支持 `GetProfilesInfo` |
+| `internal/device/esim_sim_reset_test.go` | 测试适配 | 增加 5ber AID 探测顺序和停止语义 |
+| `internal/device/esim_test.go` | 测试增强 | 5ber、XeSIM、缓存 ISD-R、单候选校验、discovery/GetProfilesInfo 失败和 eSTK 多存储测试 |
+| `internal/device/esim_maintenance_test.go` | 测试适配 | 保留 VoNet recovery、RF-off、CAT busy 和 profile-switch gate 语义 |
+| `internal/device/esim_radio_maintenance_test.go` | 测试适配 | 保留 RF-off policy 与 profile-switch 并发测试 |
+| `internal/device/esim_recovery_result_test.go` | 测试适配 | 保留 detached recovery 结果验证 |
+| `internal/device/manager_test.go` | 测试增强 | 硬件变化和 USB generation 变化清理缓存 |
+
+**同步与兼容处理**:
+
+- 5ber 卡使用 ISD-R AID `A0000005591010FFFFFFFF8900050500`，标准 `...0100`、XeSIM `...0177` 和 5ber AID 互斥探测，首个可选 ISD-R 即停止。
+- `resolveProfileISDR()` 优先读取 manager 的多 ISD-R cache，再执行 discovery 和 `GetProfilesInfo`；单候选也验证 ICCID，不能确认时拒绝 EnableProfile。
+- discovery 的非 `ErrNoEUICC` 传输错误不再静默回退标准 AID；eSTK 管理应用缺失仍优先触发原有 SIM recovery。
+- manager cache 增加 `deviceID -> ISD-R AID -> EsimInfo` 结构；`ESIMListProfiles()` 的单 AID 更新会替换旧的多 ISD-R 快照，避免保留过期 storage。
+- enable/disable/remove/rename 全部维护顶层 cache 和多 ISD-R cache；ICCID 匹配统一 trim，设备变化时同时清理两套 cache。
+- VoNet 服务端持久 Profile cache 保持原有安全边界：继续保存白名单 Profile 元数据并剥离 EID/AID，不把服务端 cache 当作 ISD-R resolver 的唯一来源。
+
+**本地功能保护**:
+
+- eSTK 多存储、QMI、PCSC、RF-off、profile switch lease、CAT busy retry、SIM recovery、设备生命周期和 PCSC/DJI/IMEI/USBPath 匹配均保留。
+- VoNet 的 `resolveProfileAID()` 仍只解析 ISD-P AID，与新增的 ISD-R resolver 职责分离。
+- MCP `esim_switch_profile` 无 AID 路径现在可以在 manager cache 或 discovery 后确定 5ber/XeSIM/eSTK 的正确入口。
+- 抓包脚本、抓包数据、`.env*`、真实 SIM/设备/号码和本地构建产物不进入本记录或提交。
+
+**GitHub 对比**:
+
+- 对比前 GitHub `origin/master` 与本地 `HEAD` 均为 `dda12d5`，不存在远端分叉或 merge conflict。
+- 本次差异仅涉及 `internal/device` 的 Go 实现和测试，没有覆盖 VoNet 前端、后端 API、代理绑定、登录、SSO 或持久化 Profile cache 代码。
+
+**验证**:
+
+- `go test -count=1 ./internal/device ./internal/mcp ./internal/server` 通过。
+- `go vet ./...` 通过。
+- `git diff --check` 通过。
+- 新增测试覆盖 5ber/XeSIM/标准 ISD-R、eSTK 多存储、无 AID 切卡、cache 解析、硬件 generation 清理、discovery/GetProfilesInfo 失败和候选 fallback。
+
+本次同步记录随代码提交至 GitHub `master`。
+
+---
+
 ## 2026-11-04 同步 VoCat-reference 384a447..70b0e69（SSO Cookie 与 schema 35）
 
 **同步区间**:

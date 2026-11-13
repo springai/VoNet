@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -34,6 +35,10 @@ const isdRAID = "A0000005591010FFFFFFFF8900000100"
 // standard ...0100 AID. Selecting it is a read-only capability probe; profile
 // state is never changed during discovery.
 const xesimISDRAID = "A0000005591010FFFFFFFF8900000177"
+
+// fiveBerISDRAID is the ISD-R application of 5ber removable eUICC cards. They
+// answer 6A82 to the standard ...0100 AID and expose ES10 only here.
+const fiveBerISDRAID = "A0000005591010FFFFFFFF8900050500"
 
 // eSTK multi-SE products expose each eUICC storage through its own vendor
 // ISD-R AID. The standard GSMA AID aliases one of them, so probing only that
@@ -558,20 +563,27 @@ func (manager *Manager) discoverEuiccAIDsForInventory(ctx context.Context, id st
 		managementMissing = missing == 2
 	}
 
-	var found []string
-	for _, aid := range []string{isdRAID, xesimISDRAID} {
+	// The standard and vendor ISD-R AIDs are alternatives: a card exposes ES10
+	// through exactly one of them. Stop at the first match so an optional
+	// vendor probe cannot spend the caller's deadline after discovery has
+	// already succeeded.
+	var probeErrors []error
+	for _, aid := range []string{isdRAID, xesimISDRAID, fiveBerISDRAID} {
 		channel, err := manager.openEuiccAID(ctx, id, aid)
 		if err != nil {
+			if !errors.Is(err, ErrNoEUICC) {
+				probeErrors = append(probeErrors, err)
+			}
 			continue
 		}
 		channel.close(context.Background())
-		found = append(found, aid)
-	}
-	if len(found) > 0 {
-		return found, nil
+		return []string{aid}, nil
 	}
 	if managementMissing {
 		return nil, ErrESIMManagementUnavailable
+	}
+	if len(probeErrors) > 0 {
+		return nil, fmt.Errorf("discover eUICC ISD-R: %w", errors.Join(probeErrors...))
 	}
 	// Preserve the old error path for a physical SIM with no eUICC. The caller
 	// retries the standard AID once and returns ErrNoEUICC to the HTTP layer.
@@ -873,6 +885,47 @@ func boundESIMContext(ctx context.Context) (context.Context, context.CancelFunc)
 	return context.WithTimeout(ctx, 10*time.Second)
 }
 
+// resolveProfileISDR returns the ISD-R that owns iccid when a caller (such as
+// the MCP switch tool) omits the AID. It prefers the cached inventory, then
+// falls back to read-only discovery and GetProfilesInfo on each candidate. The
+// caller must not guess a standard ISD-R when ownership cannot be confirmed.
+func (manager *Manager) resolveProfileISDR(ctx context.Context, id, iccid string) (string, error) {
+	clean := strings.TrimSpace(iccid)
+	if cachedAID, ok := manager.cachedISDRForProfile(id, clean); ok {
+		return cachedAID, nil
+	}
+	aids, err := manager.discoverEuiccAIDsForInventory(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("resolve ISD-R for profile %q: %w", clean, err)
+	}
+	if len(aids) == 0 {
+		return "", ErrNoEUICC
+	}
+	var lastErr error
+	for _, aid := range aids {
+		channel, err := manager.openEuiccAID(ctx, id, aid)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		payload, err := channel.es10(ctx, []byte{0xBF, 0x2D, 0x00}) // GetProfilesInfo
+		channel.close(context.Background())
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		for _, profile := range parseProfilesInfo(payload) {
+			if strings.TrimSpace(profile.ICCID) == clean {
+				return aid, nil
+			}
+		}
+	}
+	if lastErr != nil {
+		return "", fmt.Errorf("resolve ISD-R for profile %q: %w", clean, lastErr)
+	}
+	return "", fmt.Errorf("esim: profile %q was not found on any discovered ISD-R", clean)
+}
+
 // resolveProfileAID attempts to look up the ISD-P AID for a profile by its ICCID.
 // It checks the in-memory eSIM cache first; if missing and an active eUICC
 // channel is provided, it executes a live GetProfilesInfo (BF2D) on the open channel.
@@ -950,6 +1003,14 @@ func (manager *Manager) esimSwitchProfile(ctx context.Context, id string, iccid 
 	if err := manager.waitForESIMRecovery(ctx, id); err != nil {
 		manager.unlockESIM()
 		return err
+	}
+	if strings.TrimSpace(aidHex) == "" {
+		resolvedAID, err := manager.resolveProfileISDR(ctx, id, iccid)
+		if err != nil {
+			manager.unlockESIM()
+			return err
+		}
+		aidHex = resolvedAID
 	}
 	channel, err := manager.openEuiccAID(ctx, id, targetEuiccAID(aidHex))
 	if err != nil {
@@ -1414,6 +1475,10 @@ func cloneESIMInfo(info EsimInfo) EsimInfo {
 	return info
 }
 
+func normalizeESIMAID(aid string) string {
+	return strings.ToUpper(strings.TrimSpace(aid))
+}
+
 func (manager *Manager) cachedESIMInfo(id string) (EsimInfo, bool) {
 	manager.esimCacheMu.RLock()
 	info, ok := manager.esimCache[id]
@@ -1423,15 +1488,102 @@ func (manager *Manager) cachedESIMInfo(id string) (EsimInfo, bool) {
 
 func (manager *Manager) cacheESIMInfo(id string, info EsimInfo) {
 	manager.esimCacheMu.Lock()
-	manager.esimCache[id] = cloneESIMInfo(info)
+	cloned := cloneESIMInfo(info)
+	manager.esimCache[id] = cloned
+	aid := normalizeESIMAID(info.AID)
+	if aid != "" {
+		if manager.esimInventoryCache == nil {
+			manager.esimInventoryCache = make(map[string]map[string]EsimInfo)
+		}
+		manager.esimInventoryCache[id] = map[string]EsimInfo{
+			aid: cloneESIMInfo(info),
+		}
+	} else if manager.esimInventoryCache != nil {
+		manager.esimInventoryCache[id] = make(map[string]EsimInfo)
+	}
+	manager.esimCacheMu.Unlock()
+}
+
+func (manager *Manager) cacheESIMInventory(id string, entries []EsimInventoryEntry) {
+	manager.esimCacheMu.Lock()
+	if manager.esimInventoryCache == nil {
+		manager.esimInventoryCache = make(map[string]map[string]EsimInfo)
+	}
+	cached := make(map[string]EsimInfo, len(entries))
+	for _, entry := range entries {
+		if aid := normalizeESIMAID(entry.Info.AID); aid != "" {
+			cached[aid] = cloneESIMInfo(entry.Info)
+		}
+	}
+	manager.esimInventoryCache[id] = cached
+	manager.esimCacheMu.Unlock()
+}
+
+func (manager *Manager) cachedISDRForProfile(id, iccid string) (string, bool) {
+	clean := strings.TrimSpace(iccid)
+	manager.esimCacheMu.RLock()
+	defer manager.esimCacheMu.RUnlock()
+	if info, ok := manager.esimCache[id]; ok {
+		if aid := normalizeESIMAID(info.AID); aid != "" {
+			for _, profile := range info.Profiles {
+				if strings.TrimSpace(profile.ICCID) == clean {
+					return aid, true
+				}
+			}
+		}
+	}
+	aids := make([]string, 0, len(manager.esimInventoryCache[id]))
+	for aid := range manager.esimInventoryCache[id] {
+		aids = append(aids, aid)
+	}
+	sort.Strings(aids)
+	for _, aid := range aids {
+		info := manager.esimInventoryCache[id][aid]
+		for _, profile := range info.Profiles {
+			if strings.TrimSpace(profile.ICCID) == clean {
+				return aid, true
+			}
+		}
+	}
+	return "", false
+}
+
+func (manager *Manager) mutateCachedESIMInfos(id string, mutate func(*EsimInfo) bool) {
+	manager.esimCacheMu.Lock()
+	defer manager.esimCacheMu.Unlock()
+	if info, ok := manager.esimCache[id]; ok && mutate(&info) {
+		manager.esimCache[id] = info
+	}
+	if manager.esimInventoryCache == nil {
+		return
+	}
+	for aid, info := range manager.esimInventoryCache[id] {
+		if mutate(&info) {
+			manager.esimInventoryCache[id][aid] = info
+		}
+	}
+}
+
+func (manager *Manager) clearESIMCache(id string) {
+	manager.esimCacheMu.Lock()
+	delete(manager.esimCache, id)
+	delete(manager.esimInventoryCache, id)
 	manager.esimCacheMu.Unlock()
 }
 
 func (manager *Manager) markCachedProfileEnabled(id, iccid string) {
-	manager.esimCacheMu.Lock()
-	info, ok := manager.esimCache[id]
-	if ok {
-		clean := strings.TrimSpace(iccid)
+	clean := strings.TrimSpace(iccid)
+	manager.mutateCachedESIMInfos(id, func(info *EsimInfo) bool {
+		found := false
+		for _, profile := range info.Profiles {
+			if strings.TrimSpace(profile.ICCID) == clean || (strings.TrimSpace(profile.AID) != "" && strings.EqualFold(strings.TrimSpace(profile.AID), clean)) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
 		for index := range info.Profiles {
 			p := &info.Profiles[index]
 			if strings.TrimSpace(p.ICCID) == clean || (strings.TrimSpace(p.AID) != "" && strings.EqualFold(strings.TrimSpace(p.AID), clean)) {
@@ -1442,58 +1594,57 @@ func (manager *Manager) markCachedProfileEnabled(id, iccid string) {
 				p.StateText = i18n.T("已禁用")
 			}
 		}
-		manager.esimCache[id] = info
-	}
-	manager.esimCacheMu.Unlock()
+		return found
+	})
 }
 
 func (manager *Manager) markCachedProfileDisabled(id, iccid string) {
-	manager.esimCacheMu.Lock()
-	info, ok := manager.esimCache[id]
-	if ok {
-		clean := strings.TrimSpace(iccid)
+	clean := strings.TrimSpace(iccid)
+	manager.mutateCachedESIMInfos(id, func(info *EsimInfo) bool {
+		found := false
 		for index := range info.Profiles {
 			p := &info.Profiles[index]
 			if strings.TrimSpace(p.ICCID) == clean || (strings.TrimSpace(p.AID) != "" && strings.EqualFold(strings.TrimSpace(p.AID), clean)) {
 				p.State = 0
 				p.StateText = i18n.T("已禁用")
+				found = true
 				break
 			}
 		}
-		manager.esimCache[id] = info
-	}
-	manager.esimCacheMu.Unlock()
+		return found
+	})
 }
 
 func (manager *Manager) removeCachedProfile(id, iccid string) {
-	manager.esimCacheMu.Lock()
-	info, ok := manager.esimCache[id]
-	if ok {
+	clean := strings.TrimSpace(iccid)
+	manager.mutateCachedESIMInfos(id, func(info *EsimInfo) bool {
+		found := false
 		profiles := info.Profiles[:0]
 		for _, profile := range info.Profiles {
-			if profile.ICCID != iccid {
+			if strings.TrimSpace(profile.ICCID) != clean {
 				profiles = append(profiles, profile)
+			} else {
+				found = true
 			}
 		}
 		info.Profiles = profiles
-		manager.esimCache[id] = info
-	}
-	manager.esimCacheMu.Unlock()
+		return found
+	})
 }
 
 func (manager *Manager) renameCachedProfile(id, iccid, nickname string) {
-	manager.esimCacheMu.Lock()
-	info, ok := manager.esimCache[id]
-	if ok {
+	clean := strings.TrimSpace(iccid)
+	manager.mutateCachedESIMInfos(id, func(info *EsimInfo) bool {
+		found := false
 		for index := range info.Profiles {
-			if info.Profiles[index].ICCID == iccid {
+			if strings.TrimSpace(info.Profiles[index].ICCID) == clean {
 				info.Profiles[index].Nickname = nickname
+				found = true
 				break
 			}
 		}
-		manager.esimCache[id] = info
-	}
-	manager.esimCacheMu.Unlock()
+		return found
+	})
 }
 
 // recoverAfterProfileSwitch owns the post-commit SIM reset independently of the

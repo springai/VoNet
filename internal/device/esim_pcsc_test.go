@@ -86,6 +86,22 @@ func (card *profileSwitchPCSCCard) Transmit(_ context.Context, command []byte) (
 			return nil, 0, fmt.Errorf("truncated test STORE DATA")
 		}
 		request := append([]byte(nil), command[5:5+length]...)
+		if len(request) >= 2 && request[0] == 0xBF && request[1] == 0x2D {
+			bcd, err := encodeICCID(backend.targetICCID)
+			if err != nil {
+				return nil, 0, err
+			}
+			aid, err := hex.DecodeString(backend.targetAID)
+			if err != nil {
+				return nil, 0, err
+			}
+			profile := tlv([]byte{0xE3},
+				tlv([]byte{0x5A}, bcd),
+				tlv([]byte{0x4F}, aid),
+				tlv([]byte{0x9F, 0x70}, []byte{0}),
+			)
+			return tlv([]byte{0xBF, 0x2D}, tlv([]byte{0xA0}, profile)), 0x9000, nil
+		}
 		backend.enableRequests = append(backend.enableRequests, request)
 		result := byte(7)
 		if refresh := derFindValue(request, 0x81); len(refresh) == 1 && refresh[0] == 0 {

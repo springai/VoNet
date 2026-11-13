@@ -92,6 +92,9 @@ func TestUncertainESIMSwitchKeepsSnapshotGateUntilDetachedRecoveryFinishes(t *te
 		resetSeen: make(chan struct{}), allowReset: make(chan struct{}), resetFailure: cause,
 	}
 	manager, id := newStartedTestManager(t, client)
+	manager.cacheESIMInfo(id, EsimInfo{AID: isdRAID, Profiles: []EsimProfile{{
+		ICCID: "8900000000000000001",
+	}}})
 	state, _ := manager.lookup(id)
 	state.lastICCID = "8900000000000000002"
 	state.snapshot = &Snapshot{ICCID: state.lastICCID, SIMReady: true, Responsive: true}
@@ -314,9 +317,12 @@ func TestESIMSwitchAIDFallbackUncertaintyStartsRecovery(t *testing.T) {
 			manager, id := newStartedTestManager(t, client)
 			t.Cleanup(func() { releaseMaintenanceTestChannel(client.allowReset) })
 			const target = "8900000000000000001"
-			manager.cacheESIMInfo(id, EsimInfo{Profiles: []EsimProfile{{
-				ICCID: target, AID: "A0000005591010FFFFFFFF8900000101",
-			}}})
+			manager.cacheESIMInfo(id, EsimInfo{
+				AID: isdRAID,
+				Profiles: []EsimProfile{{
+					ICCID: target, AID: "A0000005591010FFFFFFFF8900000101",
+				}},
+			})
 			close(client.allowCommit)
 			err := manager.ESIMSwitchProfile(context.Background(), id, target, "")
 			if tc.response == "" {
@@ -351,6 +357,9 @@ func TestFreshESIMSwitchDoesNotReusePreviousRecoveryFailure(t *testing.T) {
 		enableResponse: `+CSIM: 16,"BF31038001039000"`,
 	}
 	manager, id := newStartedTestManager(t, client)
+	manager.cacheESIMInfo(id, EsimInfo{AID: isdRAID, Profiles: []EsimProfile{{
+		ICCID: "8900000000000000001",
+	}}})
 	state, _ := manager.lookup(id)
 	const oldICCID = "8900000000000000002"
 	state.lastICCID = oldICCID

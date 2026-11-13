@@ -212,6 +212,9 @@ func TestProfileSwitchReassertsRFOffAfterEarlierPolicyFinishes(t *testing.T) {
 	}
 	close(client.allowCommit)
 	manager, id := newStartedTestManager(t, client)
+	manager.cacheESIMInfo(id, EsimInfo{AID: isdRAID, Profiles: []EsimProfile{{
+		ICCID: "8900000000000000001",
+	}}})
 	t.Cleanup(func() { releaseMaintenanceTestChannel(client.allowOnline) })
 	policyDone := make(chan error, 1)
 	go func() { _, err := manager.SetFlight(context.Background(), id, false); policyDone <- err }()

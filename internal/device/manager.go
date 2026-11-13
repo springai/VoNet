@@ -50,6 +50,7 @@ type Manager struct {
 	esimSwitchPending    map[string]struct{}
 	esimCacheMu          sync.RWMutex
 	esimCache            map[string]EsimInfo
+	esimInventoryCache   map[string]map[string]EsimInfo
 	djiIMEICache         map[string]string // key: QMIControl path, value: IMEI
 	discoverer           modem.Discoverer
 	opener               modem.Opener
@@ -222,11 +223,12 @@ func NewManager(options Options) (*Manager, error) {
 		deviceEventSubscribers:        make(map[chan DeviceLifecycleEvent]struct{}),
 		smsArrivals:                   smsArrivals,
 
-		devices:        make(map[string]*managedDevice),
-		ussdSessions:   make(map[string]ussdSession),
-		esimRecoveries: make(map[string]*esimRecovery),
-		esimCache:      make(map[string]EsimInfo),
-		djiIMEICache:   make(map[string]string),
+		devices:            make(map[string]*managedDevice),
+		ussdSessions:       make(map[string]ussdSession),
+		esimRecoveries:     make(map[string]*esimRecovery),
+		esimCache:          make(map[string]EsimInfo),
+		esimInventoryCache: make(map[string]map[string]EsimInfo),
+		djiIMEICache:       make(map[string]string),
 	}, nil
 }
 
@@ -384,6 +386,7 @@ func (manager *Manager) Discover(ctx context.Context) ([]Device, error) {
 		}
 		if reconnected || endpointChanged {
 			state.resetClientOnLock = true
+			manager.clearESIMCache(candidate.ID)
 		}
 		if reconnected || usbIdentityChanged {
 			state.resetATProfileOnLock = true
@@ -394,6 +397,7 @@ func (manager *Manager) Discover(ctx context.Context) ([]Device, error) {
 		// would corrupt the new device. Reset everything except the mutexes
 		// and the candidate/discovered fields that are about to be updated.
 		if state.candidate.HardwareKind != candidate.HardwareKind {
+			manager.clearESIMCache(candidate.ID)
 			if manager.onHardwareKindChange != nil {
 				manager.onHardwareKindChange(candidate.ID)
 			}
@@ -422,6 +426,7 @@ func (manager *Manager) Discover(ctx context.Context) ([]Device, error) {
 			events = append(events, discoveryEvent{candidate: state.candidate})
 		}
 		state.discovered = false
+		manager.clearESIMCache(id)
 		stale = append(stale, state)
 	}
 	manager.mu.Unlock()

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,6 +52,81 @@ func esimTestProfile(t *testing.T, iccidDigits, provider, name string, state byt
 		tlv([]byte{0x94}, icon),
 	)
 }
+
+func esimProfilesInfoResponse(t *testing.T, profiles ...[]byte) clientStep {
+	t.Helper()
+	payload := tlv([]byte{0xBF, 0x2D}, tlv([]byte{0xA0}, profiles...))
+	return clientStep{
+		command:  `AT+CSIM=18,"81E2910003BF2D0000"`,
+		response: okResponse(fmt.Sprintf("+CSIM: %d,\"%X9000\"", 2*(len(payload)+2), payload)),
+	}
+}
+
+type failingESIMTransportClient struct{}
+
+func (failingESIMTransportClient) Execute(context.Context, string) (modem.Response, error) {
+	return modem.Response{}, errors.New("eSIM transport unavailable")
+}
+
+func (failingESIMTransportClient) WaitURC(context.Context, func(string) bool) (string, error) {
+	return "", errors.New("eSIM transport unavailable")
+}
+
+func (failingESIMTransportClient) Close() error { return nil }
+
+type adaptiveESIMClient struct {
+	mu           sync.Mutex
+	selectedAID  string
+	selectable   map[string]bool
+	profiles     map[string][]byte
+	failProfiles map[string]bool
+	profileReads map[string]int
+}
+
+func (client *adaptiveESIMClient) Execute(_ context.Context, command string) (modem.Response, error) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	switch {
+	case strings.Contains(command, `0070000001`):
+		return okResponse(`+CSIM: 6,"019000"`), nil
+	case strings.Contains(command, `0070800100`):
+		client.selectedAID = ""
+		return okResponse(`+CSIM: 4,"9000"`), nil
+	case strings.Contains(command, `01A4040010`):
+		marker := strings.Index(command, `01A4040010`)
+		encoded := command[marker+len(`01A4040010`):]
+		if quote := strings.IndexByte(encoded, '"'); quote >= 0 {
+			encoded = encoded[:quote]
+		}
+		if len(encoded) < 32 {
+			return modem.Response{}, fmt.Errorf("short SELECT AID command %q", command)
+		}
+		client.selectedAID = strings.ToUpper(encoded[:32])
+		if client.selectable[client.selectedAID] {
+			return okResponse(`+CSIM: 4,"9000"`), nil
+		}
+		return okResponse(`+CSIM: 4,"6A82"`), nil
+	case strings.Contains(command, `81E2910003BF2D0000`):
+		client.profileReads[client.selectedAID]++
+		if client.failProfiles[client.selectedAID] {
+			return modem.Response{}, errors.New("GetProfilesInfo failed")
+		}
+		payload := client.profiles[client.selectedAID]
+		return okResponse(fmt.Sprintf("+CSIM: %d,\"%X9000\"", 2*(len(payload)+2), payload)), nil
+	case strings.Contains(command, `BF3E`):
+		eid := []byte{0x89, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+		payload := tlv([]byte{0xBF, 0x3E}, tlv([]byte{0x5A}, eid))
+		return okResponse(fmt.Sprintf("+CSIM: %d,\"%X9000\"", 2*(len(payload)+2), payload)), nil
+	default:
+		return modem.Response{}, errors.New("unexpected eSIM APDU " + command)
+	}
+}
+
+func (client *adaptiveESIMClient) WaitURC(context.Context, func(string) bool) (string, error) {
+	return "", errors.New("no URC expected")
+}
+
+func (*adaptiveESIMClient) Close() error { return nil }
 
 func TestParseProfilesInfoRealShape(t *testing.T) {
 	// BF2D root (this card echoes the request tag) -> A0 list -> E3 records.
@@ -625,12 +701,48 @@ func TestDiscoverEuiccAIDsFindsXeSIMAlternateISDR(t *testing.T) {
 		manageChannel,
 		selectStep(xesimISDRAID, "9000"),
 		closeChannel,
+		// Discovery stops at the first ISD-R; the 5ber AID is not probed.
 	}}
 	manager, id := newStartedTestManager(t, client)
 
 	aids := manager.discoverEuiccAIDs(context.Background(), id)
 	if len(aids) != 1 || aids[0] != xesimISDRAID {
 		t.Fatalf("discovered AIDs = %#v, want XeSIM %s", aids, xesimISDRAID)
+	}
+	client.assertDone(t)
+}
+
+func TestDiscoverEuiccAIDsFinds5berISDR(t *testing.T) {
+	manageChannel := clientStep{
+		command:  `AT+CSIM=10,"0070000001"`,
+		response: okResponse(`+CSIM: 6,"019000"`),
+	}
+	closeChannel := clientStep{
+		command:  `AT+CSIM=10,"0070800100"`,
+		response: okResponse(`+CSIM: 4,"9000"`),
+	}
+	selectStep := func(aid, response string) clientStep {
+		return clientStep{
+			command:  fmt.Sprintf(`AT+CSIM=42,"01A4040010%s"`, aid),
+			response: okResponse(fmt.Sprintf(`+CSIM: 4,"%s"`, response)),
+		}
+	}
+
+	client := &transcriptClient{steps: []clientStep{
+		manageChannel, selectStep(estkProductAID, "6A82"), closeChannel,
+		// 5ber cards reject both the GSMA and XeSIM ISD-R AIDs...
+		manageChannel, selectStep(isdRAID, "6A82"), closeChannel,
+		manageChannel, selectStep(xesimISDRAID, "6A82"), closeChannel,
+		// ...and answer SELECT on their own ISD-R with response data pending.
+		manageChannel, selectStep(fiveBerISDRAID, "6121"),
+		{command: `AT+CSIM=10,"81C0000021"`, response: okResponse(`+CSIM: 4,"9000"`)},
+		closeChannel,
+	}}
+	manager, id := newStartedTestManager(t, client)
+
+	aids := manager.discoverEuiccAIDs(context.Background(), id)
+	if len(aids) != 1 || aids[0] != fiveBerISDRAID {
+		t.Fatalf("discovered AIDs = %#v, want 5ber %s", aids, fiveBerISDRAID)
 	}
 	client.assertDone(t)
 }
@@ -784,4 +896,248 @@ func TestMarkCachedProfileEnabled(t *testing.T) {
 	if info.Profiles[1].State != 1 || info.Profiles[1].StateText != "已启用" {
 		t.Fatalf("target profile state = %#v", info.Profiles[1])
 	}
+}
+
+func TestDiscoverEuiccAIDsStopsAtStandardISDR(t *testing.T) {
+	client := &transcriptClient{steps: append(
+		simResetSelectSteps(estkProductAID, "6A82"),
+		simResetSelectSteps(isdRAID, "9000")...,
+	)}
+	manager, id := newStartedTestManager(t, client)
+	aids := manager.discoverEuiccAIDs(context.Background(), id)
+	if len(aids) != 1 || aids[0] != isdRAID {
+		t.Fatalf("discovered AIDs = %#v, want only %s", aids, isdRAID)
+	}
+	client.assertDone(t)
+}
+
+func TestResolveProfileISDRUsesCachedInventory(t *testing.T) {
+	client := &transcriptClient{}
+	manager, id := newStartedTestManager(t, client)
+	manager.cacheESIMInfo(id, EsimInfo{
+		AID:      fiveBerISDRAID,
+		Profiles: []EsimProfile{{ICCID: "8944000000000000001"}},
+	})
+	got, err := manager.resolveProfileISDR(context.Background(), id, "8944000000000000001")
+	if err != nil || got != fiveBerISDRAID {
+		t.Fatalf("resolved ISD-R = %q, %v, want %s", got, err, fiveBerISDRAID)
+	}
+	client.assertDone(t)
+}
+
+func TestResolveProfileISDRUsesCachedInventoryAcrossISDRs(t *testing.T) {
+	manager := &Manager{
+		esimCache:          make(map[string]EsimInfo),
+		esimInventoryCache: make(map[string]map[string]EsimInfo),
+	}
+	manager.cacheESIMInventory("dev", []EsimInventoryEntry{
+		{Info: EsimInfo{AID: estkSE0AID, Profiles: []EsimProfile{{ICCID: "8944000000000000001"}}}},
+		{Info: EsimInfo{AID: estkSE1AID, Profiles: []EsimProfile{{ICCID: "8944000000000000002"}}}},
+	})
+
+	for iccid, want := range map[string]string{
+		"8944000000000000001": estkSE0AID,
+		"8944000000000000002": estkSE1AID,
+	} {
+		got, ok := manager.cachedISDRForProfile("dev", iccid)
+		if !ok || got != want {
+			t.Fatalf("cached ISD-R for %s = %q, %v, want %s", iccid, got, ok, want)
+		}
+	}
+}
+
+func TestCachedInventoryMutationsStayScopedToOwningISDR(t *testing.T) {
+	manager := &Manager{
+		esimCache:          make(map[string]EsimInfo),
+		esimInventoryCache: make(map[string]map[string]EsimInfo),
+	}
+	manager.cacheESIMInventory("dev", []EsimInventoryEntry{
+		{Info: EsimInfo{AID: estkSE0AID, Profiles: []EsimProfile{
+			{ICCID: "8944000000000000001", State: 0},
+			{ICCID: "8944000000000000002", State: 1},
+		}}},
+		{Info: EsimInfo{AID: estkSE1AID, Profiles: []EsimProfile{
+			{ICCID: "8944000000000000003", State: 1},
+		}}},
+	})
+
+	manager.markCachedProfileEnabled("dev", "8944000000000000001")
+	if got := manager.esimInventoryCache["dev"][estkSE0AID].Profiles[0].State; got != 1 {
+		t.Fatalf("target state = %d, want 1", got)
+	}
+	if got := manager.esimInventoryCache["dev"][estkSE0AID].Profiles[1].State; got != 0 {
+		t.Fatalf("sibling state in SE0 = %d, want 0", got)
+	}
+	if got := manager.esimInventoryCache["dev"][estkSE1AID].Profiles[0].State; got != 1 {
+		t.Fatalf("SE1 state changed to %d, want 1", got)
+	}
+
+	manager.markCachedProfileDisabled("dev", " 8944000000000000003 ")
+	if got := manager.esimInventoryCache["dev"][estkSE1AID].Profiles[0].State; got != 0 {
+		t.Fatalf("disabled state = %d, want 0", got)
+	}
+	manager.renameCachedProfile("dev", " 8944000000000000001 ", "Renamed")
+	if got := manager.esimInventoryCache["dev"][estkSE0AID].Profiles[0].Nickname; got != "Renamed" {
+		t.Fatalf("renamed profile = %q, want Renamed", got)
+	}
+
+	manager.removeCachedProfile("dev", " 8944000000000000002 ")
+	if _, ok := manager.cachedISDRForProfile("dev", "8944000000000000002"); ok {
+		t.Fatal("removed profile remained in multi-ISD-R cache")
+	}
+	manager.clearESIMCache("dev")
+	if _, ok := manager.cachedISDRForProfile("dev", "8944000000000000003"); ok {
+		t.Fatal("cleared cache still resolved a profile")
+	}
+}
+
+func TestCacheESIMInfoReplacesPartialInventorySnapshot(t *testing.T) {
+	manager := &Manager{
+		esimCache:          make(map[string]EsimInfo),
+		esimInventoryCache: make(map[string]map[string]EsimInfo),
+	}
+	manager.cacheESIMInventory("dev", []EsimInventoryEntry{
+		{Info: EsimInfo{AID: estkSE0AID, Profiles: []EsimProfile{{ICCID: "8944000000000000001"}}}},
+		{Info: EsimInfo{AID: estkSE1AID, Profiles: []EsimProfile{{ICCID: "8944000000000000002"}}}},
+	})
+	manager.cacheESIMInfo("dev", EsimInfo{
+		AID:      estkSE0AID,
+		Profiles: []EsimProfile{{ICCID: "8944000000000000001"}},
+	})
+
+	if len(manager.esimInventoryCache["dev"]) != 1 {
+		t.Fatalf("partial list retained stale ISD-R entries: %#v", manager.esimInventoryCache["dev"])
+	}
+	if _, ok := manager.cachedISDRForProfile("dev", "8944000000000000002"); ok {
+		t.Fatal("partial list retained a stale profile")
+	}
+}
+
+func TestResolveProfileISDRRejectsSingleISDRWithoutMatchingICCID(t *testing.T) {
+	var steps []clientStep
+	steps = append(steps, simResetSelectSteps(estkProductAID, "6A82")...)
+	steps = append(steps, simResetSelectSteps(isdRAID, "9000")...)
+	steps = append(steps,
+		clientStep{command: `AT+CSIM=10,"0070000001"`, response: okResponse(`+CSIM: 6,"019000"`)},
+		clientStep{command: fmt.Sprintf(`AT+CSIM=42,"01A4040010%s"`, isdRAID), response: okResponse(`+CSIM: 4,"9000"`)},
+		esimProfilesInfoResponse(t, esimTestProfile(t, "8944000000000000002", "Other", "Other", 0)),
+		clientStep{command: `AT+CSIM=10,"0070800100"`, response: okResponse(`+CSIM: 4,"9000"`)},
+	)
+	client := &transcriptClient{steps: steps}
+	manager, id := newStartedTestManager(t, client)
+
+	got, err := manager.resolveProfileISDR(context.Background(), id, "8944000000000000001")
+	if err == nil || got != "" {
+		t.Fatalf("unmatched single ISD-R resolved to %q, %v; want an error", got, err)
+	}
+	client.assertDone(t)
+}
+
+func TestResolveProfileISDRRejectsGetProfilesInfoFailure(t *testing.T) {
+	var steps []clientStep
+	steps = append(steps, simResetSelectSteps(estkProductAID, "6A82")...)
+	steps = append(steps, simResetSelectSteps(isdRAID, "9000")...)
+	steps = append(steps,
+		clientStep{command: `AT+CSIM=10,"0070000001"`, response: okResponse(`+CSIM: 6,"019000"`)},
+		clientStep{command: fmt.Sprintf(`AT+CSIM=42,"01A4040010%s"`, isdRAID), response: okResponse(`+CSIM: 4,"9000"`)},
+		clientStep{command: `AT+CSIM=18,"81E2910003BF2D0000"`, err: errors.New("GetProfilesInfo failed")},
+		clientStep{command: `AT+CSIM=10,"0070800100"`, response: okResponse(`+CSIM: 4,"9000"`)},
+	)
+	client := &transcriptClient{steps: steps}
+	manager, id := newStartedTestManager(t, client)
+
+	got, err := manager.resolveProfileISDR(context.Background(), id, "8944000000000000001")
+	if err == nil || got != "" {
+		t.Fatalf("GetProfilesInfo failure resolved to %q, %v; want an error", got, err)
+	}
+	client.assertDone(t)
+}
+
+func TestResolveProfileISDRDoesNotFallbackAfterDiscoveryFailure(t *testing.T) {
+	manager, id := newStartedTestManager(t, failingESIMTransportClient{})
+	got, err := manager.resolveProfileISDR(context.Background(), id, "8944000000000000001")
+	if err == nil || got != "" {
+		t.Fatalf("discovery failure resolved to %q, %v; want an error", got, err)
+	}
+}
+
+func TestESIMInventoryCachesProfilesForLaterISDRResolution(t *testing.T) {
+	profile0 := tlv([]byte{0xBF, 0x2D}, tlv([]byte{0xA0}, esimTestProfile(t, "8944000000000000001", "SE0", "SE0", 0)))
+	profile1 := tlv([]byte{0xBF, 0x2D}, tlv([]byte{0xA0}, esimTestProfile(t, "8944000000000000002", "SE1", "SE1", 0)))
+	client := &adaptiveESIMClient{
+		selectable: map[string]bool{
+			estkProductAID: true,
+			estkSE0AID:     true,
+			estkSE1AID:     true,
+		},
+		profiles: map[string][]byte{
+			estkSE0AID: profile0,
+			estkSE1AID: profile1,
+		},
+		failProfiles: map[string]bool{},
+		profileReads: map[string]int{},
+	}
+	manager, id := newStartedTestManager(t, client)
+
+	entries, err := manager.ESIMInventory(context.Background(), id)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("inventory = %#v, %v", entries, err)
+	}
+	readsAfterInventory := client.profileReads[estkSE0AID] + client.profileReads[estkSE1AID]
+	got, err := manager.resolveProfileISDR(context.Background(), id, "8944000000000000002")
+	if err != nil || got != estkSE1AID {
+		t.Fatalf("resolved ISD-R = %q, %v, want %s", got, err, estkSE1AID)
+	}
+	if reads := client.profileReads[estkSE0AID] + client.profileReads[estkSE1AID]; reads != readsAfterInventory {
+		t.Fatalf("cached resolution issued %d additional profile reads", reads-readsAfterInventory)
+	}
+}
+
+func TestResolveProfileISDRContinuesAfterCandidateProfileReadFailure(t *testing.T) {
+	profile1 := tlv([]byte{0xBF, 0x2D}, tlv([]byte{0xA0}, esimTestProfile(t, "8944000000000000002", "SE1", "SE1", 0)))
+	client := &adaptiveESIMClient{
+		selectable: map[string]bool{
+			estkProductAID: true,
+			estkSE0AID:     true,
+			estkSE1AID:     true,
+		},
+		profiles: map[string][]byte{
+			estkSE0AID: {},
+			estkSE1AID: profile1,
+		},
+		failProfiles: map[string]bool{estkSE0AID: true},
+		profileReads: map[string]int{},
+	}
+	manager, id := newStartedTestManager(t, client)
+
+	got, err := manager.resolveProfileISDR(context.Background(), id, "8944000000000000002")
+	if err != nil || got != estkSE1AID {
+		t.Fatalf("resolved ISD-R = %q, %v, want %s", got, err, estkSE1AID)
+	}
+	if client.profileReads[estkSE0AID] != 1 || client.profileReads[estkSE1AID] != 1 {
+		t.Fatalf("profile reads = %#v", client.profileReads)
+	}
+}
+
+func TestResolveProfileISDRDiscoversSingleISDR(t *testing.T) {
+	var steps []clientStep
+	for _, aid := range []string{estkProductAID, isdRAID, xesimISDRAID} {
+		steps = append(steps, simResetSelectSteps(aid, "6A82")...)
+	}
+	steps = append(steps,
+		clientStep{command: `AT+CSIM=10,"0070000001"`, response: okResponse(`+CSIM: 6,"019000"`)},
+		clientStep{command: fmt.Sprintf(`AT+CSIM=42,"01A4040010%s"`, fiveBerISDRAID), response: okResponse(`+CSIM: 4,"9000"`)},
+		clientStep{command: `AT+CSIM=10,"0070800100"`, response: okResponse(`+CSIM: 4,"9000"`)},
+		clientStep{command: `AT+CSIM=10,"0070000001"`, response: okResponse(`+CSIM: 6,"019000"`)},
+		clientStep{command: fmt.Sprintf(`AT+CSIM=42,"01A4040010%s"`, fiveBerISDRAID), response: okResponse(`+CSIM: 4,"9000"`)},
+		esimProfilesInfoResponse(t, esimTestProfile(t, "8944000000000000001", "5ber", "5ber", 0)),
+		clientStep{command: `AT+CSIM=10,"0070800100"`, response: okResponse(`+CSIM: 4,"9000"`)},
+	)
+	client := &transcriptClient{steps: steps}
+	manager, id := newStartedTestManager(t, client)
+	got, err := manager.resolveProfileISDR(context.Background(), id, "8944000000000000001")
+	if err != nil || got != fiveBerISDRAID {
+		t.Fatalf("resolved ISD-R = %q, %v, want %s", got, err, fiveBerISDRAID)
+	}
+	client.assertDone(t)
 }

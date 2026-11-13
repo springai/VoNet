@@ -125,6 +125,50 @@ func TestManagerDiscoverRetainsOnlyVerifiedPortForCurrentUSBInstance(t *testing.
 	}
 }
 
+func TestManagerHardwareChangeClearsESIMInventoryCache(t *testing.T) {
+	manager, id := newStartedTestManager(t, nil)
+	manager.cacheESIMInventory(id, []EsimInventoryEntry{{
+		Info: EsimInfo{
+			AID:      isdRAID,
+			Profiles: []EsimProfile{{ICCID: "8944000000000000001"}},
+		},
+	}})
+	before, err := manager.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := before.Candidate
+	replacement.HardwareKind = pcsc.HardwareKind
+	manager.discoverer = staticDiscoverer{candidates: []modem.Candidate{replacement}}
+
+	if _, err := manager.Discover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := manager.cachedISDRForProfile(id, "8944000000000000001"); ok {
+		t.Fatal("hardware change retained eSIM inventory cache")
+	}
+
+	manager.cacheESIMInventory(id, []EsimInventoryEntry{{
+		Info: EsimInfo{
+			AID:      isdRAID,
+			Profiles: []EsimProfile{{ICCID: "8944000000000000002"}},
+		},
+	}})
+	after, err := manager.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement = after.Candidate
+	replacement.USBGeneration = "new-generation"
+	manager.discoverer = staticDiscoverer{candidates: []modem.Candidate{replacement}}
+	if _, err := manager.Discover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := manager.cachedISDRForProfile(id, "8944000000000000002"); ok {
+		t.Fatal("USB generation change retained eSIM inventory cache")
+	}
+}
+
 type cancelingPartialDiscoverer struct {
 	cancel    context.CancelFunc
 	candidate modem.Candidate
