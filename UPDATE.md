@@ -1791,3 +1791,77 @@ ike: IKE_AUTH EAP round 1: ike: responder reported fatal notification 10500
 - 部署包含新前端资源的 VoNet 二进制后，需要重新验证删除卡片、一键导入、VoWiFi 恢复和 PC/SC 读卡器读取频率。
 
 ---
+
+### 62. VoCat-reference 7 次上游更新同步与兼容加固
+
+**同步范围**:
+
+- `569ab4c`：新增 QQ 机器人（官方 API）通知渠道。
+- `3c9aa22`：隔离 QQ 绑定会话并校验通知投递结果。
+- `f7b6c6e`：移除 SSO token 拒绝测试对真实时钟边界的依赖。
+- `97462fd`：支持 bam-dmux WWAN AT 字符设备的阻塞读取模式。
+- `9a0df0f`：隔离阻塞 WWAN reader，限制关闭竞态和字节丢失。
+- `4124527`：隔离用户态 IMS TUN 流量，阻止伪造源地址、IPv6 RA 和 Redirect 注入。
+- `d745a95`：VoWiFi lifecycle toggle 回归测试同时等待 worker 空闲。
+
+**兼容与本地化适配**:
+
+- 上游模块名为 `vocat`、入口为 `cmd/vocat`；本次全部改为当前 `vonet` 模块和 `cmd/vonet` 入口。
+- QQ 通知新增文件中的 Go import、User-Agent、绑定码前缀、E2E 绑定码和 localStorage key 均改为 VoNet。
+- `StopQQBotBinding` 接入当前 HTTP server 生命周期，并在数据库关闭前停止绑定协程。
+- QQ 设置保存、测试和绑定共用当前通知配置模型；保留 Bark 多 URL/每 URL 设备范围、Email、Telegram、MeoW、Lark、Wecom、Pushplus、Webhook 和通知设备范围。
+- 保留本地通知敏感字段掩码、URL 白名单、号码校验、CSRF、API Token/MCP 和开发者模式行为。
+- `uqr` 前端依赖通过当前 npm 锁文件重新解析，没有直接覆盖本地依赖版本。
+
+**QQ 机器人功能**:
+
+- 支持扫码绑定和手动绑定码两种方式。
+- 扫码绑定使用 QQ 开放平台一次性任务，保存 AppID、AppSecret 和扫码用户 openid。
+- 手动绑定使用一次性 `VONET-XXXXX-XXXXX` 绑定码，通过机器人单聊确认接收方。
+- 绑定会话按绑定 ID 隔离；配置变更、取消、页面重载和服务关闭不会让旧绑定覆盖新绑定。
+- 支持维护 AppID、AppSecret、接收方 openid 和 HTTP 代理，支持清空配置重新绑定。
+- access_token 按 AppID 缓存并提前刷新；401 时失效并重试一次。
+- 平台主动拒绝、HTTP 200 业务错误和缺少 message_id 均按发送失败处理，错误中不包含 AppSecret、token 或 openid。
+- QQ 通知接入短信、来电和自动任务通知路由，并继续使用当前通知设备范围。
+
+**modem 与 VoWiFi/IKE 修改**:
+
+- WWAN AT transport 在支持 `F_SETFL` 的 bam-dmux 描述符上使用单个常驻阻塞 reader。
+- reader 在第一条命令写出前完成就绪握手；队列满时等待而不丢字节，零字节读取按 EOF 处理。
+- ResetInputBuffer 只清空已排队输入，不打断驱动内的阻塞读取；致命读取错误允许下一次 Read 启动替代 reader。
+- 不支持阻塞模式的硬件继续使用原 poll 路径。
+- 用户态 TUN 出站只允许 IKE 分配地址，入站在写入内核前阻断 IPv6 RA、Redirect、扩展头和分片变体。
+- VoWiFi lifecycle 回归测试同时检查 phase 和 worker busy 状态，避免 SMS-ready 播报早于 worker 完成导致竞态。
+- 服务器部署复验发现读卡器设备状态投影会强制写回 `vowifi_enabled=false`；已修复为保留卡片策略协调器写入的 desired VoWiFi 状态，并增加存储回归测试。
+
+**验证结果**:
+
+- `go test ./...` 全部通过。
+- `go vet ./...` 全部通过。
+- `CGO_ENABLED=1 go test -race ./...` 全部通过；修复状态投影后又对 `internal/store` 复跑 race 通过。
+- `npm test` 83 项全部通过。
+- `npm run build`、TypeScript 检查通过。
+- `npm run test:e2e` 15/15 通过，包括 4 项 QQ 绑定/会话隔离和 11 项既有 SSO/HTTPS 登录测试。
+- Linux amd64 的 `internal/modem` 与 `internal/vowifi/ike` 测试二进制交叉编译通过。
+- `git diff --check` 通过。
+- 已部署到 `192.168.1.3:/opt/vonet/bin/vonet` 并启动 `vonet.service`；admin 登录、health/ready、通知设置和卡片 API 验证通过。
+- 读卡器运行状态最终达到 `sms_ready`，Tunnel、IMS、SMS 均 ready，日志无 AT/PCSC 越界错误、panic 或 VoWiFi 操作失败。
+
+**遗漏与待验证事项**:
+
+- `VONET_NETNS_TEST=1` 的真实 TUN/ESP 网络命名空间测试已在 `192.168.1.3` 通过 `unshare --net` 执行；Outbound、Inbound 和 RA takeover baseline 三项均通过。
+- bam-dmux 需要在 UFI103S_V05/MSM8916 等真实硬件上复验 AT 命令、VoWiFi IKE、IMS 短信和 RP-ACK。
+- QQ 官方开放平台 API、扫码网关、主动消息限制和代理链路目前由单测/E2E mock 覆盖，尚未使用真实 AppID/AppSecret 做端到端投递。
+- 新增 `.github/workflows/modem.yml` 尚未在 GitHub Actions 实际运行；应在 Linux runner 上确认 race 测试和工作流权限。
+- 未执行 arm64/armv7 交叉构建验证。
+- QQ 当前仍按上游设计只支持单向通知，不支持双向机器人控制。
+- OpenWrt 旧防火墙规则继续识别 `vocat-ims-` comment prefix，避免已有用户规则无法清理；这不是遗漏，是向后兼容。
+
+**后续上游合并约束**:
+
+- 同步 QQ 相关文件时必须同时保留当前 Bark 多目标、通知设备范围和敏感字段保护。
+- 同步 modem 时保留 bam-dmux 最终实现，不要只取 `97462fd` 的早期版本。
+- 同步 IKE 时同时保留本条的 TUN 流量隔离和第 52/54 条的 O2/PANI/fw4 行为。
+- 同步 lifecycle 测试时只合入等待 worker 空闲的测试修复，不改变当前 VoNet 的 card-policy desired-state 恢复逻辑。
+
+---

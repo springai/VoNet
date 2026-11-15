@@ -45,10 +45,15 @@ var notificationChannels = []string{
 	"wecom",
 	"lark",
 	"meow",
+	"qqbot",
 }
 
 var notificationFields = map[string]map[string]string{
 	"meow": {"nickname": "string", "url": "string", "img_url": "string"},
+	"qqbot": {
+		"app_id": "string", "app_secret": "string", "target_openid": "string",
+		"proxy": "string",
+	},
 	"telegram": {
 		"bot_token": "string", "chat_id": "string", "admin_id": "string",
 		"base_url": "string", "proxy": "string",
@@ -108,6 +113,11 @@ func (s *Server) routeSettingsAPI(
 		return true
 	}
 	segments := splitAPIPath(cleanPath)
+	if len(segments) == 4 && segments[0] == "settings" && segments[1] == "notifications" &&
+		segments[2] == "qqbot" && segments[3] == "bind" {
+		s.handleQQBotBind(w, r)
+		return true
+	}
 	if len(segments) == 4 &&
 		segments[0] == "settings" &&
 		segments[1] == "notifications" &&
@@ -157,7 +167,7 @@ func (s *Server) handleNotificationSettings(w http.ResponseWriter, r *http.Reque
 			}
 			clearSecrets := false
 			if flag, present := document["clear_secrets"]; present {
-				if (channel != "telegram" && channel != "email") || string(flag) == "null" || json.Unmarshal(flag, &clearSecrets) != nil {
+				if (channel != "telegram" && channel != "email" && channel != "qqbot") || string(flag) == "null" || json.Unmarshal(flag, &clearSecrets) != nil {
 					writeError(w, http.StatusBadRequest, "invalid_notification_config", "clear_secrets must be a boolean for a supported channel")
 					return
 				}
@@ -196,7 +206,11 @@ func (s *Server) handleNotificationSettings(w http.ResponseWriter, r *http.Reque
 				return
 			}
 		}
-		if err := s.store.SaveNotificationSettings(r.Context(), values); err != nil {
+		if err := s.saveNotificationSettings(r.Context(), values); err != nil {
+			if errors.Is(err, errQQBotSecretRequired) {
+				writeError(w, http.StatusBadRequest, "invalid_notification_config", err.Error())
+				return
+			}
 			s.writeStoreError(w, err)
 			return
 		}
@@ -205,6 +219,34 @@ func (s *Server) handleNotificationSettings(w http.ResponseWriter, r *http.Reque
 		w.Header().Set("Allow", "GET, PUT")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	}
+}
+
+// saveNotificationSettings serializes QQ configuration changes with binding commits.
+// A failed save leaves the binding intact, while a successful save invalidates
+// both active sessions and drafts that are still preparing their network setup.
+func (s *Server) saveNotificationSettings(ctx context.Context, values []store.NotificationSetting) error {
+	for _, value := range values {
+		if value.Channel != "qqbot" {
+			continue
+		}
+		s.qqBotBindMu.Lock()
+		defer s.qqBotBindMu.Unlock()
+		if len(value.ClearSensitiveFields) == 0 {
+			if err := s.checkQQBotSecretReentry(ctx, value.Config); err != nil {
+				return err
+			}
+		}
+		if err := s.store.SaveNotificationSettings(ctx, values); err != nil {
+			return err
+		}
+		s.qqBotConfigRevision++
+		if session := s.qqBotBind; session != nil && !session.finished() {
+			session.cancel()
+			session.Status = qqBotBindCanceled
+		}
+		return nil
+	}
+	return s.store.SaveNotificationSettings(ctx, values)
 }
 
 func (s *Server) writeNotificationSettings(w http.ResponseWriter, r *http.Request) {
@@ -472,7 +514,7 @@ func (s *Server) handleNotificationTest(
 		writeError(w, http.StatusNotFound, "not_found", "notification channel was not found")
 		return
 	}
-	if channel != "webhook" && channel != "telegram" && channel != "email" && channel != "bark" && channel != "wecom" && channel != "lark" && channel != "meow" {
+	if channel != "webhook" && channel != "telegram" && channel != "email" && channel != "bark" && channel != "wecom" && channel != "lark" && channel != "meow" && channel != "qqbot" {
 		writeError(
 			w,
 			http.StatusNotImplemented,
@@ -489,6 +531,9 @@ func (s *Server) handleNotificationTest(
 	_, incoming, err := decodeNotificationConfig(channel, raw, false)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_notification_config", err.Error())
+		return
+	}
+	if channel == "qqbot" && !s.qqBotSecretReentered(w, r, incoming) {
 		return
 	}
 	resolved, provider, err := s.resolveNotificationTestConfig(
@@ -530,6 +575,8 @@ func (s *Server) handleNotificationTest(
 		err = sendLarkNotificationTest(notificationContext, resolved)
 	case "meow":
 		err = sendMeowNotification(notificationContext, resolved, nil, "VoNet 测试通知", "VoNet 消息推送测试")
+	case "qqbot":
+		err = sendQQBotNotification(notificationContext, resolved, nil, "VoNet 测试通知", "VoNet 消息推送测试")
 	}
 	if err != nil {
 		redacted := store.RedactText(err.Error(), provider)
@@ -672,6 +719,9 @@ func mergeNotificationTestSecretValue(incoming, existing any) any {
 func validateNotificationTestConfig(channel string, config map[string]any) error {
 	if channel == "meow" {
 		return validateMeowNotificationConfig(config)
+	}
+	if channel == "qqbot" {
+		return validateQQBotNotificationConfig(config)
 	}
 	switch channel {
 	case "webhook":

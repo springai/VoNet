@@ -98,13 +98,21 @@ type Server struct {
 	netTraffic          *liveNetTracker
 	// usbPathConflicts tracks devices that have USBPath conflicts.
 	// Key: device ID, Value: true if device has a conflict
-	usbPathConflicts          map[string]bool
-	hostStats                 *hostStatsSampler
-	publicIPMu                sync.RWMutex
-	publicIPs                 map[string]cachedPublicIP
-	lookupPublicIP            func(context.Context, string) (exportproxy.PublicIPInfo, error)
-	automaticTasks            *automaticTaskScheduler
-	smsSyncMu                 sync.Mutex
+	usbPathConflicts map[string]bool
+	hostStats        *hostStatsSampler
+	publicIPMu       sync.RWMutex
+	publicIPs        map[string]cachedPublicIP
+	lookupPublicIP   func(context.Context, string) (exportproxy.PublicIPInfo, error)
+	automaticTasks   *automaticTaskScheduler
+	smsSyncMu        sync.Mutex
+	// qqBotBindMu protects the current or most recent QQ recipient binding.
+	qqBotBindMu               sync.Mutex
+	qqBotBind                 *qqBotBindSession
+	qqBotConfigRevision       uint64
+	qqBotBindWork             sync.WaitGroup
+	qqBotWorkCtx              context.Context
+	qqBotWorkCancel           context.CancelFunc
+	qqBotStopping             bool
 	esimSIMResetAttempted     map[string]bool // 由 smsSyncMu 保护；读取成功后允许下一次故障恢复。
 	esimCacheInvalidator      func(context.Context, string) error
 	smsStorageMu              sync.Mutex

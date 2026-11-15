@@ -674,6 +674,7 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 	if err != nil {
 		return err
 	}
+	defer handler.StopQQBotBinding()
 	switchESIM = handler.SwitchESIMProfile
 
 	onIncomingCall = func(ctx context.Context, call ims.ReceivedCall) error {

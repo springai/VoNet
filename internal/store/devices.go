@@ -203,7 +203,10 @@ func upsertDevice(ctx context.Context, executor contextExecer, value Device) err
 		value.ESIMTransport = "pcsc"
 		value.NetworkEnabled = false
 		value.SMSEnabled = true
-		value.VoWiFiEnabled = false
+		// Preserve the reader's desired VoWiFi state. The card-policy
+		// reconciler turns VoWiFi on after a stable card binding; overwriting
+		// this flag here leaves the runtime enabled while the device summary
+		// incorrectly reports VoWiFi as disabled.
 	}
 	extra, err := normalizeJSONObject(value.Extra)
 	if err != nil {

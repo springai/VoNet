@@ -58,6 +58,22 @@ func TestSimCardCRUDPreservesCreatedTime(t *testing.T) {
 	}
 }
 
+func TestUpsertDevicePreservesReaderVoWiFiEnabled(t *testing.T) {
+	ctx := context.Background()
+	database := openTestStore(t, ":memory:")
+	device := Device{
+		ID: "Reader-TEST", Name: "Reader", DeviceType: DeviceTypeUSBSIMReader,
+		VoWiFiEnabled: true,
+	}
+	if err := database.UpsertDevice(ctx, device); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := database.Device(ctx, device.ID)
+	if err != nil || !stored.VoWiFiEnabled {
+		t.Fatalf("reader VoWiFi state = %+v, %v", stored, err)
+	}
+}
+
 func TestCreateAndRejectUpdateForDeletedSimCard(t *testing.T) {
 	ctx := context.Background()
 	database := openTestStore(t, ":memory:")
