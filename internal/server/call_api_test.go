@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"vonet/internal/device"
 	"vonet/internal/modem"
 	"vonet/internal/store"
 	"vonet/internal/vowifi"
@@ -47,6 +48,21 @@ func TestCallTransportRequiresIMSReady(t *testing.T) {
 	}
 }
 
+func TestCallStopMatchesOnlyExpectedICCID(t *testing.T) {
+	server := &Server{devices: fakeDeviceController{entry: device.Device{
+		ID:         "dev1",
+		Discovered: true,
+		Snapshot:   &device.Snapshot{Responsive: true, SIMReady: true, ICCID: testICCIDCurrent},
+	}}}
+	config := store.Device{ID: "dev1"}
+	if !server.callStopMatchesICCID(config, testICCIDCurrent) {
+		t.Fatal("current ICCID was rejected for stop-only call action")
+	}
+	if server.callStopMatchesICCID(config, testICCIDOld) {
+		t.Fatal("stale ICCID was accepted for stop-only call action")
+	}
+}
+
 func TestResolveVoWiFiCallIDIgnoresTerminalCalls(t *testing.T) {
 	controller := &fakeCallController{calls: []vowifi.Call{
 		{ID: "failed", State: "failed"},
@@ -69,7 +85,7 @@ func TestCallHistoryAcceptsFrontendRecordPost(t *testing.T) {
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/api/devices/ec20/calls/history",
-		bytes.NewBufferString(`{"number":"+447700900001","direction":"incoming","status":"answered"}`),
+		bytes.NewBufferString(`{"number":"+447700900001","direction":"incoming","status":"answered","iccid":"89441000000000000001"}`),
 	)
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -79,12 +95,67 @@ func TestCallHistoryAcceptsFrontendRecordPost(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	records, total, err := database.ListCallHistory("ec20", 10, 0)
+	records, total, err := database.ListCallHistoryForCard("ec20", "89441000000000000001", 10, 0)
 	if err != nil || total != 1 || len(records) != 1 {
 		t.Fatalf("history = %#v total=%d err=%v", records, total, err)
 	}
-	if records[0].Direction != "incoming" || records[0].Status != "answered" {
+	if records[0].Direction != "incoming" || records[0].Status != "answered" || records[0].ICCID != "89441000000000000001" {
 		t.Fatalf("record = %#v", records[0])
+	}
+}
+
+func TestCallHistoryReadDeleteRequireRegisteredICCID(t *testing.T) {
+	ctx := context.Background()
+	database, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.UpsertDevice(ctx, store.Device{ID: "dev1", Name: "Modem"}); err != nil {
+		t.Fatal(err)
+	}
+	registerActiveTestCard(t, database, "dev1", "dev1", testICCIDCurrent)
+	if err := database.InsertCallRecord(store.CallRecord{
+		DeviceID: "dev1", ICCID: testICCIDCurrent, Number: "+447700900002",
+		Direction: "incoming", Status: "missed", StartedAt: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{
+		store: database,
+		devices: fakeDeviceController{entry: device.Device{
+			ID:         "dev1",
+			Discovered: true,
+			Snapshot:   &device.Snapshot{Responsive: true, SIMReady: true, ICCID: testICCIDCurrent},
+		}},
+		maxRequestBodyBytes: 4096,
+	}
+
+	missing := httptest.NewRequest(http.MethodGet, "/api/devices/dev1/calls/history", nil)
+	missingResponse := httptest.NewRecorder()
+	if !server.handleCallHistory(missingResponse, missing, store.Device{ID: "dev1"}) ||
+		missingResponse.Code != http.StatusBadRequest {
+		t.Fatalf("missing ICCID read = %d %s", missingResponse.Code, missingResponse.Body.String())
+	}
+
+	read := httptest.NewRequest(http.MethodGet, "/api/devices/dev1/calls/history?iccid="+testICCIDCurrent, nil)
+	readResponse := httptest.NewRecorder()
+	if !server.handleCallHistory(readResponse, read, store.Device{ID: "dev1"}) || readResponse.Code != http.StatusOK {
+		t.Fatalf("registered ICCID read = %d %s", readResponse.Code, readResponse.Body.String())
+	}
+
+	stale := httptest.NewRequest(http.MethodDelete, "/api/devices/dev1/calls/history/delete?iccid="+testICCIDOld, nil)
+	staleResponse := httptest.NewRecorder()
+	if !server.handleDeleteCallRecord(staleResponse, stale, store.Device{ID: "dev1"}) ||
+		staleResponse.Code < 400 {
+		t.Fatalf("stale ICCID delete = %d %s", staleResponse.Code, staleResponse.Body.String())
+	}
+
+	remove := httptest.NewRequest(http.MethodDelete, "/api/devices/dev1/calls/history/delete?iccid="+testICCIDCurrent, nil)
+	removeResponse := httptest.NewRecorder()
+	if !server.handleDeleteCallRecord(removeResponse, remove, store.Device{ID: "dev1"}) ||
+		removeResponse.Code != http.StatusOK {
+		t.Fatalf("registered ICCID delete = %d %s", removeResponse.Code, removeResponse.Body.String())
 	}
 }
 

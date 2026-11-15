@@ -347,6 +347,11 @@ func TestEnforceCardRegionLiftsBlockForAllowedSIM(t *testing.T) {
 	manager := newRegionTestManager(t, client)
 	database := newRegionTestStore(t)
 
+	if err := database.UpsertSimCard(context.Background(), store.SimCard{
+		ICCID: "89860012345678901234",
+	}); err != nil {
+		t.Fatalf("seed block SIM card: %v", err)
+	}
 	if err := database.UpsertCardPolicy(context.Background(), store.CardPolicy{
 		ICCID:           "89860012345678901234",
 		AirplaneEnabled: true,

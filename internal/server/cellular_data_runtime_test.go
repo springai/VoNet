@@ -140,6 +140,36 @@ func TestCellularDataRuntimeRetriesAndReportsFailure(t *testing.T) {
 	}
 }
 
+func TestCellularDataRuntimeSkipsPCSCBackend(t *testing.T) {
+	setter := &runtimeNetworkSetter{}
+	runtime := newCellularDataRuntime(setter, nil)
+	runtime.start(context.Background())
+
+	disabled := runtime.request("dev1", "physical1", device.NetworkRequest{
+		Enabled: false,
+		Backend: " PCSC ",
+	})
+	status, err := runtime.wait(context.Background(), "dev1", disabled.Revision)
+	if err != nil || status.Phase != "disabled" || status.Connected {
+		t.Fatalf("PCSC disable status = %+v, err = %v", status, err)
+	}
+
+	enabled := runtime.request("dev1", "physical1", device.NetworkRequest{
+		Enabled: true,
+		Backend: "pcsc",
+	})
+	status, err = runtime.wait(context.Background(), "dev1", enabled.Revision)
+	if err == nil ||
+		status.Phase != "failed" ||
+		status.Connected ||
+		status.LastError != "cellular data backend is unavailable: PCSC readers do not provide cellular data" {
+		t.Fatalf("PCSC enable status = %+v, err = %v", status, err)
+	}
+	if calls := setter.recordedCalls(); len(calls) != 0 {
+		t.Fatalf("PCSC SetNetwork calls = %v, want none", calls)
+	}
+}
+
 func TestCellularDataOperationTimeoutSelectsBackendBudget(t *testing.T) {
 	for _, test := range []struct {
 		name    string
@@ -315,10 +345,11 @@ func TestCellularDataMonitorReconnectsAfterTwoControlPlaneFailures(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
+	registerActiveTestCard(t, database, "physical-1", "physical-1", testICCIDCurrent)
 	controller := &monitorDeviceController{
 		fakeDeviceController: fakeDeviceController{entry: device.Device{
 			ID: "physical-1", Discovered: true,
-			Snapshot: &device.Snapshot{ICCID: "89441000000000000001", SIMReady: true, PSAttached: true},
+			Snapshot: &device.Snapshot{Responsive: true, SIMReady: true, ICCID: testICCIDCurrent, PSAttached: true},
 		}},
 		status: device.NetworkStatus{Backend: "qmi", Interface: "wwan0", Detail: "QMI packet data session is disconnected"},
 	}
@@ -362,10 +393,11 @@ func TestCellularDataMonitorRecoversATBackendAfterRepeatedFailures(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
+	registerActiveTestCard(t, database, "physical-1", "physical-1", testICCIDCurrent)
 	controller := &monitorDeviceController{
 		fakeDeviceController: fakeDeviceController{entry: device.Device{
 			ID: "physical-1", Discovered: true,
-			Snapshot: &device.Snapshot{ICCID: "89441000000000000001", SIMReady: true, PSAttached: true},
+			Snapshot: &device.Snapshot{Responsive: true, SIMReady: true, ICCID: testICCIDCurrent, PSAttached: true},
 		}},
 		status: device.NetworkStatus{Backend: "at", Interface: "wwan0", Detail: "AT host lease is not established"},
 	}
@@ -421,11 +453,12 @@ func TestCellularDataEventMonitorReconnectsImmediately(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	registerActiveTestCard(t, database, "physical-1", "physical-1", testICCIDCurrent)
 	qmiEvents := make(chan string, 1)
 	controller := &monitorDeviceController{
 		fakeDeviceController: fakeDeviceController{entry: device.Device{
 			ID: "physical-1", Discovered: true,
-			Snapshot: &device.Snapshot{ICCID: "89441000000000000001", SIMReady: true, PSAttached: true},
+			Snapshot: &device.Snapshot{Responsive: true, SIMReady: true, ICCID: testICCIDCurrent, PSAttached: true},
 		}},
 		status: device.NetworkStatus{Backend: "qmi", Interface: "wwan0", Detail: "QMI packet data session is disconnected"},
 		events: qmiEvents,

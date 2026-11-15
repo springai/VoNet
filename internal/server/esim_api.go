@@ -447,8 +447,9 @@ func (s *Server) handleEsimRename(w http.ResponseWriter, r *http.Request, physic
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"status": "renamed", "iccid": iccid, "name": nickname}})
 }
 
-// handleEsimSwitch enables one already-installed profile by ICCID (切卡). The
-// eUICC EnableProfile command needs no authentication key.
+// handleEsimSwitch enables one already-installed profile by ICCID (切卡).
+// aidHex identifies the ISD-R/eUICC entry for the legacy web API. MCP passes a
+// Profile AID through SwitchESIMProfile, where the ISD-R is resolved separately.
 func (s *Server) handleEsimSwitch(w http.ResponseWriter, r *http.Request, configuredID string, physicalID string, physicalPresent bool) {
 	if s.devices == nil {
 		writeError(w, http.StatusServiceUnavailable, "device_manager_unavailable", "device manager is unavailable")
@@ -519,11 +520,24 @@ func (s *Server) SwitchESIMProfile(ctx context.Context, configuredID, iccid, aid
 	if !present {
 		return device.ErrNotFound
 	}
-	_, err = s.switchESIMProfile(ctx, configuredID, physicalID, iccid, strings.TrimSpace(aidHex))
+	profileAID := strings.TrimSpace(aidHex)
+	switchAID, resolveErr := s.resolveProfileSwitchISDRAID(ctx, physicalID, iccid, profileAID)
+	if resolveErr != nil {
+		return resolveErr
+	}
+	_, err = s.switchESIMProfileWithAID(ctx, configuredID, physicalID, iccid, switchAID, profileAID)
 	return err
 }
 
 func (s *Server) switchESIMProfile(ctx context.Context, configuredID, physicalID, iccid, aidHex string) (store.CardPolicy, error) {
+	return s.switchESIMProfileWithAID(ctx, configuredID, physicalID, iccid, strings.TrimSpace(aidHex), "")
+}
+
+func (s *Server) switchESIMProfileWithAID(
+	ctx context.Context,
+	configuredID, physicalID, iccid, switchAID, profileAID string,
+) (store.CardPolicy, error) {
+	profileAID = strings.TrimSpace(profileAID)
 	// Keep the subscription identity used by the periodic SM/ME scanner stable
 	// for the entire profile transition. syncModemSMS takes the same lock and
 	// validates its before/after snapshots before persisting any message.
@@ -576,7 +590,7 @@ func (s *Server) switchESIMProfile(ctx context.Context, configuredID, physicalID
 	if _, err := s.devices.SetFlight(ctx, physicalID, true); err != nil {
 		return store.CardPolicy{}, err
 	}
-	switchErr := s.devices.ESIMSwitchProfile(ctx, physicalID, iccid, aidHex)
+	switchErr := s.devices.ESIMSwitchProfile(ctx, physicalID, iccid, switchAID)
 	// The device manager keeps a committed profile change alive across client
 	// disconnects. Apply its verified result to the saved policy and runtime even
 	// when the original request was canceled, with a separate time budget.
@@ -600,12 +614,32 @@ func (s *Server) switchESIMProfile(ctx context.Context, configuredID, physicalID
 	if _, err := s.devices.SetFlight(ctx, physicalID, true); err != nil {
 		return store.CardPolicy{}, err
 	}
+	if err := s.verifyActiveESIMProfile(ctx, physicalID, iccid, profileAID); err != nil {
+		s.stopUnverifiedProfileRuntime(ctx, configuredID)
+		return store.CardPolicy{}, err
+	}
+	_, registrationErr := s.store.SimCard(ctx, iccid)
+	if errors.Is(registrationErr, store.ErrNotFound) {
+		config, configErr := s.store.Device(ctx, configuredID)
+		if configErr != nil {
+			return store.CardPolicy{}, esimSwitchStoreError{configErr}
+		}
+		config.VoWiFiEnabled = false
+		config.NetworkEnabled = false
+		if err := s.store.UpsertDevice(ctx, config); err != nil {
+			return store.CardPolicy{}, esimSwitchStoreError{err}
+		}
+		dataRuntime.invalidate(configuredID, false, "disabled", "")
+		switchCompleted = true
+		endMaintenance()
+		return store.CardPolicy{ICCID: iccid, Source: "unregistered"}, nil
+	}
+	if registrationErr != nil {
+		return store.CardPolicy{}, esimSwitchStoreError{registrationErr}
+	}
 	policy, err := s.store.CardPolicy(ctx, iccid)
 	if errors.Is(err, store.ErrNotFound) {
 		policy = defaultCardPolicy(iccid)
-		if err := s.store.UpsertCardPolicy(ctx, policy); err != nil {
-			return store.CardPolicy{}, esimSwitchStoreError{err}
-		}
 	} else if err != nil {
 		return store.CardPolicy{}, esimSwitchStoreError{err}
 	}
@@ -660,6 +694,116 @@ func (s *Server) switchESIMProfile(ctx context.Context, configuredID, physicalID
 		}
 	}
 	return policy, nil
+}
+
+func (s *Server) verifyActiveESIMProfile(
+	ctx context.Context,
+	physicalID string,
+	iccid string,
+	profileAID string,
+) error {
+	if locker, ok := s.devices.(interface {
+		AcquireSIMRead(context.Context, string) (func(), error)
+	}); ok {
+		release, err := locker.AcquireSIMRead(ctx, physicalID)
+		if err != nil {
+			return fmt.Errorf("lock SIM for profile verification: %w", err)
+		}
+		defer release()
+	}
+	before, err := s.devices.Refresh(ctx, physicalID)
+	if err != nil {
+		return fmt.Errorf("read modem before profile verification: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(before.ICCID), strings.TrimSpace(iccid)) {
+		return fmt.Errorf("profile switch verification failed: active ICCID is %q, want %q",
+			strings.TrimSpace(before.ICCID), strings.TrimSpace(iccid))
+	}
+	inventory, err := s.devices.ESIMInventory(ctx, physicalID)
+	if err != nil {
+		return fmt.Errorf("read eSIM inventory after profile switch: %w", err)
+	}
+	targetICCID := strings.TrimSpace(iccid)
+	expectedProfileAID := strings.ToUpper(strings.TrimSpace(profileAID))
+	if expectedProfileAID == "" && s.store != nil {
+		if card, cardErr := s.store.SimCard(ctx, targetICCID); cardErr == nil {
+			expectedProfileAID = strings.ToUpper(strings.TrimSpace(card.ProfileAID))
+		}
+	}
+	var matches []device.EsimProfile
+	for _, entry := range inventory {
+		for _, profile := range entry.Info.Profiles {
+			if !strings.EqualFold(strings.TrimSpace(profile.ICCID), targetICCID) {
+				continue
+			}
+			if expectedProfileAID != "" &&
+				!strings.EqualFold(strings.TrimSpace(profile.AID), expectedProfileAID) {
+				continue
+			}
+			matches = append(matches, profile)
+		}
+	}
+	if len(matches) != 1 {
+		return fmt.Errorf("profile switch verification failed: expected one eSIM profile match, found %d", len(matches))
+	}
+	if matches[0].State != 1 {
+		return fmt.Errorf("profile switch verification failed: target eSIM profile is not enabled")
+	}
+	after, err := s.devices.Refresh(ctx, physicalID)
+	if err != nil {
+		return fmt.Errorf("read modem after profile verification: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(after.ICCID), strings.TrimSpace(iccid)) {
+		return fmt.Errorf("profile switch verification failed: final active ICCID is %q, want %q",
+			strings.TrimSpace(after.ICCID), strings.TrimSpace(iccid))
+	}
+	return nil
+}
+
+func (s *Server) resolveProfileSwitchISDRAID(
+	ctx context.Context,
+	physicalID string,
+	iccid string,
+	profileAID string,
+) (string, error) {
+	profileAID = strings.TrimSpace(profileAID)
+	if profileAID == "" {
+		return "", nil
+	}
+	inventory, err := s.devices.ESIMInventory(ctx, physicalID)
+	if err != nil {
+		// Inventory is advisory here: the manager can resolve the ISD-R from
+		// the target ICCID itself when the inventory is temporarily unavailable.
+		return "", nil
+	}
+	matches := make([]string, 0, 1)
+	for _, entry := range inventory {
+		for _, profile := range entry.Info.Profiles {
+			if !strings.EqualFold(strings.TrimSpace(profile.ICCID), strings.TrimSpace(iccid)) ||
+				!strings.EqualFold(strings.TrimSpace(profile.AID), profileAID) {
+				continue
+			}
+			isdr := strings.TrimSpace(firstNonEmpty(entry.Info.AID, entry.Chip.AID))
+			if isdr != "" {
+				matches = append(matches, isdr)
+			}
+			break
+		}
+	}
+	if len(matches) > 1 {
+		return "", fmt.Errorf("profile switch AID is ambiguous: found %d ISD-R entries", len(matches))
+	}
+	if len(matches) == 0 {
+		if len(inventory) == 1 {
+			for _, profile := range inventory[0].Info.Profiles {
+				if strings.EqualFold(strings.TrimSpace(profile.ICCID), strings.TrimSpace(iccid)) {
+					return strings.TrimSpace(firstNonEmpty(inventory[0].Info.AID, inventory[0].Chip.AID)), nil
+				}
+			}
+		}
+		return "", nil
+	}
+	return matches[0], nil
 }
 
 func (s *Server) quiesceVoWiFiForProfileSwitch(ctx context.Context, configuredID string) error {

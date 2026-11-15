@@ -326,10 +326,106 @@ export interface OperatorSelection {
   accessTechnology?: string;
 }
 
+export type SimCardType = "physical_sim" | "esim_profile";
+export type SimCardStatus = "active" | "offline" | "conflict" | "unknown";
+export type CardDeviceMode = "at" | "qmi" | "mbim" | "pcsc";
+export type CellularIMSMode = "mbn_default" | "force_enabled" | "force_disabled";
+
+export interface SimCardBinding {
+  deviceId?: string;
+  deviceName?: string;
+  deviceType?: DeviceType;
+  backendMode?: string;
+  atPort?: string;
+  running?: boolean;
+  online?: boolean;
+  physicalDeviceId?: string;
+  eid?: string;
+  profileAid?: string;
+  boundAt?: string;
+  lastSeenAt?: string;
+}
+
+export interface SimCard {
+  iccid: string;
+  displayName?: string;
+  notes?: string;
+  cardType: SimCardType;
+  hostType?: DeviceType;
+  status: SimCardStatus;
+  policyStatus?: "applied" | "pending" | "waiting" | "suspended" | "offline" | "failed" | "missing";
+  policy?: CardPolicy;
+  registered: boolean;
+  conflict?: boolean;
+  imsi?: string;
+  msisdn?: string;
+  carrier?: string;
+  spn?: string;
+  mcc?: string;
+  mnc?: string;
+  homePlmn?: string;
+  eid?: string;
+  profileAid?: string;
+  binding?: SimCardBinding;
+  bindings?: SimCardBinding[];
+  lastSeenAt?: string;
+  lastActiveAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface SimCardInput {
+  iccid: string;
+  displayName?: string;
+  notes?: string;
+  cardType: SimCardType;
+  hostType?: DeviceType;
+  imsi?: string;
+  msisdn?: string;
+  carrier?: string;
+  spn?: string;
+  mcc?: string;
+  mnc?: string;
+  homePlmn?: string;
+  eid?: string;
+  profileAid?: string;
+  deviceId?: string;
+}
+
+export interface SimCardCandidate {
+  iccid: string;
+  deviceId: string;
+  physicalDeviceId?: string;
+  deviceName?: string;
+  hostType?: DeviceType;
+  cardType: SimCardType;
+  displayName?: string;
+  imsi?: string;
+  msisdn?: string;
+  carrier?: string;
+  spn?: string;
+  mcc?: string;
+  mnc?: string;
+  eid?: string;
+  profileAid?: string;
+  state: "pending" | "stable" | "offline";
+  conflict?: boolean;
+  registered?: boolean;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+}
+
+export interface SimCardsResponse {
+  cards: SimCard[];
+}
+
 export interface CardPolicy {
   iccid: string;
   vowifiEnabled: boolean;
   airplaneEnabled: boolean;
+  networkEnabled?: boolean;
+  runtimeMode?: CardDeviceMode;
+  cellularImsMode?: CellularIMSMode;
   apn?: string;
   ipVersion?: string;
   customPhoneNumber?: string;

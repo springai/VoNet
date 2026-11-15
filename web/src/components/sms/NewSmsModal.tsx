@@ -1,20 +1,21 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { SendRegular } from "@fluentui/react-icons";
 import { Button, Input, Modal, Select, Textarea } from "../ui";
-import type { DeviceListItem } from "../../types";
+import type { SimCard } from "../../types";
+import { activeCardDevice } from "../cards/cardApi";
 import { analyzeSmsEncoding } from "./smsText";
 import { tf, useI18n } from "../../lib/i18n";
 
 export interface NewSmsPayload {
-  deviceId: string;
+  iccid: string;
   phone: string;
   message: string;
 }
 
 export interface NewSmsModalProps {
   open: boolean;
-  devices: DeviceListItem[];
-  defaultDeviceId: string;
+  cards: SimCard[];
+  defaultICCID: string;
   sending: boolean;
   onClose: () => void;
   onSend: (payload: NewSmsPayload) => void;
@@ -29,24 +30,30 @@ function FormItem({ label, children }: { label: ReactNode; children: ReactNode }
   );
 }
 
-export function NewSmsModal({ open, devices, defaultDeviceId, sending, onClose, onSend }: NewSmsModalProps) {
+export function NewSmsModal({ open, cards, defaultICCID, sending, onClose, onSend }: NewSmsModalProps) {
   const { t } = useI18n();
-  const [deviceId, setDeviceId] = useState(defaultDeviceId);
+  const [iccid, setICCID] = useState(defaultICCID);
   const [phone, setPhone] = useState("");
   const [content, setContent] = useState("");
 
   // Reset the form every time the dialog opens (reference `Yt`).
   useEffect(() => {
     if (open) {
-      setDeviceId(defaultDeviceId);
+      const requested = cards.find((card) => card.iccid === defaultICCID && activeCardDevice(card));
+      const firstActive = cards.find((card) => activeCardDevice(card));
+      setICCID(requested?.iccid || firstActive?.iccid || "");
       setPhone("");
       setContent("");
     }
-  }, [open, defaultDeviceId]);
+  }, [open, defaultICCID, cards]);
 
   const deviceOptions = useMemo(
-    () => devices.map((d) => ({ value: d.id, label: d.name || d.id })),
-    [devices],
+    () => cards.map((card) => ({
+      value: card.iccid,
+      label: `${card.displayName || card.carrier || card.iccid}${card.status === "active" ? "" : "（离线）"}`,
+      disabled: !activeCardDevice(card),
+    })),
+    [cards],
   );
   const info = useMemo(() => analyzeSmsEncoding(content), [content]);
   const length = useMemo(() => Array.from(content || "").length, [content]);
@@ -60,15 +67,15 @@ export function NewSmsModal({ open, devices, defaultDeviceId, sending, onClose, 
       footer={
         <>
           <Button onClick={onClose}>{t("取消")}</Button>
-          <Button variant="primary" loading={sending} icon={<SendRegular />} onClick={() => onSend({ deviceId, phone, message: content })}>
+          <Button variant="primary" loading={sending} disabled={!iccid || !activeCardDevice(cards.find((card) => card.iccid === iccid))} icon={<SendRegular />} onClick={() => onSend({ iccid, phone, message: content })}>
             {t("发送")}
           </Button>
         </>
       }
     >
       <div className="mt-2 space-y-4">
-        <FormItem label={t("发送设备")}>
-          <Select value={deviceId} onChange={setDeviceId} options={deviceOptions} placeholder={t("选择设备")} />
+        <FormItem label={t("发送卡片")}>
+          <Select value={iccid} onChange={setICCID} options={deviceOptions} placeholder={t("选择卡片")} />
         </FormItem>
         <FormItem label={t("目标号码")}>
           <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+12025550177" />

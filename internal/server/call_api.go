@@ -79,6 +79,10 @@ func (s *Server) handleCalls(w http.ResponseWriter, r *http.Request, config stor
 	if !requireMethod(w, r, http.MethodGet) {
 		return true
 	}
+	expectedICCID := strings.TrimSpace(r.URL.Query().Get("iccid"))
+	if _, ok := s.RequireRegisteredActiveCard(w, r, config.ID, expectedICCID); !ok {
+		return true
+	}
 	transport := s.callTransport(config.ID)
 	if transport == "vowifi" {
 		controller, ok := s.vowifi.(VoWiFiCallController)
@@ -124,6 +128,9 @@ func (s *Server) handleCallAction(w http.ResponseWriter, r *http.Request, config
 	if !requireMethod(w, r, http.MethodPost) {
 		return true
 	}
+	stopOnly := action == "hangup" || action == "reject"
+	expectedICCID := strings.TrimSpace(r.URL.Query().Get("iccid"))
+	requestICCID := ""
 	command := ""
 	duration := time.Duration(0)
 	number := ""
@@ -134,12 +141,14 @@ func (s *Server) handleCallAction(w http.ResponseWriter, r *http.Request, config
 		var request struct {
 			Number          string `json:"number"`
 			DurationSeconds int    `json:"duration_seconds"`
+			ICCID           string `json:"iccid"`
 		}
 		if err := s.decodeJSON(w, r, &request); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return true
 		}
 		number = strings.TrimSpace(request.Number)
+		requestICCID = strings.TrimSpace(request.ICCID)
 		if !validDialNumber(number) {
 			writeError(w, http.StatusBadRequest, "invalid_number", "phone number is invalid")
 			return true
@@ -153,37 +162,44 @@ func (s *Server) handleCallAction(w http.ResponseWriter, r *http.Request, config
 	case "answer":
 		var request struct {
 			CallID string `json:"call_id"`
+			ICCID  string `json:"iccid"`
 		}
 		if err := s.decodeJSON(w, r, &request); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return true
 		}
 		callID = strings.TrimSpace(request.CallID)
+		requestICCID = strings.TrimSpace(request.ICCID)
 		command = "ATA"
 	case "hangup":
 		var request struct {
 			CallID string `json:"call_id"`
+			ICCID  string `json:"iccid"`
 		}
 		if err := s.decodeJSON(w, r, &request); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return true
 		}
 		callID = strings.TrimSpace(request.CallID)
+		requestICCID = strings.TrimSpace(request.ICCID)
 		command = "ATH"
 	case "reject":
 		var rejectReq struct {
 			CallID string `json:"call_id"`
+			ICCID  string `json:"iccid"`
 		}
 		if err := s.decodeJSON(w, r, &rejectReq); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return true
 		}
 		callID = strings.TrimSpace(rejectReq.CallID)
+		requestICCID = strings.TrimSpace(rejectReq.ICCID)
 		command = "ATH"
 	case "dtmf":
 		var dtmfReq struct {
 			Digit  string `json:"digit"`
 			CallID string `json:"call_id"`
+			ICCID  string `json:"iccid"`
 		}
 		if err := s.decodeJSON(w, r, &dtmfReq); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -195,12 +211,50 @@ func (s *Server) handleCallAction(w http.ResponseWriter, r *http.Request, config
 			return true
 		}
 		callID = strings.TrimSpace(dtmfReq.CallID)
+		requestICCID = strings.TrimSpace(dtmfReq.ICCID)
 		command = "AT+VTS=" + digit
 	default:
 		writeError(w, http.StatusNotFound, "not_found", "call action not found")
 		return true
 	}
 
+	var execution CardExecutionContext
+	var stopExecution cardStopExecutionContext
+	releaseCard := func() {}
+	if stopOnly {
+		if !AllowCardStop(config.ID) {
+			writeError(w, http.StatusBadRequest, cardGateCodeInvalidDevice, "device ID is invalid")
+			return true
+		}
+		var err error
+		stopExecution, releaseCard, err = s.acquireCardStopExecution(r.Context(), config, firstNonEmpty(requestICCID, expectedICCID))
+		if err != nil {
+			writeCardGateError(w, err)
+			return true
+		}
+	} else {
+		var ok bool
+		execution, ok = s.RequireRegisteredActiveCard(
+			w,
+			r,
+			config.ID,
+			firstNonEmpty(requestICCID, expectedICCID),
+		)
+		if !ok {
+			return true
+		}
+		release, err := s.acquireCardExecution(r.Context(), execution)
+		if err != nil {
+			writeCardGateError(w, err)
+			return true
+		}
+		releaseCard = release
+	}
+	defer releaseCard()
+	operationICCID := execution.ICCID
+	if stopOnly {
+		operationICCID = stopExecution.ICCID
+	}
 	transport := s.callTransport(config.ID)
 	if transport == "vowifi" {
 		controller, ok := s.vowifi.(VoWiFiCallController)
@@ -240,7 +294,7 @@ func (s *Server) handleCallAction(w http.ResponseWriter, r *http.Request, config
 				callID = call.ID
 			}
 			if duration > 0 {
-				go s.hangupVoWiFiAfter(config.ID, callID, duration)
+				go s.hangupVoWiFiAfter(config.ID, operationICCID, callID, duration)
 			}
 		}
 		s.recordAudit(r.Context(), "admin", "call."+action, "device", config.ID, "success", transport)
@@ -260,7 +314,7 @@ func (s *Server) handleCallAction(w http.ResponseWriter, r *http.Request, config
 				recDir = "incoming"
 				recStatus = "missed"
 			}
-			_ = s.store.InsertCallRecord(store.CallRecord{DeviceID: config.ID, Number: recNumber, Direction: recDir, Status: recStatus, Transport: transport, StartedAt: time.Now().Unix()})
+			_ = s.store.InsertCallRecord(store.CallRecord{DeviceID: config.ID, ICCID: operationICCID, Number: recNumber, Direction: recDir, Status: recStatus, Transport: transport, StartedAt: time.Now().Unix()})
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"data": map[string]any{
 			"accepted": true, "action": action, "number": number, "call_id": callID,
@@ -286,7 +340,7 @@ func (s *Server) handleCallAction(w http.ResponseWriter, r *http.Request, config
 	}
 	if action == "dial" {
 		if duration > 0 {
-			go s.hangupAfter(config.ID, physicalID, duration)
+			go s.hangupAfter(config.ID, operationICCID, physicalID, duration)
 		}
 	}
 	s.recordAudit(r.Context(), "admin", "call."+action, "device", config.ID, "success", transport)
@@ -318,7 +372,7 @@ func (s *Server) handleCallAction(w http.ResponseWriter, r *http.Request, config
 			recDir = "incoming"
 			recStatus = "missed"
 		}
-		_ = s.store.InsertCallRecord(store.CallRecord{DeviceID: config.ID, Number: recNumber, Direction: recDir, Status: recStatus, Transport: transport, StartedAt: time.Now().Unix()})
+		_ = s.store.InsertCallRecord(store.CallRecord{DeviceID: config.ID, ICCID: operationICCID, Number: recNumber, Direction: recDir, Status: recStatus, Transport: transport, StartedAt: time.Now().Unix()})
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"data": map[string]any{
@@ -327,6 +381,18 @@ func (s *Server) handleCallAction(w http.ResponseWriter, r *http.Request, config
 		},
 	})
 	return true
+}
+
+func (s *Server) callStopMatchesICCID(config store.Device, expectedICCID string) bool {
+	expectedICCID = strings.TrimSpace(expectedICCID)
+	if expectedICCID == "" {
+		return true
+	}
+	entry, _, present := s.physicalForConfig(config)
+	if !present || entry.Snapshot == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(entry.Snapshot.ICCID), expectedICCID)
 }
 
 func resolveVoWiFiCallID(controller VoWiFiCallController, deviceID, id, requiredState string) (string, error) {
@@ -345,10 +411,14 @@ func resolveVoWiFiCallID(controller VoWiFiCallController, deviceID, id, required
 	return "", errors.New("no matching active call")
 }
 
-func (s *Server) hangupVoWiFiAfter(deviceID, callID string, duration time.Duration) {
+func (s *Server) hangupVoWiFiAfter(deviceID, expectedICCID, callID string, duration time.Duration) {
 	timer := time.NewTimer(duration)
 	defer timer.Stop()
 	<-timer.C
+	if !s.callICCIDStillCurrent(deviceID, expectedICCID) {
+		s.logger.Warn("skipping automatic VoWiFi call hangup after card change", "device_id", deviceID, "call_id", callID)
+		return
+	}
 	controller, ok := s.vowifi.(VoWiFiCallController)
 	if !ok {
 		return
@@ -387,15 +457,31 @@ func (s *Server) callTransport(deviceID string) string {
 	return "cellular"
 }
 
-func (s *Server) hangupAfter(deviceID, physicalID string, duration time.Duration) {
+func (s *Server) hangupAfter(deviceID, expectedICCID, physicalID string, duration time.Duration) {
 	timer := time.NewTimer(duration)
 	defer timer.Stop()
 	<-timer.C
+	if !s.callICCIDStillCurrent(deviceID, expectedICCID) {
+		s.logger.Warn("skipping automatic cellular call hangup after card change", "device_id", deviceID)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if _, err := s.devices.ExecuteAT(ctx, physicalID, "ATH"); err != nil {
 		s.logger.Warn("automatic call hangup failed", "device_id", deviceID, "error", err)
 	}
+}
+
+func (s *Server) callICCIDStillCurrent(deviceID, expectedICCID string) bool {
+	expectedICCID = strings.TrimSpace(expectedICCID)
+	if expectedICCID == "" {
+		return true
+	}
+	config, err := s.store.Device(context.Background(), strings.TrimSpace(deviceID))
+	if err != nil {
+		return false
+	}
+	return s.callStopMatchesICCID(config, expectedICCID)
 }
 
 func validDialNumber(value string) bool {
@@ -472,11 +558,22 @@ func (s *Server) handleCallHistory(w http.ResponseWriter, r *http.Request, confi
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return true
 	}
+	expectedICCID := strings.TrimSpace(r.URL.Query().Get("iccid"))
+	if r.Method == http.MethodGet {
+		if expectedICCID == "" {
+			writeError(w, http.StatusBadRequest, cardGateCodeIdentityUnavailable, "iccid is required for call history access")
+			return true
+		}
+		if _, ok := s.RequireRegisteredActiveCard(w, r, config.ID, expectedICCID); !ok {
+			return true
+		}
+	}
 	if r.Method == http.MethodPost {
 		var request struct {
 			Number    string `json:"number"`
 			Direction string `json:"direction"`
 			Status    string `json:"status"`
+			ICCID     string `json:"iccid"`
 		}
 		if err := s.decodeJSON(w, r, &request); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -492,8 +589,18 @@ func (s *Server) handleCallHistory(w http.ResponseWriter, r *http.Request, confi
 			writeError(w, http.StatusBadRequest, "invalid_status", "status must be answered, missed, or rejected")
 			return true
 		}
+		iccid := firstNonEmpty(strings.TrimSpace(request.ICCID), expectedICCID, s.currentConfiguredICCID(config))
+		if iccid == "" {
+			writeError(w, http.StatusConflict, cardGateCodeIdentityUnavailable, "the active card ICCID is unavailable")
+			return true
+		}
+		if s.devices != nil && !s.callStopMatchesICCID(config, iccid) {
+			writeError(w, http.StatusConflict, cardGateCodeBindingStale, "the call record belongs to a different ICCID")
+			return true
+		}
 		_ = s.store.InsertCallRecord(store.CallRecord{
 			DeviceID:  config.ID,
+			ICCID:     iccid,
 			Number:    strings.TrimSpace(request.Number),
 			Direction: direction,
 			Status:    status,
@@ -513,7 +620,12 @@ func (s *Server) handleCallHistory(w http.ResponseWriter, r *http.Request, confi
 		offset = v
 	}
 	if query != "" {
-		records, err := s.store.SearchCallHistory(config.ID, query, limit)
+		iccid := firstNonEmpty(expectedICCID, s.currentConfiguredICCID(config))
+		if iccid == "" {
+			writeError(w, http.StatusConflict, cardGateCodeIdentityUnavailable, "the active card ICCID is unavailable")
+			return true
+		}
+		records, err := s.store.SearchCallHistoryForCard(config.ID, iccid, query, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 			return true
@@ -524,7 +636,12 @@ func (s *Server) handleCallHistory(w http.ResponseWriter, r *http.Request, confi
 		}})
 		return true
 	}
-	records, total, err := s.store.ListCallHistory(config.ID, limit, offset)
+	iccid := firstNonEmpty(expectedICCID, s.currentConfiguredICCID(config))
+	if iccid == "" {
+		writeError(w, http.StatusConflict, cardGateCodeIdentityUnavailable, "the active card ICCID is unavailable")
+		return true
+	}
+	records, total, err := s.store.ListCallHistoryForCard(config.ID, iccid, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return true
@@ -540,10 +657,18 @@ func (s *Server) handleDeleteCallRecord(w http.ResponseWriter, r *http.Request, 
 	if !requireMethod(w, r, http.MethodDelete) {
 		return true
 	}
+	expectedICCID := strings.TrimSpace(r.URL.Query().Get("iccid"))
+	if expectedICCID == "" {
+		writeError(w, http.StatusBadRequest, cardGateCodeIdentityUnavailable, "iccid is required for call history deletion")
+		return true
+	}
+	if _, ok := s.RequireRegisteredActiveCard(w, r, config.ID, expectedICCID); !ok {
+		return true
+	}
 	idStr := r.URL.Query().Get("id")
 	if idStr == "" {
 		// Delete all
-		if err := s.store.DeleteAllCallHistory(config.ID); err != nil {
+		if err := s.store.DeleteAllCallHistoryForCard(config.ID, expectedICCID); err != nil {
 			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 			return true
 		}
@@ -555,7 +680,7 @@ func (s *Server) handleDeleteCallRecord(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusBadRequest, "invalid_id", "call record id must be an integer")
 		return true
 	}
-	if err := s.store.DeleteCallRecord(config.ID, id); err != nil {
+	if err := s.store.DeleteCallRecordForCard(config.ID, expectedICCID, id); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return true
 	}
@@ -569,6 +694,7 @@ func (s *Server) handleRecordMissedCall(w http.ResponseWriter, r *http.Request, 
 	}
 	var request struct {
 		Number string `json:"number"`
+		ICCID  string `json:"iccid"`
 	}
 	if err := s.decodeJSON(w, r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -578,8 +704,18 @@ func (s *Server) handleRecordMissedCall(w http.ResponseWriter, r *http.Request, 
 	if number == "" {
 		number = "unknown"
 	}
+	expectedICCID := firstNonEmpty(strings.TrimSpace(request.ICCID), strings.TrimSpace(r.URL.Query().Get("iccid")))
+	if expectedICCID == "" {
+		writeError(w, http.StatusBadRequest, cardGateCodeIdentityUnavailable, "iccid is required for missed call history")
+		return true
+	}
+	execution, ok := s.RequireRegisteredActiveCard(w, r, config.ID, expectedICCID)
+	if !ok {
+		return true
+	}
 	_ = s.store.InsertCallRecord(store.CallRecord{
 		DeviceID:  config.ID,
+		ICCID:     execution.ICCID,
 		Number:    number,
 		Direction: "incoming",
 		Status:    "missed",
@@ -588,4 +724,12 @@ func (s *Server) handleRecordMissedCall(w http.ResponseWriter, r *http.Request, 
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"recorded": true}})
 	return true
+}
+
+func (s *Server) currentConfiguredICCID(config store.Device) string {
+	entry, _, present := s.physicalForConfig(config)
+	if !present || entry.Snapshot == nil {
+		return ""
+	}
+	return strings.TrimSpace(entry.Snapshot.ICCID)
 }

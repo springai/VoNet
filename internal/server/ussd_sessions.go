@@ -22,12 +22,18 @@ const (
 type ussdSessionStore struct {
 	mu       sync.Mutex
 	sessions map[string]ussdServerSession
+	owners   map[string]ussdSessionOwner
 }
 
 type ussdServerSession struct {
 	deviceID         string
 	networkSessionID string
 	createdAt        time.Time
+}
+
+type ussdSessionOwner struct {
+	deviceID string
+	iccid    string
 }
 
 func (session ussdServerSession) expired(now time.Time) bool {
@@ -43,7 +49,10 @@ func (store *ussdSessionStore) pruneExpiredLocked(now time.Time) {
 }
 
 func newUSSDSessionStore() ussdSessionStore {
-	return ussdSessionStore{sessions: make(map[string]ussdServerSession)}
+	return ussdSessionStore{
+		sessions: make(map[string]ussdServerSession),
+		owners:   make(map[string]ussdSessionOwner),
+	}
 }
 
 func (store *ussdSessionStore) openWithNetwork(deviceID, networkSessionID string) string {
@@ -63,6 +72,28 @@ func (store *ussdSessionStore) openWithNetwork(deviceID, networkSessionID string
 	}
 	store.mu.Unlock()
 	return id
+}
+
+func (store *ussdSessionStore) trackOwner(sessionID, deviceID, iccid string) {
+	sessionID = strings.TrimSpace(sessionID)
+	deviceID = strings.TrimSpace(deviceID)
+	iccid = strings.TrimSpace(iccid)
+	if sessionID == "" || deviceID == "" || iccid == "" {
+		return
+	}
+	store.mu.Lock()
+	if store.owners == nil {
+		store.owners = make(map[string]ussdSessionOwner)
+	}
+	store.owners[sessionID] = ussdSessionOwner{deviceID: deviceID, iccid: iccid}
+	store.mu.Unlock()
+}
+
+func (store *ussdSessionStore) owner(sessionID string) (ussdSessionOwner, bool) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	owner, ok := store.owners[strings.TrimSpace(sessionID)]
+	return owner, ok
 }
 
 func (store *ussdSessionStore) networkSession(sessionID string) string {
@@ -91,6 +122,8 @@ func (store *ussdSessionStore) device(sessionID string) (string, error) {
 
 func (store *ussdSessionStore) drop(sessionID string) {
 	store.mu.Lock()
-	delete(store.sessions, strings.TrimSpace(sessionID))
+	sessionID = strings.TrimSpace(sessionID)
+	delete(store.sessions, sessionID)
+	delete(store.owners, sessionID)
 	store.mu.Unlock()
 }

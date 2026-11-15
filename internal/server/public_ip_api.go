@@ -111,6 +111,9 @@ func (s *Server) schedulePublicIPDetection(configID, physicalID string, revision
 		if !validICCID(iccid) {
 			return
 		}
+		if _, err := s.ResolveRegisteredActiveCard(ctx, configID, iccid); err != nil {
+			return
+		}
 
 		info, err := s.lookupCellularPublicIP(ctx, config.Interface)
 		if err != nil {
@@ -147,6 +150,15 @@ func (s *Server) handleCellularPublicIP(w http.ResponseWriter, r *http.Request, 
 	}
 	if !s.developerActive(r.Context()) {
 		writeError(w, http.StatusForbidden, "developer_mode_required", "public IP detection through roaming data is available only in developer mode")
+		return true
+	}
+	if r.Method != http.MethodGet || config.NetworkEnabled {
+		expectedICCID := firstNonEmpty(strings.TrimSpace(r.URL.Query().Get("iccid")), iccid)
+		if _, ok := s.RequireRegisteredActiveCard(w, r, config.ID, expectedICCID); !ok {
+			return true
+		}
+	} else if !AllowCardStop(config.ID) {
+		writeError(w, http.StatusBadRequest, cardGateCodeInvalidDevice, "device ID is invalid")
 		return true
 	}
 	w.Header().Set("Cache-Control", "no-store")

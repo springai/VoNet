@@ -1,4 +1,4 @@
-import type { DeviceListItem } from "../../types";
+import type { DeviceListItem, SimCardCandidate } from "../../types";
 import { Input, Select, Tag, ListSkeleton, EmptyState } from "../ui";
 import { isDeviceOnline, isRegistered, isVoWiFiInUse, lifecycleLabel } from "./shared";
 import { DeviceListItemCard } from "./DeviceListItemCard";
@@ -18,6 +18,7 @@ export interface DeviceListPanelProps {
   filteredDevices: DeviceListItem[];
   deviceCount: number;
   deviceLimit: number;
+  candidateByICCID?: Record<string, SimCardCandidate>;
   onQueryChange: (v: string) => void;
   onStatusFilterChange: (v: StatusFilter) => void;
   onSortKeyChange: (v: SortKey) => void;
@@ -102,6 +103,7 @@ export function DeviceListPanel(props: DeviceListPanelProps) {
                 device={d}
                 selected={selectedId === d.id}
                 statusText={statusLine(d)}
+                candidate={props.candidateByICCID?.[String(d.modem?.iccid || d.vowifiRuntime?.iccid || "").replace(/\s+/g, "")]}
                 onSelect={props.onSelectDevice}
               />
             ))}

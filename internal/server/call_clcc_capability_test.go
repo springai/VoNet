@@ -33,8 +33,10 @@ func TestHandleCallsReportsUnsupportedCLCCWithoutIssuingAT(t *testing.T) {
 		supportsCLCC: false,
 		fakeDeviceController: fakeDeviceController{
 			entry: device.Device{
-				ID:        "physical-1",
-				Candidate: modem.Candidate{VendorID: "19d2", ProductID: "0536"},
+				ID:         "device-1",
+				Discovered: true,
+				Snapshot:   &device.Snapshot{DeviceID: "device-1", Responsive: true, SIMReady: true, ICCID: testICCIDCurrent},
+				Candidate:  modem.Candidate{VendorID: "19d2", ProductID: "0536"},
 			},
 			atHandler: func(command string) (modem.Response, error) {
 				issued = append(issued, command)
@@ -42,11 +44,16 @@ func TestHandleCallsReportsUnsupportedCLCCWithoutIssuingAT(t *testing.T) {
 			},
 		},
 	}
-	server := &Server{devices: controller}
+	server := regionServer(t, "310260123456789")
+	server.devices = controller
+	if err := server.store.UpsertDevice(context.Background(), store.Device{ID: "device-1", Name: "Modem"}); err != nil {
+		t.Fatal(err)
+	}
+	registerActiveTestCard(t, server.store, "device-1", "device-1", testICCIDCurrent)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/devices/device-1/calls", nil)
 
-	if !server.handleCalls(recorder, request, store.Device{ID: "device-1"}, "physical-1") {
+	if !server.handleCalls(recorder, request, store.Device{ID: "device-1"}, "device-1") {
 		t.Fatal("handleCalls did not handle the request")
 	}
 	if recorder.Code != http.StatusNotImplemented {
@@ -73,7 +80,9 @@ func TestHandleCallsUsesCLCCForCapableFirmware(t *testing.T) {
 	controller := clccCapabilityController{
 		supportsCLCC: true,
 		fakeDeviceController: fakeDeviceController{
-			entry: device.Device{ID: "physical-1"},
+			entry: device.Device{ID: "device-1", Discovered: true, Snapshot: &device.Snapshot{
+				DeviceID: "device-1", Responsive: true, SIMReady: true, ICCID: testICCIDCurrent,
+			}},
 			atHandler: func(command string) (modem.Response, error) {
 				if command != "AT+CLCC" {
 					t.Fatalf("command = %q, want AT+CLCC", command)
@@ -85,11 +94,16 @@ func TestHandleCallsUsesCLCCForCapableFirmware(t *testing.T) {
 			},
 		},
 	}
-	server := &Server{devices: controller}
+	server := regionServer(t, "310260123456789")
+	server.devices = controller
+	if err := server.store.UpsertDevice(context.Background(), store.Device{ID: "device-1", Name: "Modem"}); err != nil {
+		t.Fatal(err)
+	}
+	registerActiveTestCard(t, server.store, "device-1", "device-1", testICCIDCurrent)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/devices/device-1/calls", nil)
 
-	if !server.handleCalls(recorder, request, store.Device{ID: "device-1"}, "physical-1") {
+	if !server.handleCalls(recorder, request, store.Device{ID: "device-1"}, "device-1") {
 		t.Fatal("handleCalls did not handle the request")
 	}
 	if recorder.Code != http.StatusOK {

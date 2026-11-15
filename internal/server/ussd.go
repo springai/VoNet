@@ -16,9 +16,20 @@ var errInvalidUSSDRequest = errors.New("invalid USSD request")
 // startUSSD is shared by HTTP and Telegram. IMS runtimes are keyed by the
 // configured ID; only the cellular device manager accepts the discovered ID.
 func (s *Server) startUSSD(ctx context.Context, config store.Device, physicalID, code string) (device.USSDResult, error) {
+	return s.startUSSDForCard(ctx, config, physicalID, code, "")
+}
+
+func (s *Server) startUSSDForCard(ctx context.Context, config store.Device, physicalID, code, expectedICCID string) (device.USSDResult, error) {
+	card, err := s.ResolveRegisteredActiveCard(ctx, config.ID, expectedICCID)
+	if err != nil {
+		return device.USSDResult{}, err
+	}
 	code = strings.TrimSpace(code)
 	if !device.ValidUSSDCode(code) {
 		return device.USSDResult{}, fmt.Errorf("%w: invalid USSD service code", errInvalidUSSDRequest)
+	}
+	if _, err := s.ResolveRegisteredActiveCard(ctx, config.ID, card.ICCID); err != nil {
+		return device.USSDResult{}, err
 	}
 	if code == "*#06#" || code == "*#06" {
 		imei := config.ModemIMEI
@@ -37,12 +48,21 @@ func (s *Server) startUSSD(ctx context.Context, config store.Device, physicalID,
 		}
 	}
 	if !config.VoWiFiEnabled {
+		if _, err := s.ResolveRegisteredActiveCard(ctx, config.ID, card.ICCID); err != nil {
+			return device.USSDResult{}, err
+		}
 		s.logUSSDRoute(config.ID, physicalID, "cellular")
 		result, err := s.devices.USSD(ctx, physicalID, code)
 		result.Channel = "cellular"
+		if result.SessionID != "" {
+			s.ussdSessions.trackOwner(result.SessionID, config.ID, card.ICCID)
+		}
 		return result, err
 	}
 	if err := s.requireUSSI(config.ID); err != nil {
+		return device.USSDResult{}, err
+	}
+	if _, err := s.ResolveRegisteredActiveCard(ctx, config.ID, card.ICCID); err != nil {
 		return device.USSDResult{}, err
 	}
 	s.logUSSDRoute(config.ID, physicalID, "ims")
@@ -59,6 +79,7 @@ func (s *Server) startUSSD(ctx context.Context, config store.Device, physicalID,
 			return device.USSDResult{}, errors.New("IMS returned an interactive USSI result without a dialog ID")
 		}
 		mapped.SessionID = s.openUSSDSessionWithNetwork(config.ID, result.SessionID)
+		s.ussdSessions.trackOwner(mapped.SessionID, config.ID, card.ICCID)
 	}
 	return mapped, nil
 }
@@ -82,9 +103,22 @@ func (s *Server) requireUSSI(deviceID string) error {
 
 func (s *Server) continueUSSD(ctx context.Context, sessionID, input string) (device.USSDResult, error) {
 	sessionID, input = strings.TrimSpace(sessionID), strings.TrimSpace(input)
+	owner, hasOwner := s.ussdSessions.owner(sessionID)
+	if !hasOwner {
+		return device.USSDResult{}, device.ErrUSSDSessionNotFound
+	}
+	if strings.TrimSpace(owner.deviceID) == "" || strings.TrimSpace(owner.iccid) == "" {
+		return device.USSDResult{}, ErrCardBindingStale
+	}
+	if _, err := s.ResolveRegisteredActiveCard(ctx, owner.deviceID, owner.iccid); err != nil {
+		return device.USSDResult{}, err
+	}
 	deviceID, err := s.ussdSessionDevice(sessionID)
 	if err != nil {
 		if strings.HasPrefix(sessionID, ussiSessionPrefix) {
+			return device.USSDResult{}, err
+		}
+		if _, err := s.ResolveRegisteredActiveCard(ctx, owner.deviceID, owner.iccid); err != nil {
 			return device.USSDResult{}, err
 		}
 		result, err := s.devices.ContinueUSSD(ctx, sessionID, input)
@@ -99,6 +133,9 @@ func (s *Server) continueUSSD(ctx context.Context, sessionID, input string) (dev
 		return device.USSDResult{}, fmt.Errorf("%w: USSI continue input is empty", errInvalidUSSDRequest)
 	}
 	if err := s.requireUSSI(deviceID); err != nil {
+		return device.USSDResult{}, err
+	}
+	if _, err := s.ResolveRegisteredActiveCard(ctx, owner.deviceID, owner.iccid); err != nil {
 		return device.USSDResult{}, err
 	}
 	result, err := s.vowifi.(imsUSSIController).SendUSSI(ctx, deviceID, vowifi.USSISubmitRequest{SessionID: networkID, Input: input})
@@ -125,6 +162,9 @@ func (s *Server) continueUSSD(ctx context.Context, sessionID, input string) (dev
 
 func (s *Server) cancelUSSD(ctx context.Context, sessionID string) error {
 	sessionID = strings.TrimSpace(sessionID)
+	if owner, ok := s.ussdSessions.owner(sessionID); ok && !AllowCardStop(owner.deviceID) {
+		return fmt.Errorf("%w: invalid USSD session device", ErrCardBindingStale)
+	}
 	deviceID, err := s.ussdSessionDevice(sessionID)
 	if err != nil {
 		if strings.HasPrefix(sessionID, ussiSessionPrefix) {

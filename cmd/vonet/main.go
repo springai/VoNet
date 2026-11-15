@@ -1150,38 +1150,8 @@ func configureVoWiFiRuntime(
 			_ = manager.Close(context.Background())
 			return nil, fmt.Errorf("register device %q VoWiFi runtime: %w", deviceConfig.ID, err)
 		}
-		if deviceConfig.VoWiFiEnabled {
-			if entry, mapErr := mapper.Get(deviceConfig.ID); mapErr == nil {
-				flightErr := protectVoWiFiStartupRadio(ctx, deviceManager, entry.ID)
-				if flightErr != nil {
-					// A modem can be temporarily unavailable while OpenWrt/procd is
-					// restarting the service (notably after loading XFRM modules). Do
-					// not take the Web/API service down with it: the orchestrator below
-					// remains fail-closed and its runtime manager retries until CFUN=4
-					// can be established.
-					logger.Warn(
-						"VoWiFi startup radio protection deferred to automatic retry",
-						"device_id", deviceConfig.ID,
-						"error", flightErr,
-					)
-				}
-			}
-			requestEnable := func() error {
-				_, requestErr := manager.RequestEnabled(deviceConfig.ID, true)
-				return requestErr
-			}
-			if err := requestVoWiFiStartup(
-				ctx,
-				logger,
-				deviceConfig.DeviceType,
-				deviceConfig.ID,
-				wifi410VoWiFiStartupDelay,
-				requestEnable,
-			); err != nil {
-				_ = manager.Close(context.Background())
-				return nil, fmt.Errorf("start device %q VoWiFi policy: %w", deviceConfig.ID, err)
-			}
-		}
+		// Starting service is card-gated. A saved device is only a hardware
+		// host and must wait for a manually registered, stably bound ICCID.
 	}
 	return manager, nil
 }
@@ -1739,7 +1709,7 @@ func pollDeviceSnapshots(
 				}
 				if refreshErr == nil && ctx.Err() == nil {
 					enforceCardRegion(ctx, logger, database, manager, entry.ID, &snapshot)
-					enforceDefaultSafeCardPolicy(ctx, logger, database, manager, entry.ID, &snapshot)
+					enforceUnregisteredCardSafety(ctx, logger, database, manager, entry.ID, &snapshot)
 					recoverRegistration(entry, snapshot, recoveryTracker.observe(entry.ID, &snapshot, time.Now()))
 				}
 			}()
@@ -1759,10 +1729,10 @@ func pollDeviceSnapshots(
 	}
 }
 
-// enforceDefaultSafeCardPolicy handles a newly inserted physical SIM or a
-// profile that has never had a policy. RF is turned off before the default is
-// persisted; the VoWiFi runtime reconciler then starts service asynchronously.
-func enforceDefaultSafeCardPolicy(
+// enforceUnregisteredCardSafety protects an unknown SIM without registering
+// it or creating policy state. Service remains suspended until the user saves
+// the ICCID in card management and a stable binding becomes active.
+func enforceUnregisteredCardSafety(
 	ctx context.Context,
 	logger *slog.Logger,
 	database *store.Store,
@@ -1775,25 +1745,17 @@ func enforceDefaultSafeCardPolicy(
 		return
 	}
 	iccid := strings.TrimSpace(snapshot.ICCID)
-	if _, err := database.CardPolicy(ctx, iccid); err == nil {
+	if _, err := database.SimCard(ctx, iccid); err == nil {
 		return
 	} else if !errors.Is(err, store.ErrNotFound) {
-		logger.Warn("default card policy: read policy", "iccid", iccid, "error", err)
+		logger.Warn("unregistered card safety: read card registry", "iccid", iccid, "error", err)
 		return
 	}
 	flightContext, cancel := context.WithTimeout(ctx, flightModeTransitionTimeout)
 	_, err := manager.SetFlight(flightContext, physicalID, true)
 	cancel()
 	if err != nil {
-		logger.Warn("default card policy: failed to establish airplane mode", "device_id", physicalID, "iccid", iccid, "error", err)
-		return
-	}
-	if err := database.UpsertCardPolicy(ctx, store.CardPolicy{
-		ICCID: iccid, VoWiFiEnabled: true, AirplaneEnabled: true,
-		IPVersion: "IPV4V6", Source: "default",
-	}); err != nil {
-		logger.Warn("default card policy: persist policy", "iccid", iccid, "error", err)
-		return
+		logger.Warn("unregistered card safety: failed to establish airplane mode", "device_id", physicalID, "iccid", iccid, "error", err)
 	}
 	mapper := integration.ATMapper{Store: database, Devices: manager}
 	configs, err := database.ListDevices(ctx)
@@ -1806,13 +1768,13 @@ func enforceDefaultSafeCardPolicy(
 			continue
 		}
 		config.NetworkEnabled = false
-		config.VoWiFiEnabled = true
+		config.VoWiFiEnabled = false
 		if err := database.UpsertDevice(ctx, config); err != nil {
-			logger.Warn("default card policy: update device policy", "device_id", config.ID, "error", err)
+			logger.Warn("unregistered card safety: update device state", "device_id", config.ID, "error", err)
 		}
 		break
 	}
-	logger.Info("new SIM protected by default VoWiFi/airplane policy", "device_id", physicalID, "iccid", iccid)
+	logger.Info("unregistered SIM protected in airplane mode", "device_id", physicalID, "iccid", iccid)
 }
 
 func reconcileCardPoliciesLegacy(

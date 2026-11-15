@@ -405,8 +405,8 @@ func normalizeDeviceProxyBinding(value DeviceProxyBinding) (DeviceProxyBinding, 
 	value.ICCID = strings.TrimSpace(value.ICCID)
 	value.ProfileName = strings.TrimSpace(value.ProfileName)
 	value.UpstreamProxyID = strings.TrimSpace(value.UpstreamProxyID)
-	if value.DeviceID == "" || value.ICCID == "" || value.UpstreamProxyID == "" {
-		return DeviceProxyBinding{}, errors.New("profile proxy binding requires device ID, ICCID, and upstream proxy ID")
+	if value.ICCID == "" || value.UpstreamProxyID == "" {
+		return DeviceProxyBinding{}, errors.New("profile proxy binding requires ICCID and upstream proxy ID")
 	}
 	now := time.Now().UTC()
 	if value.CreatedAt.IsZero() {

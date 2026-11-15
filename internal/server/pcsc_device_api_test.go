@@ -173,6 +173,9 @@ func TestPCSCIMEIEditReconnectsAndKeepsRandomModeStableDuringSave(t *testing.T) 
 	t.Cleanup(func() { _ = database.Close() })
 
 	entry := pcscServerTestEntry("SER-EDIT")
+	entry.Snapshot = &device.Snapshot{
+		DeviceID: entry.ID, Responsive: true, SIMReady: true, ICCID: testICCIDCurrent,
+	}
 	controller := &discoverySnapshotController{
 		fakeDeviceController: fakeDeviceController{entry: entry},
 		entries:              []device.Device{entry},
@@ -196,6 +199,7 @@ func TestPCSCIMEIEditReconnectsAndKeepsRandomModeStableDuringSave(t *testing.T) 
 	}, store.PCSCIMEILeaseRequest{Mode: "fixed", IMEI: pool[0].IMEI}); err != nil {
 		t.Fatal(err)
 	}
+	registerActiveTestCard(t, database, "Reader-SER-EDIT", entry.ID, testICCIDCurrent)
 
 	sendEdit := func(mode, imei string) *httptest.ResponseRecorder {
 		body, err := json.Marshal(map[string]any{"config": map[string]any{

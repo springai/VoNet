@@ -1,5 +1,5 @@
 import { api } from "../../api";
-import type { CardPolicy } from "../../types";
+import type { CardDeviceMode, CardPolicy, CellularIMSMode } from "../../types";
 
 async function ok(p: Promise<unknown>): Promise<{ ok: boolean }> {
   try {
@@ -10,14 +10,18 @@ async function ok(p: Promise<unknown>): Promise<{ ok: boolean }> {
   }
 }
 
-export function enableVoWiFi(deviceId: string) {
-  return ok(api(`/devices/${deviceId}/vowifi`, { method: "PATCH", body: { enabled: true } }));
+function cardQuery(iccid?: string) {
+  return iccid ? `?iccid=${encodeURIComponent(iccid)}` : "";
 }
-export function disableVoWiFi(deviceId: string) {
-  return ok(api(`/devices/${deviceId}/vowifi`, { method: "PATCH", body: { enabled: false } }));
+
+export function enableVoWiFi(deviceId: string, iccid?: string) {
+  return ok(api(`/devices/${encodeURIComponent(deviceId)}/vowifi${cardQuery(iccid)}`, { method: "PATCH", body: { enabled: true } }));
 }
-export function setFlightMode(deviceId: string, enabled: boolean) {
-  return ok(api(`/devices/${deviceId}/flight-mode`, { method: "PATCH", body: { enabled } }));
+export function disableVoWiFi(deviceId: string, iccid?: string) {
+  return ok(api(`/devices/${encodeURIComponent(deviceId)}/vowifi${cardQuery(iccid)}`, { method: "PATCH", body: { enabled: false } }));
+}
+export function setFlightMode(deviceId: string, enabled: boolean, iccid?: string) {
+  return ok(api(`/devices/${encodeURIComponent(deviceId)}/flight-mode${cardQuery(iccid)}`, { method: "PATCH", body: { enabled } }));
 }
 export function getCardPolicy(iccid: string) {
   return api<CardPolicy>(`/cards/${iccid}/policy`);
@@ -25,13 +29,16 @@ export function getCardPolicy(iccid: string) {
 export interface CardPolicyUpdate {
   vowifiEnabled?: boolean;
   airplaneEnabled?: boolean;
+  networkEnabled?: boolean;
+  runtimeMode?: CardDeviceMode;
+  cellularImsMode?: CellularIMSMode;
   apn?: string;
   ipVersion?: "IP" | "IPV6" | "IPV4V6";
   customPhoneNumber?: string;
   mbnProfile?: string;
 }
 
-export type CellularIMSMode = "mbn_default" | "force_enabled" | "force_disabled";
+export type { CellularIMSMode };
 export interface CellularIMSStatus {
   iccid: string;
   mode: CellularIMSMode;

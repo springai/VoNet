@@ -22,10 +22,10 @@ func TestUncertainSwitchRestoresLiveCardPolicyInsteadOfOldWiFiIntent(t *testing.
 		liveICCID         string
 		readErr           error
 	}{
-		{name: "new card disables old WiFi", oldWiFi: true, liveICCID: "new-card"},
-		{name: "new card enables its own WiFi", liveWiFi: true, liveICCID: "new-card"},
+		{name: "new card disables old WiFi", oldWiFi: true, liveICCID: "8900000000000000001"},
+		{name: "new card enables its own WiFi", liveWiFi: true, liveICCID: "8900000000000000001"},
 		{name: "unknown identity stays stopped", oldWiFi: true},
-		{name: "failed live read cannot use stale policy", oldWiFi: true, liveICCID: "new-card", readErr: errors.New("unavailable")},
+		{name: "failed live read cannot use stale policy", oldWiFi: true, liveICCID: "8900000000000000001", readErr: errors.New("unavailable")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, err := store.Open(context.Background(), ":memory:")
@@ -36,7 +36,10 @@ func TestUncertainSwitchRestoresLiveCardPolicyInsteadOfOldWiFiIntent(t *testing.
 			if err := db.UpsertDevice(context.Background(), store.Device{ID: "dev1", Name: "dev1", VoWiFiEnabled: tc.oldWiFi, APN: "old.apn"}); err != nil {
 				t.Fatal(err)
 			}
-			if err := db.UpsertCardPolicy(context.Background(), store.CardPolicy{ICCID: "new-card", VoWiFiEnabled: tc.liveWiFi, AirplaneEnabled: true, APN: "new.apn"}); err != nil {
+			if err := db.UpsertSimCard(context.Background(), store.SimCard{ICCID: "8900000000000000001"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.UpsertCardPolicy(context.Background(), store.CardPolicy{ICCID: "8900000000000000001", VoWiFiEnabled: tc.liveWiFi, AirplaneEnabled: true, APN: "new.apn"}); err != nil {
 				t.Fatal(err)
 			}
 			controller := &failedSwitchRecoveryController{liveSnapshot: device.Snapshot{ICCID: tc.liveICCID}, refreshErr: tc.readErr}
@@ -97,6 +100,9 @@ func TestRejectedProfileSwitchPreservesRFOffPolicy(t *testing.T) {
 				entry.Snapshot = &device.Snapshot{ICCID: "8900000000000000001"}
 			}
 			if tc.knownPolicy {
+				if err := db.UpsertSimCard(context.Background(), store.SimCard{ICCID: entry.Snapshot.ICCID}); err != nil {
+					t.Fatal(err)
+				}
 				if err := db.UpsertCardPolicy(context.Background(), store.CardPolicy{
 					ICCID: entry.Snapshot.ICCID, AirplaneEnabled: tc.airplane,
 				}); err != nil {

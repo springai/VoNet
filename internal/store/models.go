@@ -147,28 +147,28 @@ type PhoneAssociation struct {
 }
 
 type AutomaticTask struct {
-	ID           int64           `json:"id"`
-	Name         string          `json:"name"`
-	Enabled      bool            `json:"enabled"`
-	DeviceID     string          `json:"device_id"`
-	ProfileICCID string          `json:"profile_iccid"`
-	ProfileAID   string          `json:"profile_aid"`
-	TaskType     string          `json:"task_type"`
-	Environment  string          `json:"environment"`
-	IntervalDays int             `json:"interval_days"`
-	StartDate    string          `json:"start_date"`
-	RunTime      string          `json:"run_time"`
-	Timezone     string          `json:"timezone"`
-	Payload      json.RawMessage `json:"payload"`
-	RetryCount   int             `json:"retry_count"`
-	Notify       bool            `json:"notify"`
+	ID            int64           `json:"id"`
+	Name          string          `json:"name"`
+	Enabled       bool            `json:"enabled"`
+	DeviceID      string          `json:"device_id"`
+	ProfileICCID  string          `json:"profile_iccid"`
+	ProfileAID    string          `json:"profile_aid"`
+	TaskType      string          `json:"task_type"`
+	Environment   string          `json:"environment"`
+	IntervalDays  int             `json:"interval_days"`
+	StartDate     string          `json:"start_date"`
+	RunTime       string          `json:"run_time"`
+	Timezone      string          `json:"timezone"`
+	Payload       json.RawMessage `json:"payload"`
+	RetryCount    int             `json:"retry_count"`
+	Notify        bool            `json:"notify"`
 	RevertProfile bool            `json:"revert_profile"`
-	NextRunAt    time.Time       `json:"next_run_at"`
-	LastRunAt    time.Time       `json:"last_run_at,omitempty"`
-	LastStatus   string          `json:"last_status"`
-	LastError    string          `json:"last_error"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	NextRunAt     time.Time       `json:"next_run_at"`
+	LastRunAt     time.Time       `json:"last_run_at,omitempty"`
+	LastStatus    string          `json:"last_status"`
+	LastError     string          `json:"last_error"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }
 
 type AutomaticTaskRun struct {
@@ -345,13 +345,13 @@ type DeviceProxyBinding struct {
 }
 
 type NotificationSetting struct {
-	Channel         string
-	Enabled         bool
-	Config          json.RawMessage
-	SensitiveFields []string
+	Channel              string
+	Enabled              bool
+	Config               json.RawMessage
+	SensitiveFields      []string
 	ClearSensitiveFields []string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 func (value NotificationSetting) Redacted() NotificationSetting {
@@ -517,9 +517,87 @@ type CardPolicy struct {
 	MBNProfile         string
 	CellularIMSEnabled bool
 	CellularIMSManaged bool
+	RuntimeMode        string
+	CellularIMSMode    string
 	Source             string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+}
+
+const (
+	SimCardTypePhysical = "physical_sim"
+	SimCardTypeESIM     = "esim_profile"
+
+	SimCardBindingPending  = "pending"
+	SimCardBindingActive   = "active"
+	SimCardBindingConflict = "conflict"
+	SimCardBindingOffline  = "offline"
+)
+
+type SimCard struct {
+	ICCID       string
+	DisplayName string
+	Notes       string
+	CardType    string
+	IMSI        string
+	MSISDN      string
+	Carrier     string
+	SPN         string
+	MCC         string
+	MNC         string
+	HomePLMN    string
+	EID         string
+	ProfileAID  string
+	HostType    string
+	Source      string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+type SimCardCandidate struct {
+	ICCID            string
+	DeviceID         string
+	PhysicalDeviceID string
+	HostType         string
+	CardType         string
+	IMSI             string
+	Carrier          string
+	SPN              string
+	State            string
+	FirstSeenAt      time.Time
+	LastSeenAt       time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+type SimCardObservation struct {
+	ID               int64
+	ICCID            string
+	DeviceID         string
+	PhysicalDeviceID string
+	EID              string
+	ProfileAID       string
+	Source           string
+	FirstSeenAt      time.Time
+	LastSeenAt       time.Time
+	LastEnabledAt    time.Time
+}
+
+type SimCardBinding struct {
+	ICCID            string
+	ObservationID    int64
+	DeviceID         string
+	PhysicalDeviceID string
+	EID              string
+	ProfileAID       string
+	Generation       int64
+	State            string
+	StableSince      time.Time
+	BoundAt          time.Time
+	LastSeenAt       time.Time
+	ClearedAt        time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type CardAPNProfile struct {

@@ -313,10 +313,10 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) bool {
 
 		config := payload.toStoreDevice()
 		isNative410 := config.DeviceType == store.DeviceTypeWiFi410
-		// Newly added hardware starts fail-closed: RF is disabled immediately and
-		// VoWiFi becomes the desired service on supported devices. Native 410
-		// uses its QMI UIM/DMS/NAS adapter; only cellular SMS remains unavailable.
-		config.VoWiFiEnabled = true
+		// Newly added hardware starts fail-closed. VoWiFi and cellular service
+		// remain off until the current ICCID is manually registered and a stable
+		// card binding applies its saved policy.
+		config.VoWiFiEnabled = false
 		if isNative410 {
 			config.SMSEnabled = false
 		}
@@ -367,9 +367,8 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) bool {
 		// enumerated USB modem may still be settling, or ModemManager may not yet
 		// have released its AT port. Rejecting the whole add operation in that
 		// transient window leaves no configured identity for the periodic recovery
-		// loop to retry. The stored desired state remains fail-closed (cellular data
-		// disabled, VoWiFi enabled); report the incomplete hardware transition as a
-		// warning while allowing normal reconciliation to finish it later.
+		// loop to retry. Report the incomplete hardware transition as a warning
+		// while allowing normal recovery to finish it later.
 		flightWarning := ""
 		if _, err := s.devices.SetFlight(r.Context(), selected.ID, true); err != nil {
 			flightWarning = "device configuration was saved, but the modem did not enter airplane mode yet; VoNet will retry during recovery"
@@ -378,27 +377,6 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) bool {
 				"physical_device_id", selected.ID,
 				"error", device.HardwareErrorDetail(err),
 			)
-		}
-		if selected.Snapshot != nil {
-			iccid := strings.TrimSpace(selected.Snapshot.ICCID)
-			if iccid != "" {
-				_, policyErr := s.store.CardPolicy(r.Context(), iccid)
-				if errors.Is(policyErr, store.ErrNotFound) {
-					policyErr = s.store.UpsertCardPolicy(r.Context(), store.CardPolicy{
-						ICCID: iccid, VoWiFiEnabled: true, AirplaneEnabled: true,
-						IPVersion: "IPV4V6", Source: "default",
-					})
-				}
-				if policyErr != nil {
-					s.writeStoreError(w, policyErr)
-					return true
-				}
-			}
-		}
-		if s.vowifi != nil && config.VoWiFiEnabled {
-			if _, err := s.vowifi.RequestEnabled(config.ID, true); err != nil {
-				s.logger.Warn("new device saved in safe airplane mode but VoWiFi start was not queued", "device_id", config.ID, "error", err)
-			}
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"data": map[string]any{
@@ -888,6 +866,9 @@ func (s *Server) handleDevicePath(
 				return true
 			}
 			next := payload.toStoreDevice()
+			// DeviceExtra carries internal lifecycle state such as
+			// card_runtime_stale. A normal config edit must not erase it.
+			next.Extra = config.Extra
 			if err := validateReaderTypeTransition(config.DeviceType, next.DeviceType); err != nil {
 				writeError(w, http.StatusConflict, "immutable_reader_device_type", "USB SIM reader device type cannot be changed to or from another device type")
 				return true
@@ -1054,7 +1035,7 @@ func (s *Server) handleDevicePath(
 		if !s.requirePhysicalDevice(w, physicalPresent) {
 			return true
 		}
-		return s.handleAT(w, r, physicalID)
+		return s.handleAT(w, r, config.ID, physicalID)
 	case "actions/ussd":
 		if !s.requirePhysicalDevice(w, physicalPresent) {
 			return true
@@ -1367,9 +1348,37 @@ func (s *Server) handleVoWiFiEnabled(
 		writeError(w, http.StatusConflict, "cellular_data_active", "disable roaming data before enabling VoWiFi")
 		return true
 	}
+	expectedICCID := strings.TrimSpace(r.URL.Query().Get("iccid"))
+	var execution CardExecutionContext
+	var stopExecution cardStopExecutionContext
+	releaseCard := func() {}
 	if request.Enabled {
-		entry, _, _ := s.physicalForConfig(config)
-		imsi := snapshotString(entry.Snapshot, func(snapshot *device.Snapshot) string { return snapshot.IMSI })
+		var ok bool
+		execution, ok = s.RequireRegisteredActiveCard(w, r, config.ID, expectedICCID)
+		if !ok {
+			return true
+		}
+		release, err := s.acquireCardExecution(r.Context(), execution)
+		if err != nil {
+			writeCardGateError(w, err)
+			return true
+		}
+		releaseCard = release
+		defer releaseCard()
+	} else if !AllowCardStop(config.ID) {
+		writeError(w, http.StatusBadRequest, cardGateCodeInvalidDevice, "device ID is invalid")
+		return true
+	} else {
+		var err error
+		stopExecution, releaseCard, err = s.acquireCardStopExecution(r.Context(), config, expectedICCID)
+		if err != nil {
+			writeCardGateError(w, err)
+			return true
+		}
+		defer releaseCard()
+	}
+	if request.Enabled {
+		imsi := snapshotString(&execution.Snapshot, func(snapshot *device.Snapshot) string { return snapshot.IMSI })
 		if reason := device.RegionBlockReason(imsi); reason != "" {
 			writeError(w, http.StatusForbidden, "region_blocked", reason)
 			return true
@@ -1390,34 +1399,36 @@ func (s *Server) handleVoWiFiEnabled(
 	}
 	dataRuntime.invalidateWithMaintenancePhase(config.ID, desiredData, maintenancePhase, "", "vowifi")
 	liveICCID := ""
-	entry, physicalID, present := s.physicalForConfig(config)
-	if present {
+	physicalID := execution.PhysicalID
+	if !request.Enabled {
+		physicalID = stopExecution.PhysicalID
+		liveICCID = stopExecution.ICCID
+	} else {
+		liveICCID = execution.ICCID
+	}
+	if physicalID != "" {
 		if _, err := s.devices.SetFlight(r.Context(), physicalID, true); err != nil {
 			s.writeDeviceError(w, err)
 			return true
 		}
 	}
-	if entry.Snapshot != nil {
-		iccid := strings.TrimSpace(entry.Snapshot.ICCID)
-		if iccid != "" {
-			liveICCID = iccid
-			policy, policyErr := s.store.CardPolicy(r.Context(), iccid)
-			if errors.Is(policyErr, store.ErrNotFound) {
-				policy = store.CardPolicy{ICCID: iccid, IPVersion: "IPV4V6"}
-				policyErr = nil
-			}
-			if policyErr != nil {
-				s.writeStoreError(w, policyErr)
-				return true
-			}
-			policy.VoWiFiEnabled = request.Enabled
-			policy.AirplaneEnabled = true
-			policy.NetworkEnabled = false
-			policy.Source = "manual"
-			if err := s.store.UpsertCardPolicy(r.Context(), policy); err != nil {
-				s.writeStoreError(w, err)
-				return true
-			}
+	if liveICCID != "" {
+		policy, policyErr := s.store.CardPolicy(r.Context(), liveICCID)
+		if errors.Is(policyErr, store.ErrNotFound) {
+			policy = store.CardPolicy{ICCID: liveICCID, IPVersion: "IPV4V6"}
+			policyErr = nil
+		}
+		if policyErr != nil {
+			s.writeStoreError(w, policyErr)
+			return true
+		}
+		policy.VoWiFiEnabled = request.Enabled
+		policy.AirplaneEnabled = true
+		policy.NetworkEnabled = false
+		policy.Source = "manual"
+		if err := s.store.UpsertCardPolicy(r.Context(), policy); err != nil {
+			s.writeStoreError(w, err)
+			return true
 		}
 	}
 
@@ -1503,6 +1514,10 @@ func (s *Server) handleVoWiFiReconnect(
 		writeError(w, http.StatusServiceUnavailable, "physical_device_missing", "the configured modem is not present on this Linux host")
 		return true
 	}
+	expectedICCID := strings.TrimSpace(r.URL.Query().Get("iccid"))
+	if _, ok := s.RequireRegisteredActiveCard(w, r, config.ID, expectedICCID); !ok {
+		return true
+	}
 	state, err := s.vowifi.RequestReconnect(config.ID)
 	if err != nil {
 		s.writeVoWiFiError(w, err)
@@ -1559,8 +1574,13 @@ func actionRequestContext(parent context.Context, timeoutMs int) (context.Contex
 	return context.WithTimeout(parent, time.Duration(timeoutMs)*time.Millisecond)
 }
 
-func (s *Server) handleAT(w http.ResponseWriter, r *http.Request, id string) bool {
+func (s *Server) handleAT(w http.ResponseWriter, r *http.Request, configuredID, physicalID string) bool {
 	if !requireMethod(w, r, http.MethodPost) {
+		return true
+	}
+	expectedICCID := strings.TrimSpace(r.URL.Query().Get("iccid"))
+	execution, ok := s.RequireRegisteredActiveCard(w, r, configuredID, expectedICCID)
+	if !ok {
 		return true
 	}
 	var request struct {
@@ -1579,7 +1599,11 @@ func (s *Server) handleAT(w http.ResponseWriter, r *http.Request, id string) boo
 	}
 	ctx, cancel := actionRequestContext(r.Context(), request.TimeoutMs)
 	defer cancel()
-	response, err := s.devices.ExecuteAT(ctx, id, command)
+	if _, err := s.ResolveRegisteredActiveCard(ctx, configuredID, execution.ICCID); err != nil {
+		writeCardGateError(w, err)
+		return true
+	}
+	response, err := s.devices.ExecuteAT(ctx, physicalID, command)
 	if err != nil {
 		var commandErr *modem.CommandError
 		if errors.As(err, &commandErr) {
@@ -1594,7 +1618,7 @@ func (s *Server) handleAT(w http.ResponseWriter, r *http.Request, id string) boo
 			s.logger.Warn("AT command rejected by modem",
 				"category", "hardware",
 				"event", "hardware.at_rejected",
-				"device_id", id,
+				"device_id", configuredID,
 				"modem_final", commandErr.Final,
 				"raw_response", text,
 			)
@@ -1706,6 +1730,10 @@ func (s *Server) handleUSSD(w http.ResponseWriter, r *http.Request, config store
 	if !requireMethod(w, r, http.MethodPost) {
 		return true
 	}
+	expectedICCID := strings.TrimSpace(r.URL.Query().Get("iccid"))
+	if _, ok := s.RequireRegisteredActiveCard(w, r, config.ID, expectedICCID); !ok {
+		return true
+	}
 	var request struct {
 		Command   string `json:"command"`
 		TimeoutMs int    `json:"timeout_ms"`
@@ -1717,7 +1745,7 @@ func (s *Server) handleUSSD(w http.ResponseWriter, r *http.Request, config store
 	ctx, cancel := actionRequestContext(r.Context(), request.TimeoutMs)
 	defer cancel()
 
-	result, err := s.startUSSD(ctx, config, id, request.Command)
+	result, err := s.startUSSDForCard(ctx, config, id, request.Command, expectedICCID)
 	if err != nil {
 		s.writeDeviceError(w, err)
 		return true
@@ -1756,6 +1784,39 @@ func (s *Server) handleFlightMode(w http.ResponseWriter, r *http.Request, config
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return true
 	}
+	expectedICCID := strings.TrimSpace(r.URL.Query().Get("iccid"))
+	var execution CardExecutionContext
+	var stopExecution cardStopExecutionContext
+	var releaseCard func()
+	if request.Enabled {
+		if !AllowCardStop(config.ID) {
+			writeError(w, http.StatusBadRequest, cardGateCodeInvalidDevice, "device ID is invalid")
+			return true
+		}
+		var err error
+		stopExecution, releaseCard, err = s.acquireCardStopExecution(r.Context(), config, expectedICCID)
+		if err != nil {
+			writeCardGateError(w, err)
+			return true
+		}
+	} else {
+		var ok bool
+		execution, ok = s.RequireRegisteredActiveCard(w, r, config.ID, expectedICCID)
+		if !ok {
+			return true
+		}
+		release, err := s.acquireCardExecution(r.Context(), execution)
+		if err != nil {
+			writeCardGateError(w, err)
+			return true
+		}
+		releaseCard = release
+	}
+	defer releaseCard()
+	operationICCID := execution.ICCID
+	if request.Enabled {
+		operationICCID = stopExecution.ICCID
+	}
 	if config.VoWiFiEnabled {
 		writeError(w, http.StatusConflict, "vowifi_owns_airplane_mode", "airplane mode is locked on while VoWiFi is enabled")
 		return true
@@ -1778,27 +1839,24 @@ func (s *Server) handleFlightMode(w http.ResponseWriter, r *http.Request, config
 	// Unlike VoWiFi, CFUN airplane state is not represented in the device row.
 	// Persist it against the live ICCID so a restart can distinguish an
 	// intentional airplane policy from an interrupted VoWiFi teardown.
-	if entry, getErr := s.devices.Get(physicalID); getErr == nil && entry.Snapshot != nil {
-		iccid := strings.TrimSpace(entry.Snapshot.ICCID)
-		if iccid != "" {
-			policy, policyErr := s.store.CardPolicy(r.Context(), iccid)
-			if errors.Is(policyErr, store.ErrNotFound) {
-				policy = store.CardPolicy{ICCID: iccid, IPVersion: "IPV4V6"}
-				policyErr = nil
-			}
-			if policyErr != nil {
-				s.writeStoreError(w, policyErr)
-				return true
-			}
-			policy.AirplaneEnabled = request.Enabled
-			if request.Enabled {
-				policy.VoWiFiEnabled = false
-			}
-			policy.Source = "manual"
-			if err := s.store.UpsertCardPolicy(r.Context(), policy); err != nil {
-				s.writeStoreError(w, err)
-				return true
-			}
+	if operationICCID != "" {
+		policy, policyErr := s.store.CardPolicy(r.Context(), operationICCID)
+		if errors.Is(policyErr, store.ErrNotFound) {
+			policy = store.CardPolicy{ICCID: operationICCID, IPVersion: "IPV4V6"}
+			policyErr = nil
+		}
+		if policyErr != nil {
+			s.writeStoreError(w, policyErr)
+			return true
+		}
+		policy.AirplaneEnabled = request.Enabled
+		if request.Enabled {
+			policy.VoWiFiEnabled = false
+		}
+		policy.Source = "manual"
+		if err := s.store.UpsertCardPolicy(r.Context(), policy); err != nil {
+			s.writeStoreError(w, err)
+			return true
 		}
 	}
 	if !request.Enabled {
@@ -1809,11 +1867,10 @@ func (s *Server) handleFlightMode(w http.ResponseWriter, r *http.Request, config
 			// of leaving the runtime parked in the maintenance phase.
 			networkRequest := s.cellularNetworkRequest(r.Context(), config, nil)
 			networkRequest.Enabled = true
-			identity := ""
-			if entry, getErr := s.devices.Get(physicalID); getErr == nil && entry.Snapshot != nil {
-				networkRequest = s.cellularNetworkRequest(r.Context(), config, entry.Snapshot)
+			identity := operationICCID
+			if !request.Enabled {
+				networkRequest = s.cellularNetworkRequest(r.Context(), config, &execution.Snapshot)
 				networkRequest.Enabled = true
-				identity = strings.TrimSpace(entry.Snapshot.ICCID)
 			}
 			dataRuntime.requestWithIdentity(config.ID, physicalID, networkRequest, identity)
 		} else {
@@ -1898,6 +1955,10 @@ func (s *Server) handleCellularIMS(
 	iccid := ""
 	if entry.Snapshot != nil {
 		iccid = strings.TrimSpace(entry.Snapshot.ICCID)
+	}
+	expectedICCID := firstNonEmpty(strings.TrimSpace(r.URL.Query().Get("iccid")), iccid)
+	if _, ok := s.RequireRegisteredActiveCard(w, r, config.ID, expectedICCID); !ok {
+		return true
 	}
 	switch r.Method {
 	case http.MethodGet:
@@ -1990,6 +2051,10 @@ func (s *Server) restoreCellularDataAfterModemReboot(configID, physicalID, iccid
 				s.cellularDataRuntime().invalidateIfCurrent(configID, generation, "recovering", false, "disabled", "")
 				return
 			}
+			if _, err := s.ResolveRegisteredActiveCard(ctx, configID, iccid); err != nil {
+				s.cellularDataRuntime().invalidateIfCurrent(configID, generation, "recovering", true, "failed", err.Error())
+				return
+			}
 			entry, err := s.devices.Get(physicalID)
 			if err != nil || entry.Snapshot == nil || !entry.Snapshot.SIMReady ||
 				(iccid != "" && !strings.EqualFold(strings.TrimSpace(entry.Snapshot.ICCID), iccid)) ||
@@ -2069,6 +2134,10 @@ func (s *Server) handleCellularData(
 	}
 	switch r.Method {
 	case http.MethodGet:
+		expectedICCID := strings.TrimSpace(r.URL.Query().Get("iccid"))
+		if _, ok := s.RequireRegisteredActiveCard(w, r, config.ID, expectedICCID); !ok {
+			return true
+		}
 		runtime := s.cellularDataRuntime().status(config.ID, config.NetworkEnabled)
 		if observer, ok := s.devices.(cellularNetworkStatusController); ok {
 			probeContext, cancel := context.WithTimeout(r.Context(), 4*time.Second)
@@ -2100,6 +2169,26 @@ func (s *Server) handleCellularData(
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return true
 		}
+		expectedICCID := strings.TrimSpace(r.URL.Query().Get("iccid"))
+		var execution CardExecutionContext
+		var stopExecution cardStopExecutionContext
+		var releaseCard func()
+		if request.Enabled {
+			var ok bool
+			execution, ok = s.RequireRegisteredActiveCard(w, r, config.ID, expectedICCID)
+			if !ok {
+				return true
+			}
+			release, err := s.acquireCardExecution(r.Context(), execution)
+			if err != nil {
+				writeCardGateError(w, err)
+				return true
+			}
+			releaseCard = release
+		} else if !AllowCardStop(config.ID) {
+			writeError(w, http.StatusBadRequest, cardGateCodeInvalidDevice, "device ID is invalid")
+			return true
+		}
 		if request.Enabled && config.VoWiFiEnabled {
 			writeError(w, http.StatusConflict, "vowifi_owns_radio", "disable VoWiFi before enabling cellular roaming data")
 			return true
@@ -2110,15 +2199,30 @@ func (s *Server) handleCellularData(
 				return true
 			}
 		}
+		if !request.Enabled {
+			var err error
+			stopExecution, releaseCard, err = s.acquireCardStopExecution(r.Context(), config, expectedICCID)
+			if err != nil {
+				writeCardGateError(w, err)
+				return true
+			}
+		}
+		if releaseCard != nil {
+			defer releaseCard()
+		}
 		apn := strings.TrimSpace(request.APN)
 		policyIPVersion := "IPV4V6"
-		activeICCID := ""
+		activeICCID := execution.ICCID
+		if !request.Enabled {
+			activeICCID = stopExecution.ICCID
+		}
 		isRoaming := false
 		var activePolicy store.CardPolicy
 		var activeAPNProfile store.CardAPNProfile
-		if entry, getErr := s.devices.Get(physicalID); getErr == nil && entry.Snapshot != nil {
-			activeICCID = strings.TrimSpace(entry.Snapshot.ICCID)
-			isRoaming = entry.Snapshot.RegistrationStatus == 5
+		if request.Enabled {
+			isRoaming = execution.Snapshot.RegistrationStatus == 5
+		}
+		if activeICCID != "" {
 			if stored, policyErr := s.store.CardPolicy(r.Context(), activeICCID); policyErr == nil {
 				activePolicy = stored
 				if apn == "" {
@@ -2181,6 +2285,12 @@ func (s *Server) handleCellularData(
 			// disable request; the hardware stop itself is asynchronous.
 			s.clearPublicIP(config.ID)
 		}
+		if request.Enabled {
+			if _, err := s.ResolveRegisteredActiveCard(r.Context(), config.ID, activeICCID); err != nil {
+				writeCardGateError(w, err)
+				return true
+			}
+		}
 		runtime := s.cellularDataRuntime().requestWithIdentity(config.ID, physicalID, networkRequest, activeICCID)
 		writeJSON(w, http.StatusAccepted, map[string]any{"data": map[string]any{
 			"enabled": request.Enabled, "desired_enabled": runtime.DesiredEnabled,
@@ -2210,14 +2320,20 @@ func (s *Server) requirePhysicalDevice(w http.ResponseWriter, present bool) bool
 }
 
 func (s *Server) writeDeviceError(w http.ResponseWriter, err error) {
-	s.logger.Warn("hardware operation failed",
-		"category", "hardware",
-		"event", "hardware.operation_failed",
-		"raw_error", device.HardwareErrorDetail(err),
-	)
+	// Capability rejection is an expected boundary result, not a hardware
+	// failure. This keeps PC/SC readers from producing misleading modem logs.
+	if !errors.Is(err, device.ErrUnsupportedCapability) {
+		s.logger.Warn("hardware operation failed",
+			"category", "hardware",
+			"event", "hardware.operation_failed",
+			"raw_error", device.HardwareErrorDetail(err),
+		)
+	}
 	switch {
 	case errors.Is(err, errInvalidUSSDRequest):
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+	case errors.Is(err, device.ErrUnsupportedCapability):
+		writeError(w, http.StatusNotImplemented, "unsupported_capability", err.Error())
 	case errors.Is(err, vowifi.ErrUSSINotReady):
 		writeError(w, http.StatusServiceUnavailable, "ussi_not_ready", err.Error())
 	case errors.Is(err, device.ErrUSSDSessionNotFound), errors.Is(err, vowifi.ErrUSSISessionNotFound):
@@ -2947,6 +3063,7 @@ func storedDeviceConfig(config store.Device) map[string]any {
 	if strings.TrimSpace(config.SIMPIN) != "" {
 		simPIN = store.SecretMask
 	}
+	stale := config.CardRuntimeStale()
 	return map[string]any{
 		"id":                   config.ID,
 		"name":                 config.Name,
@@ -2972,6 +3089,11 @@ func storedDeviceConfig(config store.Device) map[string]any {
 		"network_enabled":      config.NetworkEnabled,
 		"sms_enabled":          config.SMSEnabled,
 		"vowifi_enabled":       config.VoWiFiEnabled,
+		"card_runtime_stale": map[string]bool{
+			"binding":        stale.Binding,
+			"device_backend": stale.DeviceBackend,
+			"cellular_ims":   stale.CellularIMS,
+		},
 	}
 }
 
@@ -3020,8 +3142,11 @@ func (s *Server) pcscIMEILeaseRequest(
 	return store.PCSCIMEILeaseRequest{Mode: "random"}, nil
 }
 
-func (s *Server) reconnectForPCSCIMEIChange(_ context.Context, deviceID string) {
+func (s *Server) reconnectForPCSCIMEIChange(ctx context.Context, deviceID string) {
 	if s.vowifi == nil {
+		return
+	}
+	if _, err := s.ResolveRegisteredActiveCard(ctx, deviceID, ""); err != nil {
 		return
 	}
 	state, err := s.vowifi.State(deviceID)

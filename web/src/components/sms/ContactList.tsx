@@ -54,7 +54,7 @@ export function ContactList(props: ContactListProps) {
       <div className="border-b border-gray-100 p-4 dark:border-white/10">
         <div className="space-y-3">
           {isMobile && (
-            <Select value={selectedDevice} onChange={onSelectDevice} options={deviceOptions} placeholder={t("选择设备")} />
+            <Select value={selectedDevice} onChange={onSelectDevice} options={deviceOptions} placeholder={t("选择卡片")} />
           )}
           <Input
             value={searchQuery}

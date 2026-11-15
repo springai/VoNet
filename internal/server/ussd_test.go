@@ -49,9 +49,12 @@ func newUSSDRoutingServer(t *testing.T, enabled bool) (*Server, *recordingUSSDDe
 		t.Fatal(err)
 	}
 	d := &recordingUSSDDevice{fakeDeviceController: fakeDeviceController{
-		entry:      device.Device{ID: "physical-1-6-1", Discovered: true, Snapshot: &device.Snapshot{IMEI: config.ModemIMEI}},
+		entry: device.Device{ID: "physical-1-6-1", Discovered: true, Snapshot: &device.Snapshot{
+			DeviceID: "physical-1-6-1", Responsive: true, SIMReady: true, ICCID: testICCIDCurrent, IMEI: config.ModemIMEI,
+		}},
 		ussdResult: device.USSDResult{Status: "awaiting_input", Text: "cellular menu", SessionID: "cellular-token", Continueable: true},
 	}}
+	registerActiveTestCard(t, db, config.ID, d.entry.ID, testICCIDCurrent)
 	ims := &fakeUSSIController{
 		fakeVoWiFiController: fakeVoWiFiController{state: vowifi.State{IMSReady: true}},
 		expectedDeviceID:     config.ID,
@@ -333,6 +336,7 @@ func TestUSSIConfirmedMissingDialogReleasesToken(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			s, cellular, ims := newUSSDRoutingServer(t, true)
 			token := s.openUSSDSessionWithNetwork("saved-1-6", "dialog-1")
+			s.ussdSessions.trackOwner(token, "saved-1-6", testICCIDCurrent)
 			ims.sendErr, ims.cancelErr = vowifi.ErrUSSISessionNotFound, vowifi.ErrUSSISessionNotFound
 			var err error
 			if action == "continue" {

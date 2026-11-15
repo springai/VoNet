@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"vonet/internal/modem"
+	"vonet/internal/pcsc"
 )
 
 // fakeATHostSession records Close/Status calls for AT host data lifecycle tests.
@@ -213,6 +214,46 @@ func TestSetNetworkATConfiguresPDPThenHostLease(t *testing.T) {
 	}
 	if !session.isClosed() {
 		t.Fatal("disable did not close the host session")
+	}
+	client.assertDone(t)
+}
+
+func TestPCSCNetworkOperationsAvoidCellularAT(t *testing.T) {
+	client := &transcriptClient{}
+	candidate := modem.Candidate{
+		ID:           "Reader-TEST",
+		HardwareKind: pcsc.HardwareKind,
+	}
+	manager, err := NewManager(Options{
+		Discoverer:     staticDiscoverer{candidates: []modem.Candidate{candidate}},
+		Opener:         &staticOpener{client: client},
+		CommandTimeout: time.Second,
+		LongTimeout:    time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Stop(context.Background()) })
+
+	result, err := manager.SetNetwork(context.Background(), candidate.ID, NetworkRequest{
+		Enabled: false, APN: "invalid apn", Username: "bad user",
+	})
+	if err != nil || result.Enabled || result.Backend != "pcsc" {
+		t.Fatalf("PCSC disable = %#v, %v", result, err)
+	}
+	if _, err := manager.SetNetwork(context.Background(), candidate.ID, NetworkRequest{
+		Enabled: true, APN: "internet",
+	}); !errors.Is(err, ErrDataBackendUnavailable) {
+		t.Fatalf("PCSC enable error = %v, want ErrDataBackendUnavailable", err)
+	}
+	status, statusErr := manager.NetworkStatus(context.Background(), candidate.ID)
+	if !errors.Is(statusErr, ErrDataBackendUnavailable) ||
+		status.Backend != "pcsc" ||
+		status.Detail != "cellular data is unavailable for PCSC readers" {
+		t.Fatalf("PCSC status = %#v, %v", status, statusErr)
 	}
 	client.assertDone(t)
 }

@@ -729,7 +729,7 @@ func (s *Server) logUserOperation(next http.Handler) http.Handler {
 		s.logger.Log(r.Context(), level, message,
 			"category", operationPathCategory(r.URL.Path),
 			"event", "user.operation",
-			"operation", strings.TrimPrefix(r.URL.Path, "/api/"),
+			"operation", loghub.RedactString(strings.TrimPrefix(r.URL.Path, "/api/")),
 			"outcome", outcome,
 			"status", status,
 		)

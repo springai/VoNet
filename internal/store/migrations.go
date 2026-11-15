@@ -702,6 +702,166 @@ func migrationStatements(version int) []string {
 				ADD COLUMN secure_cookies INTEGER NOT NULL DEFAULT 0
 				CHECK (secure_cookies IN (0, 1))`,
 		}
+	case 36:
+		return []string{
+			`CREATE TABLE IF NOT EXISTS card_policies (
+				iccid TEXT PRIMARY KEY,
+				network_enabled INTEGER NOT NULL DEFAULT 0 CHECK (network_enabled IN (0, 1)),
+				vowifi_enabled INTEGER NOT NULL DEFAULT 0 CHECK (vowifi_enabled IN (0, 1)),
+				airplane_enabled INTEGER NOT NULL DEFAULT 0 CHECK (airplane_enabled IN (0, 1)),
+				apn TEXT NOT NULL DEFAULT '',
+				ip_version TEXT NOT NULL DEFAULT '',
+				custom_phone_number TEXT NOT NULL DEFAULT '',
+				mbn_profile TEXT NOT NULL DEFAULT '',
+				cellular_ims_enabled INTEGER NOT NULL DEFAULT 0 CHECK (cellular_ims_enabled IN (0, 1)),
+				cellular_ims_managed INTEGER NOT NULL DEFAULT 0 CHECK (cellular_ims_managed IN (0, 1)),
+				source TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			)`,
+			`ALTER TABLE card_policies
+				ADD COLUMN runtime_mode TEXT NOT NULL DEFAULT ''
+				CHECK (runtime_mode IN ('', 'at', 'qmi', 'mbim', 'pcsc'))`,
+			`ALTER TABLE card_policies
+				ADD COLUMN cellular_ims_mode TEXT NOT NULL DEFAULT ''
+				CHECK (cellular_ims_mode IN ('', 'mbn_default', 'force_enabled', 'force_disabled'))`,
+			`UPDATE card_policies
+			SET cellular_ims_mode = CASE
+				WHEN cellular_ims_managed = 1 AND cellular_ims_enabled = 1 THEN 'force_enabled'
+				WHEN cellular_ims_managed = 1 AND cellular_ims_enabled = 0 THEN 'force_disabled'
+				ELSE 'mbn_default'
+			END
+			WHERE cellular_ims_mode = ''`,
+			`CREATE TABLE IF NOT EXISTS sim_cards (
+				iccid TEXT PRIMARY KEY
+					CHECK (length(iccid) BETWEEN 18 AND 22 AND iccid NOT GLOB '*[^0-9]*'),
+				display_name TEXT NOT NULL DEFAULT '',
+				notes TEXT NOT NULL DEFAULT '',
+				card_type TEXT NOT NULL DEFAULT 'physical_sim'
+					CHECK (card_type IN ('physical_sim', 'esim_profile')),
+				imsi TEXT NOT NULL DEFAULT '',
+				msisdn TEXT NOT NULL DEFAULT '',
+				carrier TEXT NOT NULL DEFAULT '',
+				spn TEXT NOT NULL DEFAULT '',
+				mcc TEXT NOT NULL DEFAULT '',
+				mnc TEXT NOT NULL DEFAULT '',
+				home_plmn TEXT NOT NULL DEFAULT '',
+				eid TEXT NOT NULL DEFAULT '',
+				profile_aid TEXT NOT NULL DEFAULT '',
+				source TEXT NOT NULL DEFAULT 'manual',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			)`,
+			`CREATE TABLE IF NOT EXISTS sim_card_observations (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				iccid TEXT NOT NULL,
+				device_id TEXT NOT NULL,
+				physical_device_id TEXT NOT NULL DEFAULT '',
+				eid TEXT NOT NULL DEFAULT '',
+				profile_aid TEXT NOT NULL DEFAULT '',
+				source TEXT NOT NULL DEFAULT 'live',
+				first_seen_at INTEGER NOT NULL,
+				last_seen_at INTEGER NOT NULL,
+				last_enabled_at INTEGER NOT NULL DEFAULT 0,
+				UNIQUE (iccid, device_id, profile_aid),
+				FOREIGN KEY (iccid) REFERENCES sim_cards(iccid) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS sim_card_observations_device_idx
+				ON sim_card_observations(device_id, last_seen_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS sim_card_observations_iccid_idx
+				ON sim_card_observations(iccid, last_seen_at DESC)`,
+			`CREATE TABLE IF NOT EXISTS sim_card_bindings (
+				iccid TEXT PRIMARY KEY,
+				observation_id INTEGER UNIQUE,
+				device_id TEXT NOT NULL DEFAULT '',
+				physical_device_id TEXT NOT NULL DEFAULT '',
+				eid TEXT NOT NULL DEFAULT '',
+				profile_aid TEXT NOT NULL DEFAULT '',
+				generation INTEGER NOT NULL DEFAULT 1 CHECK (generation > 0),
+				state TEXT NOT NULL DEFAULT 'offline'
+					CHECK (state IN ('pending', 'active', 'conflict', 'offline')),
+				stable_since INTEGER NOT NULL DEFAULT 0,
+				bound_at INTEGER NOT NULL DEFAULT 0,
+				last_seen_at INTEGER NOT NULL DEFAULT 0,
+				cleared_at INTEGER NOT NULL DEFAULT 0,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				CHECK (
+					state IN ('conflict', 'offline')
+					OR (device_id <> '' AND physical_device_id <> '')
+				),
+				FOREIGN KEY (iccid) REFERENCES sim_cards(iccid) ON DELETE CASCADE,
+				FOREIGN KEY (observation_id)
+					REFERENCES sim_card_observations(id) ON DELETE SET NULL
+			)`,
+			`CREATE INDEX IF NOT EXISTS sim_card_bindings_device_idx
+				ON sim_card_bindings(device_id, state)`,
+			`CREATE INDEX IF NOT EXISTS sim_card_bindings_state_idx
+				ON sim_card_bindings(state, iccid)`,
+		}
+	case 37:
+		return []string{
+			`CREATE TABLE IF NOT EXISTS call_history (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				device_id TEXT NOT NULL,
+				number TEXT NOT NULL DEFAULT '',
+				direction TEXT NOT NULL DEFAULT 'outgoing',
+				status TEXT NOT NULL DEFAULT 'unknown',
+				transport TEXT NOT NULL DEFAULT 'cellular',
+				duration_seconds INTEGER NOT NULL DEFAULT 0,
+				started_at INTEGER NOT NULL,
+				ended_at INTEGER NOT NULL DEFAULT 0,
+				created_at INTEGER NOT NULL,
+				iccid TEXT NOT NULL DEFAULT ''
+			)`,
+			`ALTER TABLE call_history
+				ADD COLUMN iccid TEXT NOT NULL DEFAULT ''`,
+			`CREATE INDEX IF NOT EXISTS call_history_card_idx
+				ON call_history(device_id, iccid, started_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS call_history_device_idx
+				ON call_history(device_id, started_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS call_history_number_idx
+				ON call_history(number, started_at DESC)`,
+		}
+	case 38:
+		return []string{
+			`CREATE TRIGGER IF NOT EXISTS card_policies_registered_insert
+				BEFORE INSERT ON card_policies
+				WHEN NOT EXISTS (SELECT 1 FROM sim_cards WHERE sim_cards.iccid = NEW.iccid)
+				BEGIN SELECT RAISE(ABORT, 'card policy ICCID is not registered'); END`,
+			`CREATE TRIGGER IF NOT EXISTS card_policies_registered_update
+				BEFORE UPDATE ON card_policies
+				WHEN NOT EXISTS (SELECT 1 FROM sim_cards WHERE sim_cards.iccid = NEW.iccid)
+				BEGIN SELECT RAISE(ABORT, 'card policy ICCID is not registered'); END`,
+		}
+	case 39:
+		return []string{
+			`ALTER TABLE sim_cards
+				ADD COLUMN host_type TEXT NOT NULL DEFAULT ''`,
+			`CREATE TABLE IF NOT EXISTS sim_card_candidates (
+				iccid TEXT NOT NULL
+					CHECK (length(iccid) BETWEEN 18 AND 22 AND iccid NOT GLOB '*[^0-9]*'),
+				device_id TEXT NOT NULL,
+				physical_device_id TEXT NOT NULL DEFAULT '',
+				host_type TEXT NOT NULL DEFAULT '',
+				card_type TEXT NOT NULL DEFAULT 'physical_sim'
+					CHECK (card_type IN ('physical_sim', 'esim_profile')),
+				imsi TEXT NOT NULL DEFAULT '',
+				carrier TEXT NOT NULL DEFAULT '',
+				spn TEXT NOT NULL DEFAULT '',
+				state TEXT NOT NULL DEFAULT 'pending'
+					CHECK (state IN ('pending', 'stable', 'offline')),
+				first_seen_at INTEGER NOT NULL,
+				last_seen_at INTEGER NOT NULL,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				PRIMARY KEY (iccid, device_id, physical_device_id)
+			)`,
+			`CREATE INDEX IF NOT EXISTS sim_card_candidates_last_seen_idx
+				ON sim_card_candidates(last_seen_at DESC)`,
+			`CREATE INDEX IF NOT EXISTS sim_card_candidates_device_idx
+				ON sim_card_candidates(device_id, last_seen_at DESC)`,
+		}
 	default:
 		return nil
 	}

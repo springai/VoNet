@@ -18,7 +18,7 @@ func TestSMSNotificationTextMatchesUserFacingTemplate(t *testing.T) {
 	t.Cleanup(func() { time.Local = previousLocation })
 	message := smsNotification{
 		DeviceID: "device-1", DeviceLabel: "EC20", Number: "+447386",
-		LocalPhone: "+85291234567", ICCID: "card-a",
+		LocalPhone: "+85291234567", ICCID: "89441000000000000024",
 		Time: time.Date(2026, 8, 8, 17, 25, 35, 0, location), Content: "你好鸭",
 	}
 	want := "收到新短信\n设备  EC20\n本机号码  +85291234567\n号码  +447386\n时间  2026-08-08 17:25:35\n内容  你好鸭"
@@ -34,10 +34,10 @@ func TestRenderSMSWebhookTemplate(t *testing.T) {
 	message := smsNotification{
 		DeviceID: "device-1", DeviceName: "客厅", DeviceLabel: "EC20",
 		Number: "+447386", Time: time.Unix(1_700_000_000, 0), Content: "hello",
-		LocalPhone: "+85291234567", ICCID: "card-a",
+		LocalPhone: "+85291234567", ICCID: "89441000000000000024",
 	}
 	got := renderSMSWebhookTemplate("{{event}}|{{device_id}}|{{device_name}}|{{device_label}}|{{number}}|{{text}}|{{content}}|{{local_phone}}|{{iccid}}|{{recipient}}", message)
-	want := "sms.received|device-1|客厅|EC20|+447386|hello|hello|+85291234567|card-a|+85291234567"
+	want := "sms.received|device-1|客厅|EC20|+447386|hello|hello|+85291234567|89441000000000000024|+85291234567"
 	if got != want {
 		t.Fatalf("renderSMSWebhookTemplate() = %q, want %q", got, want)
 	}
@@ -147,22 +147,32 @@ func TestSMSNotificationReceivingSubscription(t *testing.T) {
 	if err := database.UpsertDevice(ctx, store.Device{ID: "device-1", Name: "EC20"}); err != nil {
 		t.Fatal(err)
 	}
+	for _, iccid := range []string{
+		"89441000000000000021",
+		"89441000000000000022",
+		"89441000000000000023",
+		"89441000000000000024",
+	} {
+		if err := database.UpsertSimCard(ctx, store.SimCard{ICCID: iccid}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// The device currently has profile B. Neither profile A nor an unidentified
 	// historical SMS may acquire B's phone number when a notification is built.
 	if err := database.UpsertDeviceRuntime(ctx, store.DeviceRuntime{
-		DeviceID: "device-1", ICCID: "card-b", IMSI: "imsi-b", PhoneNumber: "+442222",
+		DeviceID: "device-1", ICCID: "89441000000000000021", IMSI: "imsi-b", PhoneNumber: "+442222",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	for _, policy := range []store.CardPolicy{
-		{ICCID: "card-b", CustomPhoneNumber: "+442222"},
-		{ICCID: "card-custom", CustomPhoneNumber: "+443333"},
+		{ICCID: "89441000000000000021", CustomPhoneNumber: "+442222"},
+		{ICCID: "89441000000000000022", CustomPhoneNumber: "+443333"},
 	} {
 		if err := database.UpsertCardPolicy(ctx, policy); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, iccid := range []string{"card-custom", "card-associated"} {
+	for _, iccid := range []string{"89441000000000000022", "89441000000000000023"} {
 		if err := database.UpsertPhoneAssociation(ctx, store.PhoneAssociation{
 			ICCID: iccid, DeviceID: "device-1", Number: "+444444", Source: "ims",
 		}); err != nil {
@@ -172,11 +182,11 @@ func TestSMSNotificationReceivingSubscription(t *testing.T) {
 	for _, test := range []struct {
 		name, iccid, snapshot, phone, recipient, label string
 	}{
-		{"snapshot wins over later override", "card-custom", " +441111 ", "+441111", "+441111", "本机号码"},
-		{"custom wins over association", "card-custom", "", "+443333", "+443333", "本机号码"},
-		{"IMS association", "card-associated", "", "+444444", "+444444", "本机号码"},
+		{"snapshot wins over later override", "89441000000000000022", " +441111 ", "+441111", "+441111", "本机号码"},
+		{"custom wins over association", "89441000000000000022", "", "+443333", "+443333", "本机号码"},
+		{"IMS association", "89441000000000000023", "", "+444444", "+444444", "本机号码"},
 		{"number snapshot without ICCID", "", "+441111", "+441111", "+441111", "本机号码"},
-		{"ICCID fallback", "card-a", "", "", "card-a", "ICCID"},
+		{"ICCID fallback", "89441000000000000024", "", "", "89441000000000000024", "ICCID"},
 		{"unknown historical card", "", "", "", "未知", "收信卡"},
 		{"whitespace is missing", "  ", "  ", "", "未知", "收信卡"},
 	} {
@@ -229,7 +239,7 @@ func TestSMSNotificationRetryKeepsReceivingProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	saved, err := database.SaveSMSMessage(ctx, store.SMSMessage{
-		DeviceID: "device-1", ICCID: "card-a", LocalPhone: "+441111", IMSI: "imsi-a",
+		DeviceID: "device-1", ICCID: "89441000000000000024", LocalPhone: "+441111", IMSI: "imsi-a",
 		Peer: "SmartApp", Direction: "inbound", Body: "OTP 8085",
 	})
 	if err != nil {
@@ -239,7 +249,7 @@ func TestSMSNotificationRetryKeepsReceivingProfile(t *testing.T) {
 	attempts := 0
 	sender := func(_ context.Context, _ string, _ map[string]any, message smsNotification) error {
 		attempts++
-		if message.LocalPhone != "+441111" || message.ICCID != "card-a" {
+		if message.LocalPhone != "+441111" || message.ICCID != "89441000000000000024" {
 			t.Fatalf("attempt %d used a different receiving profile: %#v", attempts, message)
 		}
 		if attempts == 1 {
@@ -252,7 +262,7 @@ func TestSMSNotificationRetryKeepsReceivingProfile(t *testing.T) {
 		t.Fatalf("failed notification was not retained: %#v, attempts %d", state, attempts)
 	}
 	if err := database.UpsertDeviceRuntime(ctx, store.DeviceRuntime{
-		DeviceID: "device-1", ICCID: "card-b", IMSI: "imsi-b", PhoneNumber: "+442222",
+		DeviceID: "device-1", ICCID: "89441000000000000021", IMSI: "imsi-b", PhoneNumber: "+442222",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -266,14 +276,14 @@ func TestSMSNotificationSubscriptionPayloads(t *testing.T) {
 	for _, phone := range []string{"+85291234567", ""} {
 		message := smsNotification{
 			DeviceID: "device-1", DeviceLabel: "EC20", Number: "SmartApp",
-			LocalPhone: phone, ICCID: "card-a", Content: "OTP 8085", Time: time.Unix(1_700_000_000, 0),
+			LocalPhone: phone, ICCID: "89441000000000000024", Content: "OTP 8085", Time: time.Unix(1_700_000_000, 0),
 		}
 		for _, template := range []string{"", "{{number}}|{{local_phone}}|{{iccid}}|{{recipient}}", "legacy {{number}}: {{text}}"} {
 			var payload map[string]string
 			if err := json.Unmarshal(buildSMSWebhookPayload(template, message), &payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload["local_phone"] != phone || payload["iccid"] != "card-a" ||
+			if payload["local_phone"] != phone || payload["iccid"] != "89441000000000000024" ||
 				payload["recipient"] != message.Recipient() || payload["number"] != "SmartApp" || payload["content"] != "OTP 8085" {
 				t.Fatalf("webhook payload = %#v", payload)
 			}
@@ -300,7 +310,7 @@ func TestSMSNotificationSubscriptionPayloads(t *testing.T) {
 			if err := json.Unmarshal(rendered, &payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload["local_phone"] != phone || payload["iccid"] != "card-a" ||
+			if payload["local_phone"] != phone || payload["iccid"] != "89441000000000000024" ||
 				payload["recipient"] != message.Recipient() || payload["number"] != "SmartApp" {
 				t.Fatalf("JSON template = %s", rendered)
 			}

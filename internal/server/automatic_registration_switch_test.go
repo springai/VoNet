@@ -52,6 +52,22 @@ func (c *registrationSwitchController) ESIMSwitchProfile(ctx context.Context, id
 	return nil
 }
 
+func (c *registrationSwitchController) ESIMListProfiles(context.Context, string) (device.EsimInfo, error) {
+	return device.EsimInfo{Profiles: []device.EsimProfile{{
+		ICCID: testICCIDCurrent,
+		AID:   "A0000005591010FFFFFFFF8900000200",
+		State: 1,
+	}}}, nil
+}
+
+func (c *registrationSwitchController) ESIMInventory(context.Context, string) ([]device.EsimInventoryEntry, error) {
+	return []device.EsimInventoryEntry{{Info: device.EsimInfo{Profiles: []device.EsimProfile{{
+		ICCID: testICCIDCurrent,
+		AID:   "A0000005591010FFFFFFFF8900000200",
+		State: 1,
+	}}}}}, nil
+}
+
 func TestCellularRegistrationDisablesDataBeforeProfileSwitch(t *testing.T) {
 	for _, tc := range []struct {
 		name                                         string
@@ -69,7 +85,7 @@ func TestCellularRegistrationDisablesDataBeforeProfileSwitch(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := regionServer(t, "310260123456789")
-			c := &registrationSwitchController{server: s, switchErr: tc.switchErr, registrationTaskController: registrationTaskController{stopErr: tc.stopErr, fakeDeviceController: fakeDeviceController{entry: device.Device{ID: "dev1", Discovered: true, Snapshot: &device.Snapshot{ICCID: "old-card"}}}}}
+			c := &registrationSwitchController{server: s, switchErr: tc.switchErr, registrationTaskController: registrationTaskController{stopErr: tc.stopErr, fakeDeviceController: fakeDeviceController{entry: device.Device{ID: "dev1", Discovered: true, Snapshot: &device.Snapshot{Responsive: true, SIMReady: true, ICCID: testICCIDOld}}}}}
 			s.devices = c
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -80,11 +96,13 @@ func TestCellularRegistrationDisablesDataBeforeProfileSwitch(t *testing.T) {
 			if err := s.store.UpsertDevice(ctx, store.Device{ID: "dev1", Name: "Modem", NetworkEnabled: !tc.initiallyDisabled}); err != nil {
 				t.Fatal(err)
 			}
+			registerActiveTestCard(t, s.store, "dev1", "dev1", testICCIDOld)
+			registerActiveTestCard(t, s.store, "dev1", "dev1", testICCIDCurrent)
 			// Even if the target card normally uses data, it must not connect while switching.
-			if err := s.store.UpsertCardPolicy(ctx, store.CardPolicy{ICCID: "test-card", NetworkEnabled: true, Source: "user"}); err != nil {
+			if err := s.store.UpsertCardPolicy(ctx, store.CardPolicy{ICCID: testICCIDCurrent, NetworkEnabled: true, Source: "user"}); err != nil {
 				t.Fatal(err)
 			}
-			config, _, _, _, err := s.ensureAutomaticTaskProfile(ctx, store.AutomaticTask{DeviceID: "dev1", ProfileICCID: "test-card", TaskType: "cellular_attach", Environment: "cellular"}, func(string) {})
+			config, _, _, _, err := s.ensureAutomaticTaskProfile(ctx, store.AutomaticTask{DeviceID: "dev1", ProfileICCID: testICCIDCurrent, TaskType: "cellular_attach", Environment: "cellular"}, func(string) {})
 			if tc.wantError == "" {
 				if err != nil || config.NetworkEnabled {
 					t.Fatalf("config=%+v error=%v", config, err)
@@ -108,7 +126,7 @@ func TestCellularRegistrationDisablesDataBeforeProfileSwitch(t *testing.T) {
 			if status.DesiredEnabled != tc.wantEnabled || status.MaintenancePhase != "" {
 				t.Fatalf("runtime intent=%+v, want enabled=%v", status, tc.wantEnabled)
 			}
-			policy, err := s.store.CardPolicy(context.Background(), "test-card")
+			policy, err := s.store.CardPolicy(context.Background(), testICCIDCurrent)
 			if err != nil || !policy.NetworkEnabled || policy.Source != "user" {
 				t.Fatalf("target saved policy changed: %+v, %v", policy, err)
 			}

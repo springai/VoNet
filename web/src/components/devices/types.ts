@@ -88,6 +88,7 @@ export interface EsimChipInfo {
 }
 export interface EsimProfileItem {
   iccid: string;
+  aidHex?: string;
   name?: string;
   serviceProviderName?: string;
   state?: number;

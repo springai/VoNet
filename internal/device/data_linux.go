@@ -19,6 +19,7 @@ import (
 	"github.com/iniwex5/quectel-qmi-go/pkg/qmi"
 
 	"vonet/internal/modem"
+	"vonet/internal/pcsc"
 	"vonet/internal/qmiproxy"
 )
 
@@ -242,6 +243,13 @@ func (manager *Manager) NetworkStatus(ctx context.Context, id string) (NetworkSt
 	if err != nil {
 		return NetworkStatus{}, err
 	}
+	candidate := manager.candidateFor(state)
+	if candidate.HardwareKind == pcsc.HardwareKind {
+		return NetworkStatus{
+			Backend: "pcsc",
+			Detail:  "cellular data is unavailable for PCSC readers",
+		}, ErrDataBackendUnavailable
+	}
 	if !state.dataMu.TryLock() {
 		return NetworkStatus{}, ErrDataOperationInProgress
 	}
@@ -249,8 +257,6 @@ func (manager *Manager) NetworkStatus(ctx context.Context, id string) (NetworkSt
 	if err := manager.validateActive(id, state); err != nil {
 		return NetworkStatus{}, err
 	}
-	candidate := manager.candidateFor(state)
-
 	// The AT backend reports the live host lease (DHCP process, address and
 	// protected routes are applied together by the session). Both the periodic
 	// monitor and the HTTP status API share this path.

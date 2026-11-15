@@ -3,11 +3,11 @@ import { useSearchParams } from "react-router-dom";
 import { PageHeader, Spinner, ErrorState, message } from "../components/ui";
 import { useI18n } from "../lib/i18n";
 import { usePolling } from "../lib/usePolling";
-import { api } from "../api";
 import { cx } from "../lib/utils";
 import { CallPanel } from "../components/call/CallPanel";
 import { dialCall, hangupCall, answerCall, rejectCall, sendDTMF, listCalls, connectCallMedia, findIncomingCall, type CallInfo, type CallsResponse, getCallHistory, deleteCallRecord, type CallRecord } from "../components/call/callApi";
-import type { DeviceListItem, DevicesResponse } from "../types";
+import { activeCardDevice, listCards } from "../components/cards/cardApi";
+import type { SimCard } from "../types";
 
 const MOBILE_BREAKPOINT = 980;
 
@@ -70,10 +70,11 @@ function CallHistoryItem({ record, t, onSelect, onDelete }: { record: CallRecord
 
 export default function CallPage() {
   const { t } = useI18n();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedICCID = (searchParams.get("iccid") || "").replace(/\s+/g, "");
   const requestedDevice = searchParams.get("device") || "";
-  const [devices, setDevices] = useState<DeviceListItem[]>([]);
-  const [selectedDevice, setSelectedDevice] = useState("");
+  const [cards, setCards] = useState<SimCard[]>([]);
+  const [selectedCardId, setSelectedCardId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<CallRecord[]>([]);
@@ -97,17 +98,34 @@ export default function CallPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
 
-  const loadDevices = useCallback(async () => {
+  const selectedCard = cards.find((card) => card.iccid === selectedCardId) || null;
+  const selectedICCID = selectedCard?.iccid || "";
+  const selectedDeviceID = activeCardDevice(selectedCard);
+  const cardOperable = !!selectedDeviceID && selectedCard?.status === "active";
+  const devices = cards.map((card) => ({
+    id: card.iccid,
+    name: card.displayName || card.iccid,
+    healthy: card.status === "active",
+  }));
+  const selectCard = useCallback((iccid: string) => {
+    setSelectedCardId(iccid);
+    const p = new URLSearchParams(searchParams);
+    p.set("iccid", iccid);
+    p.delete("device");
+    setSearchParams(p, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const loadCards = useCallback(async () => {
     try {
-      const res = await api<DevicesResponse>("/devices");
-      const running = (res.devices || []).filter((d) => d.running);
-      setDevices(running);
-      if (running.length > 0) {
-        const preferred = running.find((device) => device.id === requestedDevice)?.id;
-        setSelectedDevice((current) => {
-          if (current && running.some((device) => device.id === current)) return current;
-          return preferred || running[0].id;
-        });
+      const list = await listCards();
+      setCards(list);
+      if (list.length > 0) {
+        const preferred =
+          list.find((card) => card.iccid === requestedICCID)?.iccid ||
+          list.find((card) => card.binding?.deviceId === requestedDevice)?.iccid ||
+          list.find((card) => card.status === "active")?.iccid ||
+          list[0].iccid;
+        setSelectedCardId((current) => current && list.some((card) => card.iccid === current) ? current : preferred);
       }
       setError(null);
     } catch (e: any) {
@@ -115,18 +133,18 @@ export default function CallPage() {
     } finally {
       setLoading(false);
     }
-  }, [requestedDevice, selectedDevice, t]);
+  }, [requestedDevice, requestedICCID, t]);
 
-  usePolling(loadDevices, 10000);
+  usePolling(loadCards, 10000);
 
   const loadHistory = useCallback(async () => {
-    if (!selectedDevice) return;
+    if (!cardOperable || !selectedDeviceID) return;
     setHistoryLoading(true);
     try {
-      const res = await getCallHistory(selectedDevice, searchQuery || undefined);
+      const res = await getCallHistory(selectedDeviceID, searchQuery || undefined, 50, 0, selectedICCID);
       setHistory(res.records || []);
     } catch {} finally { setHistoryLoading(false); }
-  }, [selectedDevice, searchQuery]);
+  }, [cardOperable, selectedDeviceID, selectedICCID, searchQuery]);
 
   useEffect(() => { loadHistory(); }, [loadHistory]);
   usePolling(loadHistory, 10000);
@@ -146,9 +164,9 @@ export default function CallPage() {
   }, []);
 
   const startMobileAudio = useCallback((callId: string) => {
-    if (!selectedDevice || wsRef.current) return;
+    if (!cardOperable || !selectedDeviceID || wsRef.current) return;
     try {
-      const ws = connectCallMedia(selectedDevice, callId);
+      const ws = connectCallMedia(selectedDeviceID, callId, selectedICCID);
       wsRef.current = ws;
       navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
         streamRef.current = stream;
@@ -209,11 +227,11 @@ export default function CallPage() {
     } catch (err) {
       console.error("[CallPage] startMobileAudio error:", err);
     }
-  }, [selectedDevice, stopMobileAudio]);
+  }, [cardOperable, selectedDeviceID, selectedICCID, stopMobileAudio]);
   const loadCalls = useCallback(async () => {
-    if (!selectedDevice) return;
+    if (!cardOperable || !selectedDeviceID) return;
     try {
-      const res = await listCalls(selectedDevice);
+      const res = await listCalls(selectedDeviceID, selectedICCID);
       const callList = res.calls || [];
       setCalls(callList);
       setTransport(res.transport || "");
@@ -244,7 +262,7 @@ export default function CallPage() {
         setMuted(false);
       }
     } catch {}
-  }, [selectedDevice, callPhase, dialNumber, startMobileAudio, stopMobileAudio]);
+  }, [cardOperable, selectedDeviceID, selectedICCID, callPhase, dialNumber, startMobileAudio, stopMobileAudio]);
 
   usePolling(loadCalls, 2000);
 
@@ -264,19 +282,19 @@ export default function CallPage() {
   }, [isMobile]);
 
   const handleDeleteRecord = useCallback(async (id: number) => {
-    if (!selectedDevice) return;
+    if (!cardOperable || !selectedDeviceID) return;
     try {
-      await deleteCallRecord(selectedDevice, id);
+      await deleteCallRecord(selectedDeviceID, id, selectedICCID);
       setHistory((prev) => prev.filter((r) => r.id !== id));
     } catch {}
-  }, [selectedDevice]);
+  }, [cardOperable, selectedDeviceID, selectedICCID]);
 
 
   const handleMobileDial = useCallback(async () => {
     const num = dialNumber.trim();
-    if (!num || !selectedDevice) return;
+    if (!num || !cardOperable || !selectedDeviceID) return;
     try {
-      await dialCall(selectedDevice, num);
+      await dialCall(selectedDeviceID, num, 0, selectedICCID);
       setActiveCallNumber(num);
       setCallPhase("dialing");
       setCallDuration(0);
@@ -284,44 +302,44 @@ export default function CallPage() {
     } catch (err: any) {
       setCallPhase("idle");
     }
-  }, [dialNumber, selectedDevice]);
+  }, [dialNumber, cardOperable, selectedDeviceID, selectedICCID]);
 
   const handleMobileHangup = useCallback(async () => {
-    if (!selectedDevice) return;
+    if (!cardOperable || !selectedDeviceID) return;
     const active = calls.find((c) => !c.endedAt);
-    try { await hangupCall(selectedDevice, active?.id); } catch {}
+    try { await hangupCall(selectedDeviceID, active?.id, selectedICCID); } catch {}
     stopMobileAudio();
     setCallPhase("idle");
     setMobileView("main");
     setCallDuration(0);
     setShowDtmf(false);
     setMuted(false);
-  }, [selectedDevice, calls, stopMobileAudio]);
+  }, [cardOperable, selectedDeviceID, selectedICCID, calls, stopMobileAudio]);
 
   const handleMobileAnswer = useCallback(async () => {
-    if (!selectedDevice) return;
+    if (!cardOperable || !selectedDeviceID) return;
     const incoming = findIncomingCall(calls);
     try {
-      await answerCall(selectedDevice, incoming?.id);
+      await answerCall(selectedDeviceID, incoming?.id, selectedICCID);
       if (incoming?.id) startMobileAudio(incoming.id);
       setCallPhase("connected");
       setCallDuration(0);
     } catch {}
-  }, [selectedDevice, calls, startMobileAudio]);
+  }, [cardOperable, selectedDeviceID, selectedICCID, calls, startMobileAudio]);
 
   const handleMobileReject = useCallback(async () => {
-    if (!selectedDevice) return;
+    if (!cardOperable || !selectedDeviceID) return;
     const incoming = findIncomingCall(calls);
-    try { await rejectCall(selectedDevice, incoming?.id); } catch {}
+    try { await rejectCall(selectedDeviceID, incoming?.id, selectedICCID); } catch {}
     setCallPhase("idle");
     setMobileView("main");
-  }, [selectedDevice, calls]);
+  }, [cardOperable, selectedDeviceID, selectedICCID, calls]);
 
   const handleMobileDtmf = useCallback(async (digit: string) => {
-    if (!selectedDevice) return;
+    if (!cardOperable || !selectedDeviceID) return;
     const active = calls.find((c) => !c.endedAt);
-    try { await sendDTMF(selectedDevice, digit, active?.id); } catch {}
-  }, [selectedDevice, calls]);
+    try { await sendDTMF(selectedDeviceID, digit, active?.id, selectedICCID); } catch {}
+  }, [cardOperable, selectedDeviceID, selectedICCID, calls]);
 
   // Cleanup audio on unmount
   useEffect(() => { return () => stopMobileAudio(); }, [stopMobileAudio]);
@@ -331,7 +349,7 @@ export default function CallPage() {
 
   return (
     <div className="call-page workspace-page flex h-[calc(100vh-168px)] flex-col">
-      <PageHeader title={t("设备通话")} />
+      <PageHeader title={t("通话")} />
       <div className="relative flex-1 overflow-hidden ui-card">
         <div className="call-main-layout h-full">
           {/* ---- Desktop: 3-column layout ---- */}
@@ -341,8 +359,8 @@ export default function CallPage() {
             </div>
             <div className="space-y-1 overflow-auto p-3">
               {devices.map((d) => (
-                <button key={d.id} onClick={() => setSelectedDevice(d.id)}
-                  className={cx("flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-all", selectedDevice === d.id ? "border-indigo-200 bg-indigo-50/70 dark:border-indigo-500/30 dark:bg-indigo-500/10" : "border-transparent hover:bg-gray-50/60 dark:hover:bg-white/5")}>
+                <button key={d.id} onClick={() => selectCard(d.id)}
+                  className={cx("flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-all", selectedICCID === d.id ? "border-indigo-200 bg-indigo-50/70 dark:border-indigo-500/30 dark:bg-indigo-500/10" : "border-transparent hover:bg-gray-50/60 dark:hover:bg-white/5")}>
                   <span className={cx("h-2 w-2 rounded-full shrink-0", d.healthy ? "bg-green-500" : "bg-red-500")} />
                   <div className="min-w-0">
                     <div className="truncate text-sm font-bold text-gray-800 dark:text-gray-100">{d.name || d.id}</div>
@@ -365,16 +383,16 @@ export default function CallPage() {
             </div>
           </div>
           <div className="call-dialer-col overflow-auto">
-            {selectedDevice ? (
+            {cardOperable && selectedDeviceID ? (
               isMobile ? (
                 <div style={{ position: "absolute", width: 0, height: 0, overflow: "hidden", opacity: 0, pointerEvents: "none" }}>
-                  <CallPanel deviceId={selectedDevice} externalNumber="" onNumberConsumed={() => {}} />
+                  <CallPanel deviceId={selectedDeviceID} iccid={selectedICCID} externalNumber="" onNumberConsumed={() => {}} />
                 </div>
               ) : (
-                <CallPanel deviceId={selectedDevice} externalNumber={dialNumber} onNumberConsumed={() => setDialNumber("")} />
+                <CallPanel deviceId={selectedDeviceID} iccid={selectedICCID} externalNumber={dialNumber} onNumberConsumed={() => setDialNumber("")} />
               )
             ) : (
-              !isMobile && <div className="flex h-full items-center justify-center text-sm text-gray-400">{t("请先选择设备")}</div>
+              !isMobile && <div className="flex h-full items-center justify-center text-sm text-gray-400">{t("请选择当前启用的卡片")}</div>
             )}
           </div>
 
@@ -384,8 +402,8 @@ export default function CallPage() {
               {/* Device chips */}
               <div className="call-mobile-devices">
                 {devices.map((d) => (
-                  <button key={d.id} onClick={() => setSelectedDevice(d.id)}
-                    className={cx("call-mobile-chip", selectedDevice === d.id && "call-mobile-chip-active")}>
+                  <button key={d.id} onClick={() => selectCard(d.id)}
+                    className={cx("call-mobile-chip", selectedICCID === d.id && "call-mobile-chip-active")}>
                     <span className="call-mobile-chip-dot" style={{ background: d.healthy ? "#22c55e" : "#ef4444" }} />
                     {d.name || d.id}
                   </button>
@@ -421,7 +439,7 @@ export default function CallPage() {
                 {dialNumber && (
                   <button className="call-mobile-backspace-btn" onClick={() => setDialNumber((p) => p.slice(0, -1))}>{"\u232B"}</button>
                 )}
-                <button className="call-mobile-call-btn" onClick={handleMobileDial} disabled={!dialNumber.trim() || !selectedDevice}>{"\u2706"}</button>
+                <button className="call-mobile-call-btn" onClick={handleMobileDial} disabled={!dialNumber.trim() || !cardOperable}>{"\u2706"}</button>
               </div>
 
               {/* Numpad overlay */}

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 
 	"vonet/internal/device"
 	"vonet/internal/modem"
+	"vonet/internal/store"
 )
 
 func TestValidateATCommandBlocksTrafficMessagingAndDialActions(t *testing.T) {
@@ -90,7 +92,9 @@ func TestValidateATCommandAllowsReadOnlyStatusQueries(t *testing.T) {
 // real reason from the user.
 func TestHandleATSurfacesCommandErrorAsResponse(t *testing.T) {
 	controller := fakeDeviceController{
-		entry: device.Device{ID: "dev1"},
+		entry: device.Device{ID: "dev1", Discovered: true, Snapshot: &device.Snapshot{
+			DeviceID: "dev1", Responsive: true, SIMReady: true, ICCID: testICCIDCurrent,
+		}},
 		atHandler: func(command string) (modem.Response, error) {
 			return modem.Response{}, &modem.CommandError{
 				Command: command,
@@ -99,7 +103,12 @@ func TestHandleATSurfacesCommandErrorAsResponse(t *testing.T) {
 			}
 		},
 	}
-	server := &Server{devices: controller, logger: regionTestLogger(), maxRequestBodyBytes: 1 << 20}
+	server := regionServer(t, "310260123456789")
+	server.devices = controller
+	if err := server.store.UpsertDevice(context.Background(), store.Device{ID: "dev1", Name: "Modem"}); err != nil {
+		t.Fatal(err)
+	}
+	registerActiveTestCard(t, server.store, "dev1", "dev1", testICCIDCurrent)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -108,7 +117,7 @@ func TestHandleATSurfacesCommandErrorAsResponse(t *testing.T) {
 	)
 	request.Header.Set("Content-Type", "application/json")
 
-	if !server.handleAT(recorder, request, "dev1") {
+	if !server.handleAT(recorder, request, "dev1", "dev1") {
 		t.Fatal("handleAT returned false")
 	}
 	if recorder.Code != http.StatusOK {
@@ -123,10 +132,17 @@ func TestHandleATSurfacesCommandErrorAsResponse(t *testing.T) {
 
 func TestHandleATMapsNonCommandErrorTo502(t *testing.T) {
 	controller := fakeDeviceController{
-		entry: device.Device{ID: "dev1"},
+		entry: device.Device{ID: "dev1", Discovered: true, Snapshot: &device.Snapshot{
+			DeviceID: "dev1", Responsive: true, SIMReady: true, ICCID: testICCIDCurrent,
+		}},
 		atErr: errors.New("transport wedged"),
 	}
-	server := &Server{devices: controller, logger: regionTestLogger(), maxRequestBodyBytes: 1 << 20}
+	server := regionServer(t, "310260123456789")
+	server.devices = controller
+	if err := server.store.UpsertDevice(context.Background(), store.Device{ID: "dev1", Name: "Modem"}); err != nil {
+		t.Fatal(err)
+	}
+	registerActiveTestCard(t, server.store, "dev1", "dev1", testICCIDCurrent)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost,
@@ -135,7 +151,7 @@ func TestHandleATMapsNonCommandErrorTo502(t *testing.T) {
 	)
 	request.Header.Set("Content-Type", "application/json")
 
-	if !server.handleAT(recorder, request, "dev1") {
+	if !server.handleAT(recorder, request, "dev1", "dev1") {
 		t.Fatal("handleAT returned false")
 	}
 	if recorder.Code != http.StatusBadGateway {

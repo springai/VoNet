@@ -123,9 +123,10 @@ func TestCellularConnectedAutomaticallyDetectsPublicIP(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	registerActiveTestCard(t, database, "ec20", "ec20", testICCIDCurrent)
 	controller := &publicIPDeviceController{fakeDeviceController: fakeDeviceController{entry: device.Device{
-		ID:       "physical-1",
-		Snapshot: &device.Snapshot{DeviceID: "physical-1", SIMReady: true, ICCID: "89441000000000000001"},
+		ID: "ec20", Discovered: true,
+		Snapshot: &device.Snapshot{DeviceID: "ec20", Responsive: true, SIMReady: true, ICCID: testICCIDCurrent},
 	}}}
 	called := make(chan string, 1)
 	server := &Server{
@@ -136,9 +137,12 @@ func TestCellularConnectedAutomaticallyDetectsPublicIP(t *testing.T) {
 			return exportproxy.PublicIPInfo{IP: "203.0.113.8", CountryCode: "GB"}, nil
 		},
 	}
+	if _, err := server.ResolveRegisteredActiveCard(ctx, "ec20", testICCIDCurrent); err != nil {
+		t.Fatalf("public IP card gate: %v", err)
+	}
 	runtime := server.cellularDataRuntime()
 	runtime.start(ctx)
-	requested := runtime.request("ec20", "physical-1", device.NetworkRequest{Enabled: true})
+	requested := runtime.request("ec20", "ec20", device.NetworkRequest{Enabled: true})
 	waitContext, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	if status, waitErr := runtime.wait(waitContext, "ec20", requested.Revision); waitErr != nil || !status.Connected {
@@ -154,7 +158,7 @@ func TestCellularConnectedAutomaticallyDetectsPublicIP(t *testing.T) {
 	}
 	cacheDeadline := time.Now().Add(time.Second)
 	for time.Now().Before(cacheDeadline) {
-		if info, ok := server.loadPublicIP("ec20", "89441000000000000001"); ok && info.IP == "203.0.113.8" {
+		if info, ok := server.loadPublicIP("ec20", testICCIDCurrent); ok && info.IP == "203.0.113.8" {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)

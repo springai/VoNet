@@ -12,10 +12,12 @@ import { DeleteProfileModal, type DeleteProfileTarget } from "./DeleteProfileMod
 import { EmptyState } from "../ui";
 import { createEsimMutationGuard, esimDownloadDisabled } from "./esimActionState";
 import type { EsimChipInfo, EsimDownloadForm as EsimDownloadFormData, EsimNotification, EsimProfileGroup, EsimProfilesEnvelope } from "./types";
+import type { DeviceType } from "../../types";
 import { tf, tl, useI18n } from "../../lib/i18n";
 
 export interface DeviceEsimTabProps {
   deviceId: string;
+  hostType?: DeviceType;
   deviceImei: string;
   isActive: boolean;
   deviceOnline: boolean;
@@ -71,7 +73,7 @@ function applyDisableLocal(groups: EsimProfileGroup[], iccid: string, aidHex?: s
   }));
 }
 
-export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, rebooting, onRebootModem, onProfileChanged }: DeviceEsimTabProps) {
+export function DeviceEsimTab({ deviceId, hostType, deviceImei, isActive, deviceOnline, rebooting, onRebootModem, onProfileChanged }: DeviceEsimTabProps) {
   const { t } = useI18n();
   const [initialLoading, setInitialLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -82,7 +84,6 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
   const [deletingIccid, setDeletingIccid] = useState<string | null>(null);
   const [renamingIccid, setRenamingIccid] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
-  const [policyIccid, setPolicyIccid] = useState<string | null>(null);
   const [showSensitive, toggleSensitive] = useShowSensitive();
   const [notifications, setNotifications] = useState<EsimNotification[]>([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
@@ -424,7 +425,6 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
     overviewAbort.current?.abort();
     for (const timer of recoveryTimers.current) window.clearTimeout(timer);
     recoveryTimers.current = [];
-    setPolicyIccid(null);
     if (!deviceId || !isActive) return;
     if (spaceTimer.current !== null) {
       window.clearTimeout(spaceTimer.current);
@@ -467,7 +467,6 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
 
   useEffect(() => {
     if (profilesStale) {
-      setPolicyIccid(null);
       setRenamingIccid(null);
       setRenameValue("");
       setDeleteTarget(null);
@@ -526,6 +525,7 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
         <EsimEuiccGroup
           key={g.aidHex || g.eid || `group-${i}`}
           deviceId={deviceId}
+          hostType={hostType}
           deviceOnline={deviceOnline}
           profilesStale={profilesStale}
           group={g}
@@ -537,18 +537,12 @@ export function DeviceEsimTab({ deviceId, deviceImei, isActive, deviceOnline, re
           renameValue={renameValue}
           switchingIccid={switchingIccid}
           deletingIccid={deletingIccid}
-          policyIccid={policyIccid}
           onRenameValueChange={setRenameValue}
           onSwitch={switchProfile}
           onStartRename={startRename}
           onSubmitRename={submitRename}
           onCancelRename={cancelRename}
-          onTogglePolicy={(iccid) => {
-            if (mutationUnavailable()) return;
-            setPolicyIccid((prev) => (prev === iccid ? null : iccid));
-          }}
           onDelete={openDelete}
-          onPolicyChanged={() => loadOverview(true)}
         />
       ))}
       <EsimNotificationsModal

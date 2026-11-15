@@ -44,7 +44,7 @@ func (c *registrationTaskController) ReRegisterOperator(context.Context, string)
 }
 func (c *registrationTaskController) Refresh(context.Context, string) (device.Snapshot, error) {
 	c.actions = append(c.actions, "refresh")
-	return device.Snapshot{ICCID: "test-card", RegistrationStatus: c.registration, PSAttached: false}, nil
+	return device.Snapshot{ICCID: testICCIDCurrent, RegistrationStatus: c.registration, PSAttached: false}, nil
 }
 func (c *registrationTaskController) SendSMS(context.Context, string, string, string) (device.SMSSendResult, error) {
 	c.actions = append(c.actions, "sms")
@@ -69,24 +69,25 @@ func TestCellularRegistrationTaskExecution(t *testing.T) {
 			s := regionServer(t, "310260123456789")
 			s.vowifi = nil
 			controller := &registrationTaskController{registration: tc.registration, stopErr: tc.stopErr,
-				fakeDeviceController: fakeDeviceController{entry: device.Device{ID: "dev1", Discovered: true, Snapshot: &device.Snapshot{ICCID: "test-card"}}},
+				fakeDeviceController: fakeDeviceController{entry: device.Device{ID: "dev1", Discovered: true, Snapshot: &device.Snapshot{Responsive: true, SIMReady: true, ICCID: testICCIDCurrent}}},
 			}
 			controller.atHandler = func(command string) (response modem.Response, err error) {
 				controller.actions = append(controller.actions, "at:"+command)
 				return
 			}
 			s.devices = controller
-			original := store.CardPolicy{ICCID: "test-card", AirplaneEnabled: true, Source: "user"}
+			original := store.CardPolicy{ICCID: testICCIDCurrent, AirplaneEnabled: true, Source: "user"}
 			if err := s.store.UpsertDevice(context.Background(), store.Device{ID: "dev1", Name: "Modem"}); err != nil {
 				t.Fatal(err)
 			}
+			registerActiveTestCard(t, s.store, "dev1", "dev1", testICCIDCurrent)
 			if err := s.store.UpsertCardPolicy(context.Background(), original); err != nil {
 				t.Fatal(err)
 			}
-			original, _ = s.store.CardPolicy(context.Background(), "test-card")
+			original, _ = s.store.CardPolicy(context.Background(), testICCIDCurrent)
 			ctx, cancel := context.WithTimeout(context.Background(), tc.timeout)
 			defer cancel()
-			output, err := s.executeAutomaticTask(ctx, store.AutomaticTask{DeviceID: "dev1", ProfileICCID: "test-card", TaskType: "cellular_attach", Environment: "cellular", Payload: []byte(`{}`)}, func(string) {})
+			output, err := s.executeAutomaticTask(ctx, store.AutomaticTask{DeviceID: "dev1", ProfileICCID: testICCIDCurrent, TaskType: "cellular_attach", Environment: "cellular", Payload: []byte(`{}`)}, func(string) {})
 			if tc.wantErr == "" {
 				if err != nil || output != "已注册蜂窝网络，未启用数据连接" {
 					t.Fatalf("output=%q error=%v", output, err)
@@ -106,7 +107,7 @@ func TestCellularRegistrationTaskExecution(t *testing.T) {
 					t.Fatal("registered despite failing to stop data")
 				}
 			}
-			restored, err := s.store.CardPolicy(context.Background(), "test-card")
+			restored, err := s.store.CardPolicy(context.Background(), testICCIDCurrent)
 			if err != nil || restored.NetworkEnabled != original.NetworkEnabled || restored.AirplaneEnabled != original.AirplaneEnabled || restored.VoWiFiEnabled != original.VoWiFiEnabled || restored.Source != original.Source {
 				t.Fatalf("restored=%+v error=%v", restored, err)
 			}
@@ -128,7 +129,7 @@ func TestCellularRegistrationTaskValidation(t *testing.T) {
 		if err := s.store.UpsertDevice(context.Background(), store.Device{ID: "dev1", Name: "Modem", DeviceType: tc.deviceType}); err != nil {
 			t.Fatal(err)
 		}
-		body := fmt.Sprintf(`{"name":"Register","device_id":"dev1","profile_iccid":"test-card","task_type":"cellular_attach","environment":%q,"interval_days":1,"start_date":"2026-10-02","run_time":"12:00","timezone":"UTC","payload":{}}`, tc.environment)
+		body := fmt.Sprintf(`{"name":"Register","device_id":"dev1","profile_iccid":%q,"task_type":"cellular_attach","environment":%q,"interval_days":1,"start_date":"2026-10-02","run_time":"12:00","timezone":"UTC","payload":{}}`, testICCIDCurrent, tc.environment)
 		req := httptest.NewRequest("POST", "/api/automatic-tasks", strings.NewReader(body))
 		task, err := s.decodeAutomaticTask(req, 0)
 		if (err != nil) != tc.wantError {

@@ -130,7 +130,7 @@ func TestAddDevicePersistsConfigWhenInitialAirplaneModeIsTemporarilyUnavailable(
 	if err != nil {
 		t.Fatalf("saved device missing: %v", err)
 	}
-	if config.NetworkEnabled || !config.VoWiFiEnabled || config.USBPath != entry.Candidate.USBPath {
+	if config.NetworkEnabled || config.VoWiFiEnabled || config.USBPath != entry.Candidate.USBPath {
 		t.Fatalf("saved safe config = %+v", config)
 	}
 }

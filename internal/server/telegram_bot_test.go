@@ -320,10 +320,13 @@ func TestTelegramExecutesGuardedATForConfiguredDevice(t *testing.T) {
 	if err := database.UpsertDevice(context.Background(), store.Device{ID: "EC20", Name: "EC20"}); err != nil {
 		t.Fatal(err)
 	}
+	registerActiveTestCard(t, database, "EC20", "EC20", testICCIDCurrent)
 	bot := &telegramBot{server: &Server{
 		store: database,
 		devices: fakeDeviceController{
-			entry:      device.Device{ID: "EC20", Discovered: true},
+			entry: device.Device{ID: "EC20", Discovered: true, Snapshot: &device.Snapshot{
+				DeviceID: "EC20", Responsive: true, SIMReady: true, ICCID: testICCIDCurrent,
+			}},
 			atResponse: modem.Response{Lines: []string{"+CSQ: 18,99"}, Final: "OK"},
 		},
 	}}
@@ -350,10 +353,13 @@ func TestTelegramExecutesInteractiveUSSDForConfiguredDevice(t *testing.T) {
 	if err := database.UpsertDevice(context.Background(), store.Device{ID: "EC20", Name: "EC20"}); err != nil {
 		t.Fatal(err)
 	}
+	registerActiveTestCard(t, database, "EC20", "EC20", testICCIDCurrent)
 	bot := &telegramBot{server: &Server{
 		store: database,
 		devices: fakeDeviceController{
-			entry: device.Device{ID: "EC20", Discovered: true},
+			entry: device.Device{ID: "EC20", Discovered: true, Snapshot: &device.Snapshot{
+				DeviceID: "EC20", Responsive: true, SIMReady: true, ICCID: testICCIDCurrent,
+			}},
 			ussdResult: device.USSDResult{
 				Code: "*100#", Text: "1. Balance\n2. Bundles", Status: "awaiting_input",
 				SessionID: "0123456789abcdef", Continueable: true,
@@ -422,9 +428,23 @@ func TestTelegramTimedVoWiFiCallUsesIMSAndHangsUpByCallID(t *testing.T) {
 	controller := &telegramTestCallController{state: vowifi.State{IMSReady: true}}
 	controller.dialResult = vowifi.Call{ID: "ims-call-1", Number: "+447700900123", Direction: "outgoing", State: "dialing"}
 	controller.calls = []vowifi.Call{{ID: "ims-call-1", Number: "+447700900123", Direction: "outgoing", State: "active"}}
-	bot := &telegramBot{server: &Server{vowifi: controller}}
+	database, err := store.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.UpsertDevice(context.Background(), store.Device{ID: "EC20", Name: "EC20"}); err != nil {
+		t.Fatal(err)
+	}
+	registerActiveTestCard(t, database, "EC20", "EC20", testICCIDCurrent)
+	devices := fakeDeviceController{entry: device.Device{
+		ID: "EC20", Discovered: true,
+		Snapshot: &device.Snapshot{Responsive: true, SIMReady: true, ICCID: testICCIDCurrent},
+	}}
+	bot := &telegramBot{server: &Server{store: database, devices: devices, vowifi: controller}}
 	result, err := bot.executeTimedVoWiFiCall(context.Background(), telegramRuntimeConfig{}, telegramPendingAction{
-		DeviceID: "EC20", Argument: "+447700900123", Duration: 20 * time.Millisecond,
+		DeviceID: "EC20", TargetICCID: testICCIDCurrent,
+		Argument: "+447700900123", Duration: 20 * time.Millisecond,
 	}, controller)
 	if err != nil || !strings.Contains(result, "已接通") {
 		t.Fatalf("timed VoWiFi result = %q, %v", result, err)

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1158,7 +1159,16 @@ func (bot *telegramBot) confirmESIMSwitch(ctx context.Context, config telegramRu
 func (bot *telegramBot) confirmSMS(ctx context.Context, config telegramRuntimeConfig, chatID, adminID int64, deviceID, phone, text string) {
 	phone = strings.TrimSpace(phone)
 	text = strings.TrimSpace(text)
-	if _, _, _, err := bot.device(deviceID); err != nil {
+	_, entry, _, err := bot.device(deviceID)
+	if err != nil {
+		bot.sendText(ctx, config, chatID, "无法发送："+err.Error(), nil)
+		return
+	}
+	expectedICCID := ""
+	if entry.Snapshot != nil {
+		expectedICCID = strings.TrimSpace(entry.Snapshot.ICCID)
+	}
+	if _, err := bot.server.ResolveRegisteredActiveCard(ctx, deviceID, expectedICCID); err != nil {
 		bot.sendText(ctx, config, chatID, "无法发送："+err.Error(), nil)
 		return
 	}
@@ -1172,7 +1182,7 @@ func (bot *telegramBot) confirmSMS(ctx context.Context, config telegramRuntimeCo
 	}
 	action := telegramPendingAction{
 		Kind: "sms", DeviceID: deviceID, Argument: phone, Text: text,
-		ChatID: chatID, AdminID: adminID, CreatedAt: time.Now(),
+		ChatID: chatID, AdminID: adminID, CreatedAt: time.Now(), TargetICCID: expectedICCID,
 	}
 	bot.askConfirmation(ctx, config, action, fmt.Sprintf("确认通过设备 %s 发送短信？\n收件人：%s\n内容：%s", deviceID, phone, truncateTelegramText(text, 800)))
 }
@@ -1187,6 +1197,14 @@ func (bot *telegramBot) confirmCall(ctx context.Context, config telegramRuntimeC
 		bot.sendText(ctx, config, chatID, "无法拨号："+err.Error(), nil)
 		return
 	}
+	expectedICCID := ""
+	if entry.Snapshot != nil {
+		expectedICCID = strings.TrimSpace(entry.Snapshot.ICCID)
+	}
+	if _, err := bot.server.ResolveRegisteredActiveCard(ctx, deviceID, expectedICCID); err != nil {
+		bot.sendText(ctx, config, chatID, "无法拨号："+err.Error(), nil)
+		return
+	}
 	transport, _, err := bot.telegramCallTransport(stored, entry)
 	if err != nil {
 		bot.sendText(ctx, config, chatID, "无法拨号："+err.Error(), nil)
@@ -1194,7 +1212,7 @@ func (bot *telegramBot) confirmCall(ctx context.Context, config telegramRuntimeC
 	}
 	action := telegramPendingAction{
 		Kind: "call", DeviceID: deviceID, Argument: number, Duration: duration,
-		ChatID: chatID, AdminID: adminID, CreatedAt: time.Now(),
+		ChatID: chatID, AdminID: adminID, CreatedAt: time.Now(), TargetICCID: expectedICCID,
 	}
 	bot.askConfirmation(ctx, config, action, fmt.Sprintf("确认通过设备 %s 拨打 %s？\n通道：%s\n持续：%d 秒，然后自动挂断。\n不会采集或处理通话音频。", deviceID, number, telegramCallTransportLabel(transport), int(duration/time.Second)))
 }
@@ -1380,12 +1398,16 @@ func (bot *telegramBot) takePending(token string, chatID, adminID int64) (telegr
 }
 
 func (bot *telegramBot) executeSMS(ctx context.Context, action telegramPendingAction) (string, error) {
+	if _, err := bot.server.ResolveRegisteredActiveCard(ctx, action.DeviceID, action.TargetICCID); err != nil {
+		return "", err
+	}
 	payload, _ := json.Marshal(map[string]string{
 		"device_id": action.DeviceID,
 		"phone":     action.Argument,
 		"message":   action.Text,
 	})
-	request := httptest.NewRequest(http.MethodPost, "/api/sms/send", bytes.NewReader(payload)).WithContext(ctx)
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/sms/send?iccid="+url.QueryEscape(action.TargetICCID), bytes.NewReader(payload)).WithContext(ctx)
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	bot.server.handleSMSSend(recorder, request)
@@ -1410,6 +1432,10 @@ func (bot *telegramBot) executeESIMSwitch(ctx context.Context, action telegramPe
 	if err != nil {
 		return "", err
 	}
+	targetRegistry := storeCardRegistry{store: bot.server.store}
+	if _, err := targetRegistry.RegisteredCard(ctx, strings.TrimSpace(action.TargetICCID)); err != nil {
+		return "", err
+	}
 	operationContext, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	desiredData := stored.NetworkEnabled && !stored.VoWiFiEnabled
@@ -1422,13 +1448,36 @@ func (bot *telegramBot) executeESIMSwitch(ctx context.Context, action telegramPe
 			dataRuntime.invalidate(stored.ID, desiredData, "failed", "Telegram eSIM profile switch did not complete")
 		}
 	}()
-	if err := bot.server.devices.ESIMSwitchProfile(operationContext, physicalID, action.TargetICCID, action.TargetAID); err != nil {
+	switchAID, resolveErr := bot.server.resolveProfileSwitchISDRAID(
+		operationContext, physicalID, action.TargetICCID, action.TargetAID,
+	)
+	if resolveErr != nil {
+		return "", resolveErr
+	}
+	if err := bot.server.devices.ESIMSwitchProfile(
+		operationContext, physicalID, action.TargetICCID, switchAID,
+	); err != nil {
+		return "", err
+	}
+	if err := bot.server.verifyActiveESIMProfile(
+		operationContext,
+		physicalID,
+		action.TargetICCID,
+		action.TargetAID,
+	); err != nil {
 		return "", err
 	}
 	if desiredData {
 		snapshot, refreshErr := bot.server.devices.Refresh(operationContext, physicalID)
 		if refreshErr != nil {
 			return "", fmt.Errorf("refresh modem after profile switch: %w", refreshErr)
+		}
+		if _, err := bot.server.ResolveRegisteredActiveCard(
+			operationContext,
+			stored.ID,
+			strings.TrimSpace(snapshot.ICCID),
+		); err != nil {
+			return "", err
 		}
 		request := bot.server.cellularNetworkRequest(operationContext, stored, &snapshot)
 		request.Enabled = true
@@ -1441,6 +1490,9 @@ func (bot *telegramBot) executeESIMSwitch(ctx context.Context, action telegramPe
 }
 
 func (bot *telegramBot) executeTimedCall(ctx context.Context, config telegramRuntimeConfig, action telegramPendingAction) (string, error) {
+	if _, err := bot.server.ResolveRegisteredActiveCard(ctx, action.DeviceID, action.TargetICCID); err != nil {
+		return "", err
+	}
 	stored, entry, physicalID, err := bot.device(action.DeviceID)
 	if err != nil {
 		return "", err
@@ -1467,6 +1519,19 @@ func (bot *telegramBot) executeSimpleCallAction(ctx context.Context, config tele
 	}
 	stored, entry, physicalID, err := bot.device(deviceID)
 	if err != nil {
+		bot.sendText(ctx, config, chatID, "通话操作失败："+err.Error(), nil)
+		return
+	}
+	expectedICCID := ""
+	if entry.Snapshot != nil {
+		expectedICCID = strings.TrimSpace(entry.Snapshot.ICCID)
+	}
+	if action == "hangup" {
+		if !AllowCardStop(deviceID) || !bot.server.callStopMatchesICCID(stored, expectedICCID) {
+			bot.sendText(ctx, config, chatID, "通话操作失败：设备 ID 无效", nil)
+			return
+		}
+	} else if _, err := bot.server.ResolveRegisteredActiveCard(ctx, deviceID, expectedICCID); err != nil {
 		bot.sendText(ctx, config, chatID, "通话操作失败："+err.Error(), nil)
 		return
 	}
@@ -1546,6 +1611,9 @@ func (bot *telegramBot) executeTimedVoWiFiCall(
 	action telegramPendingAction,
 	controller VoWiFiCallController,
 ) (string, error) {
+	if _, err := bot.server.ResolveRegisteredActiveCard(ctx, action.DeviceID, action.TargetICCID); err != nil {
+		return "", err
+	}
 	dialContext, cancelDial := context.WithTimeout(ctx, 20*time.Second)
 	call, err := controller.DialCall(dialContext, action.DeviceID, action.Argument)
 	cancelDial()
@@ -1567,12 +1635,12 @@ func (bot *telegramBot) executeTimedVoWiFiCall(
 	for {
 		select {
 		case <-ctx.Done():
-			bot.bestEffortVoWiFiHangup(controller, action.DeviceID, call.ID)
+			bot.bestEffortVoWiFiHangup(controller, action.DeviceID, action.TargetICCID, call.ID)
 			return "", ctx.Err()
 		case <-timer.C:
 			current, found, listErr := telegramFindVoWiFiCall(controller, action.DeviceID, call.ID)
 			if listErr != nil {
-				bot.bestEffortVoWiFiHangup(controller, action.DeviceID, call.ID)
+				bot.bestEffortVoWiFiHangup(controller, action.DeviceID, action.TargetICCID, call.ID)
 				return "", fmt.Errorf("读取 IMS 通话状态失败: %w", listErr)
 			}
 			if found && current.State == "failed" {
@@ -1585,6 +1653,9 @@ func (bot *telegramBot) executeTimedVoWiFiCall(
 				}
 			}
 			if found && current.State != "ended" {
+				if !bot.server.callICCIDStillCurrent(action.DeviceID, action.TargetICCID) {
+					return "", ErrCardBindingStale
+				}
 				hangContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				err = controller.HangupCall(hangContext, action.DeviceID, call.ID)
 				cancel()
@@ -1599,11 +1670,11 @@ func (bot *telegramBot) executeTimedVoWiFiCall(
 		case <-ticker.C:
 			current, found, listErr := telegramFindVoWiFiCall(controller, action.DeviceID, call.ID)
 			if listErr != nil {
-				bot.bestEffortVoWiFiHangup(controller, action.DeviceID, call.ID)
+				bot.bestEffortVoWiFiHangup(controller, action.DeviceID, action.TargetICCID, call.ID)
 				return "", fmt.Errorf("读取 IMS 通话状态失败: %w", listErr)
 			}
 			if !found {
-				bot.bestEffortVoWiFiHangup(controller, action.DeviceID, call.ID)
+				bot.bestEffortVoWiFiHangup(controller, action.DeviceID, action.TargetICCID, call.ID)
 				return "", errors.New("IMS 通话记录在拨号过程中消失")
 			}
 			lastState = current.State
@@ -1688,7 +1759,10 @@ func telegramIMSStateLabel(state string) string {
 	}
 }
 
-func (bot *telegramBot) bestEffortVoWiFiHangup(controller VoWiFiCallController, deviceID, callID string) {
+func (bot *telegramBot) bestEffortVoWiFiHangup(controller VoWiFiCallController, deviceID, expectedICCID, callID string) {
+	if !bot.server.callICCIDStillCurrent(deviceID, expectedICCID) {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = controller.HangupCall(ctx, deviceID, callID)
@@ -1700,6 +1774,9 @@ func (bot *telegramBot) executeTimedCellularCall(
 	action telegramPendingAction,
 	physicalID string,
 ) (string, error) {
+	if !bot.server.callICCIDStillCurrent(action.DeviceID, action.TargetICCID) {
+		return "", ErrCardBindingStale
+	}
 	dialContext, cancelDial := context.WithTimeout(ctx, 20*time.Second)
 	defer cancelDial()
 	// A timed call is confirmed through the call list, so a firmware without
@@ -1736,7 +1813,7 @@ func (bot *telegramBot) executeTimedCellularCall(
 	confirmed := false
 	lastState := -1
 	finish := func() (string, error) {
-		if err := bot.hangupCellularCall(physicalID); err != nil {
+		if err := bot.hangupCellularCallForCard(action.DeviceID, action.TargetICCID, physicalID); err != nil {
 			return "", fmt.Errorf("基站拨号已执行，但自动挂断失败: %w", err)
 		}
 		if !seenCall {
@@ -1761,7 +1838,7 @@ func (bot *telegramBot) executeTimedCellularCall(
 				}
 				return "", fmt.Errorf("基站呼叫失败: %s", telegramCallFinalLabel(final))
 			}
-			bot.bestEffortCellularHangup(physicalID)
+			bot.bestEffortCellularHangup(action.DeviceID, action.TargetICCID, physicalID)
 			return "", fmt.Errorf("查询基站通话状态失败: %w", queryErr)
 		}
 		current, found := telegramFindOutgoingCellularCall(calls, action.Argument)
@@ -1777,13 +1854,13 @@ func (bot *telegramBot) executeTimedCellularCall(
 			}
 			return "", fmt.Errorf("基站呼叫在振铃前结束（最后状态：%s）", telegramCLCCStateLabel(lastState))
 		} else if time.Since(startedAt) >= 5*time.Second {
-			bot.bestEffortCellularHangup(physicalID)
+			bot.bestEffortCellularHangup(action.DeviceID, action.TargetICCID, physicalID)
 			return "", errors.New("模块接受了 ATD，但 5 秒内没有建立任何 CLCC 呼叫记录")
 		}
 
 		select {
 		case <-ctx.Done():
-			bot.bestEffortCellularHangup(physicalID)
+			bot.bestEffortCellularHangup(action.DeviceID, action.TargetICCID, physicalID)
 			return "", ctx.Err()
 		case <-timer.C:
 			return finish()
@@ -1893,8 +1970,15 @@ func (bot *telegramBot) hangupCellularCall(physicalID string) error {
 	return nil
 }
 
-func (bot *telegramBot) bestEffortCellularHangup(physicalID string) {
-	_ = bot.hangupCellularCall(physicalID)
+func (bot *telegramBot) hangupCellularCallForCard(deviceID, expectedICCID, physicalID string) error {
+	if !bot.server.callICCIDStillCurrent(deviceID, expectedICCID) {
+		return ErrCardBindingStale
+	}
+	return bot.hangupCellularCall(physicalID)
+}
+
+func (bot *telegramBot) bestEffortCellularHangup(deviceID, expectedICCID, physicalID string) {
+	_ = bot.hangupCellularCallForCard(deviceID, expectedICCID, physicalID)
 }
 
 func (bot *telegramBot) executeSimpleVoWiFiCallAction(ctx context.Context, deviceID, action string, controller VoWiFiCallController) (string, error) {
@@ -2073,12 +2157,19 @@ func (bot *telegramBot) executeATCommand(ctx context.Context, deviceID, command 
 	if err := validateATCommand(command, false); err != nil {
 		return "", err
 	}
+	execution, err := bot.server.ResolveRegisteredActiveCard(ctx, deviceID, "")
+	if err != nil {
+		return "", err
+	}
 	_, _, physicalID, err := bot.device(deviceID)
 	if err != nil {
 		return "", err
 	}
 	operationContext, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
+	if _, err := bot.server.ResolveRegisteredActiveCard(operationContext, deviceID, execution.ICCID); err != nil {
+		return "", err
+	}
 	response, err := bot.server.devices.ExecuteAT(operationContext, physicalID, command)
 	if err != nil {
 		return "", err
@@ -2099,13 +2190,17 @@ func (bot *telegramBot) handleUSSDCommand(ctx context.Context, config telegramRu
 }
 
 func (bot *telegramBot) executeUSSDCommand(ctx context.Context, deviceID, code string) (device.USSDResult, error) {
-	stored, _, physicalID, err := bot.device(deviceID)
+	stored, entry, physicalID, err := bot.device(deviceID)
 	if err != nil {
 		return device.USSDResult{}, err
 	}
+	expectedICCID := ""
+	if entry.Snapshot != nil {
+		expectedICCID = strings.TrimSpace(entry.Snapshot.ICCID)
+	}
 	operationContext, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	return bot.server.startUSSD(operationContext, stored, physicalID, code)
+	return bot.server.startUSSDForCard(operationContext, stored, physicalID, code, expectedICCID)
 }
 
 func (bot *telegramBot) handleUSSDReply(ctx context.Context, config telegramRuntimeConfig, chatID, adminID int64, sessionID, input string) {
@@ -2229,6 +2324,15 @@ func (bot *telegramBot) handleVoWiFi(ctx context.Context, config telegramRuntime
 	switch operation {
 	case "on", "off":
 		enabled := operation == "on"
+		if enabled {
+			if _, err := bot.server.ResolveRegisteredActiveCard(ctx, deviceID, ""); err != nil {
+				bot.sendText(ctx, config, chatID, "VoWiFi 操作失败："+err.Error(), bot.homeKeyboard())
+				return
+			}
+		} else if !AllowCardStop(deviceID) {
+			bot.sendText(ctx, config, chatID, "VoWiFi 操作失败：设备 ID 无效", bot.homeKeyboard())
+			return
+		}
 		if enabled && stored.NetworkEnabled {
 			bot.sendText(ctx, config, chatID, "VoWiFi 操作失败：请先关闭漫游数据。", bot.homeKeyboard())
 			return
@@ -2302,6 +2406,8 @@ func (bot *telegramBot) handleVoWiFi(ctx context.Context, config telegramRuntime
 	case "reconnect":
 		if !stored.VoWiFiEnabled {
 			err = errors.New("请先启用 VoWiFi")
+		} else if _, err = bot.server.ResolveRegisteredActiveCard(ctx, deviceID, ""); err != nil {
+			// The structured gate error is returned through the normal outcome.
 		} else {
 			state, err = bot.server.vowifi.RequestReconnect(deviceID)
 		}

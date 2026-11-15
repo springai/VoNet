@@ -1,38 +1,22 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { ArrowSyncRegular, AddRegular, ChevronLeftRegular } from "@fluentui/react-icons";
-import { api, apiMessage, camelize } from "../api";
-import type { CardPolicy, DeviceConfig, DeviceListItem, DiscoveredDevice } from "../types";
+import { api, apiMessage } from "../api";
+import type { DeviceConfig, DeviceListItem, DiscoveredDevice, SimCardCandidate } from "../types";
 import { usePolling } from "../lib/usePolling";
 import { useMediaQuery } from "../lib/useMediaQuery";
 import { Button, PageHeader, RefreshButton, ErrorState, ListSkeleton, Tabs, confirmDialog, message } from "../components/ui";
 import { DeviceListPanel, type StatusFilter, type SortDir, type SortKey } from "../components/devices/DeviceListPanel";
 import { DeviceDetailHeader } from "../components/devices/DeviceDetailHeader";
-import { DeviceOverviewTab } from "../components/devices/DeviceOverviewTab";
 import { DeviceEsimTab } from "../components/devices/DeviceEsimTab";
-import { DeviceAtTab } from "../components/devices/DeviceAtTab";
-import { DeviceUssdTab } from "../components/devices/DeviceUssdTab";
 import { DeviceConfigTab } from "../components/devices/DeviceConfigTab";
-import { CardPolicyPanel } from "../components/devices/CardPolicyPanel";
 import { DeviceAddDialog } from "../components/devices/DeviceAddDialog";
-import { E911SetupDialog } from "../components/devices/E911SetupDialog";
-import { copyText, isDeviceOnline, isQmiControl, isRecoveringPhase, readEventStream, simOperatorDisplay } from "../components/devices/shared";
-import type { AddDeviceForm, DeviceDetail, LoadError } from "../components/devices/types";
+import { copyText, isDeviceOnline, isQmiControl, isRecoveringPhase } from "../components/devices/shared";
+import type { AddDeviceForm, LoadError } from "../components/devices/types";
+import { listCardCandidates, listCards } from "../components/cards/cardApi";
 import { tf, useI18n } from "../lib/i18n";
 
-const VALID_TABS = new Set(["overview", "esim", "at", "ussd", "config", "card"]);
-const CELLULAR_DATA_POLL_MS = 1000;
-const CELLULAR_DATA_DISABLE_UI_TIMEOUT_MS = 35000;
-const CELLULAR_DATA_ENABLE_UI_TIMEOUT_MS = 80000;
-
-interface CellularDataStatus {
-  enabled: boolean;
-  connected: boolean;
-  phase: "unknown" | "starting" | "connected" | "stopping" | "recovering" | "disabled" | "failed";
-  modemPhase?: "rebooting" | "";
-  maintenancePhase?: string;
-  lastError?: string;
-}
+const VALID_TABS = new Set(["esim", "config"]);
 const EMPTY_ADD: AddDeviceForm = {
   id: "",
   name: "",
@@ -51,24 +35,19 @@ const EMPTY_ADD: AddDeviceForm = {
 
 export default function DevicesPage() {
   const { t } = useI18n();
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [list, setList] = useState<DeviceListItem[]>([]);
   const [deviceLimit, setDeviceLimit] = useState(0);
   const [listLoading, setListLoading] = useState(true);
   const [listError, setListError] = useState<LoadError | null>(null);
   const [lastOkAt, setLastOkAt] = useState<number | null>(null);
-  const [detail, setDetail] = useState<DeviceDetail | null>(null);
   const [selectedId, setSelectedId] = useState("");
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState("esim");
   const [editConfig, setEditConfig] = useState<DeviceConfig | null>(null);
   const [configSnapshot, setConfigSnapshot] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-	const [dataToggling, setDataToggling] = useState(false);
-	const [dataToggleTarget, setDataToggleTarget] = useState<boolean | null>(null);
   const [rebooting, setRebooting] = useState(false);
-  const [reconnectingVoWiFi, setReconnectingVoWiFi] = useState(false);
   const [rescanning, setRescanning] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoveredDevice[]>([]);
   const [discovering, setDiscovering] = useState(false);
@@ -76,17 +55,14 @@ export default function DevicesPage() {
   const [addSelected, setAddSelected] = useState<DiscoveredDevice | null>(null);
   const [addConfig, setAddConfig] = useState<AddDeviceForm>(EMPTY_ADD);
   const [addSaving, setAddSaving] = useState(false);
-  const [e911Open, setE911Open] = useState(false);
-  const [cardPolicy, setCardPolicy] = useState<CardPolicy | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [candidateByICCID, setCandidateByICCID] = useState<Record<string, SimCardCandidate>>({});
 
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
-  const detailRef = useRef(detail);
-  detailRef.current = detail;
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
   const searchParamsRef = useRef(searchParams);
@@ -100,21 +76,7 @@ export default function DevicesPage() {
     p.delete("device");
     p.delete("tab");
     setSearchParams(p, { replace: true });
-    setDetail(null);
   }, [setSearchParams]);
-
-  const loadDetail = useCallback(async (id: string) => {
-    if (!id) {
-      setDetail(null);
-      return;
-    }
-    try {
-      const res = await api<{ devices?: DeviceDetail[] }>(`/devices/${id}/overview`);
-      setDetail((res?.devices || [])[0] || null);
-    } catch {
-      /* keep stale detail */
-    }
-  }, []);
 
   const loadConfig = useCallback(async (id: string) => {
     if (!id) {
@@ -131,19 +93,6 @@ export default function DevicesPage() {
     } catch {
       setEditConfig(null);
       setConfigSnapshot("");
-    }
-  }, []);
-
-  const loadCardPolicy = useCallback(async (iccid?: string) => {
-    const clean = (iccid || "").trim();
-    if (!clean) {
-      setCardPolicy(null);
-      return;
-    }
-    try {
-      setCardPolicy(await api<CardPolicy>(`/cards/${encodeURIComponent(clean)}/policy`));
-    } catch {
-      /* keep stale policy */
     }
   }, []);
 
@@ -175,10 +124,38 @@ export default function DevicesPage() {
         p.set("tab", activeTabRef.current);
         setSearchParams(p, { replace: true });
       }
-      void Promise.all([loadDetail(clean), loadConfig(clean)]);
+      void loadConfig(clean);
     },
-    [loadDetail, loadConfig, setSearchParams],
+    [loadConfig, setSearchParams],
   );
+
+  const loadCandidateStatus = useCallback(async () => {
+    try {
+      const registered = await listCards();
+      const candidates = await listCardCandidates(registered);
+      const next: Record<string, SimCardCandidate> = {};
+      for (const candidate of candidates) {
+        const iccid = candidate.iccid.replace(/\s+/g, "");
+        const existing = next[iccid];
+        next[iccid] = existing
+          ? {
+              ...existing,
+              conflict: existing.conflict === true || candidate.conflict === true,
+              state:
+                existing.state === "stable" || candidate.state === "stable"
+                  ? "stable"
+                  : existing.state === "pending" || candidate.state === "pending"
+                    ? "pending"
+                    : "offline",
+              hostType: existing.hostType || candidate.hostType,
+            }
+          : candidate;
+      }
+      setCandidateByICCID(next);
+    } catch {
+      setCandidateByICCID({});
+    }
+  }, []);
 
   const loadDevices = useCallback(
     async (manual: boolean) => {
@@ -190,6 +167,7 @@ export default function DevicesPage() {
         const res = await api<{ devices?: DeviceListItem[]; deviceLimit?: number }>("/devices");
         const devices = res?.devices || [];
         setList(devices);
+        void loadCandidateStatus();
         setDeviceLimit(typeof res?.deviceLimit === "number" ? res.deviceLimit : 0);
         setLastOkAt(Date.now());
         if (manual) setListError(null);
@@ -200,14 +178,11 @@ export default function DevicesPage() {
         else if (next && devices.length === 0) next = "";
         if (next !== selectedIdRef.current) {
           setSelectedId(next);
-          if (next) await Promise.all([loadDetail(next), loadConfig(next)]);
+          if (next) await loadConfig(next);
           else {
-            setDetail(null);
             setEditConfig(null);
             setConfigSnapshot("");
           }
-        } else if (next) {
-          await loadDetail(next);
         }
       } catch (e) {
         if (manual) setListError({ message: apiMessage(e) || t("加载设备信息失败"), status: (e as { status?: number })?.status });
@@ -215,12 +190,12 @@ export default function DevicesPage() {
         if (manual) setListLoading(false);
       }
     },
-    [loadDetail, loadConfig],
+    [loadCandidateStatus, loadConfig],
   );
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([loadDevices(false), selectedIdRef.current ? loadDetail(selectedIdRef.current) : Promise.resolve()]);
-  }, [loadDevices, loadDetail]);
+    await loadDevices(false);
+  }, [loadDevices]);
 
   const refreshSoon = useCallback(
     (ms: number) => {
@@ -248,86 +223,6 @@ export default function DevicesPage() {
     },
     [setSearchParams],
   );
-
-  const handleToggleRoamingData = useCallback(async (enabled: boolean) => {
-    const id = selectedIdRef.current.trim();
-	if (!id || dataToggling) return;
-	setDataToggling(true);
-	setDataToggleTarget(enabled);
-	message.info(enabled ? t("正在开启漫游数据，请稍候") : t("正在关闭漫游数据，请稍候"));
-    try {
-	  const accepted = await api<CellularDataStatus>(`/devices/${id}/network`, { method: "PATCH", body: { enabled } });
-	  setDetail((current) => current?.id === id ? {
-		...current,
-		networkEnabled: accepted.enabled,
-		 networkConnected: accepted.connected,
-		 networkPhase: accepted.phase,
-		 modemPhase: accepted.modemPhase || "",
-		 networkError: accepted.lastError || "",
-	  } : current);
-
-	  const deadline = Date.now() + (enabled ? CELLULAR_DATA_ENABLE_UI_TIMEOUT_MS : CELLULAR_DATA_DISABLE_UI_TIMEOUT_MS);
-	  let terminal: CellularDataStatus | null = null;
-	  let lastPollError: unknown = null;
-	  while (Date.now() < deadline) {
-		await new Promise((resolve) => window.setTimeout(resolve, CELLULAR_DATA_POLL_MS));
-		try {
-		  const status = await api<CellularDataStatus>(`/devices/${id}/network`);
-		  lastPollError = null;
-		  setDetail((current) => current?.id === id ? {
-			...current,
-			networkEnabled: status.enabled,
-			 networkConnected: status.connected,
-			 networkPhase: status.phase,
-			 modemPhase: status.modemPhase || "",
-			 networkError: status.lastError || "",
-		  } : current);
-		  if (status.phase === "failed" || (enabled && status.phase === "connected") || (!enabled && status.phase === "disabled")) {
-			terminal = status;
-			break;
-		  }
-		} catch (pollError) {
-		  lastPollError = pollError;
-		}
-	  }
-
-	  if (!terminal) {
-		throw new Error(apiMessage(lastPollError) || t("操作超时，请检查当前数据会话状态"));
-	  }
-	  if (terminal.phase === "failed") {
-		throw new Error(terminal.lastError || (enabled ? t("开启漫游数据失败") : t("关闭漫游数据失败")));
-	  }
-	  message.success(enabled ? t("漫游数据已开启，仅供 Export Proxy 使用") : t("漫游数据已关闭"));
-    } catch (e) {
-	  message.error(apiMessage(e) || (enabled ? t("开启漫游数据失败") : t("关闭漫游数据失败")));
-    } finally {
-	  await refreshAll();
-	  setDataToggling(false);
-	  setDataToggleTarget(null);
-    }
-	}, [dataToggling, refreshAll, t]);
-
-  const handleReconnectVoWiFi = useCallback(async () => {
-    const id = selectedIdRef.current.trim();
-    if (!id) return;
-    const ok = await confirmDialog(tf("确定对设备 {id} 发起 VoWiFi 环境的重新连接拨号？这将在后台重新注册 IMS 链路。", { id }), t("重连 VoWiFi"), {
-      confirmText: t("确定重连"),
-      cancelText: t("取消"),
-      type: "info",
-    });
-    if (!ok) return;
-    setReconnectingVoWiFi(true);
-    try {
-      await api(`/devices/${id}/vowifi/actions/reconnect`, { method: "POST" });
-      message.success(t("已触发重连指令，VoWiFi 服务正在重启..."));
-      refreshAll().catch(() => {});
-      refreshSoon(4000);
-    } catch (e) {
-      message.error(apiMessage(e) || t("重连命令下发失败"));
-    } finally {
-      setReconnectingVoWiFi(false);
-    }
-  }, [refreshAll, refreshSoon]);
 
   const handleRebootModem = useCallback(async () => {
     const id = selectedIdRef.current.trim();
@@ -366,10 +261,6 @@ export default function DevicesPage() {
     }
   }, [loadDevices, loadDiscovered]);
 
-  const handleOpenSms = useCallback(() => {
-    const id = selectedIdRef.current;
-    if (id) navigate(`/sms?device=${id}`);
-  }, [navigate]);
   const handleSaveConfig = useCallback(async () => {
     const id = selectedIdRef.current.trim();
     if (!id || !editConfig) return;
@@ -384,14 +275,13 @@ export default function DevicesPage() {
       else message.success(t("配置已保存"));
       setConfigSnapshot(JSON.stringify(editConfig));
       await loadDevices(false);
-      if (selectedIdRef.current) await loadDetail(selectedIdRef.current);
       await loadConfig(id);
     } catch (e) {
       message.error(apiMessage(e) || t("保存失败"));
     } finally {
       setSaving(false);
     }
-  }, [editConfig, loadDevices, loadDetail, loadConfig]);
+  }, [editConfig, loadDevices, loadConfig]);
 
   const handleDeleteDevice = useCallback(async () => {
     const id = selectedIdRef.current.trim();
@@ -406,7 +296,6 @@ export default function DevicesPage() {
     try {
       await api(`/devices/${id}`, { method: "DELETE" });
       message.success(t("设备已删除"));
-      setDetail(null);
       setEditConfig(null);
       setConfigSnapshot("");
       setSelectedId("");
@@ -510,28 +399,12 @@ export default function DevicesPage() {
     }
   }, [addSelected, addConfig, loadDevices]);
 
-  const setupE911 = useCallback(async () => {
-    const id = selectedIdRef.current.trim();
-    if (id) setE911Open(true);
-  }, []);
-
-  const handleE911Done = useCallback(async () => {
-    setE911Open(false);
-    await refreshAll();
-  }, [refreshAll]);
-
   const handleCopyText = useCallback((text: string) => {
     const clean = (text || "").trim();
     if (!clean || clean === "--" || clean === "---") return;
     void copyText(clean, t("已复制"));
   }, []);
 
-  const handlePolicyChanged = useCallback(async () => {
-    await Promise.all([
-      loadCardPolicy(detailRef.current?.modem?.iccid),
-      selectedIdRef.current ? loadDetail(selectedIdRef.current) : Promise.resolve(),
-    ]);
-  }, [loadCardPolicy, loadDetail]);
   // URL -> state sync.
   useEffect(() => {
     const tab = (searchParams.get("tab") || "").trim();
@@ -539,9 +412,9 @@ export default function DevicesPage() {
     const dev = (searchParams.get("device") || "").trim();
     if (dev && dev !== selectedIdRef.current) {
       setSelectedId(dev);
-      void Promise.all([loadDetail(dev), loadConfig(dev)]);
+      void loadConfig(dev);
     }
-  }, [searchParams, loadDetail, loadConfig]);
+  }, [searchParams, loadConfig]);
 
   // Initial load + background polling.
   useEffect(() => {
@@ -550,84 +423,6 @@ export default function DevicesPage() {
   usePolling(() => {
     void loadDevices(false);
   }, 15000, false);
-
-  // The backend publishes a fresh overview snapshot every two seconds. Keep
-  // the selected Overview tab live without reloading the page, and reconnect
-  // quietly after transient network/server interruptions.
-  useEffect(() => {
-    if (activeTab !== "overview" || !selectedId) return;
-    const streamDeviceID = selectedId;
-    let stopped = false;
-    let controller: AbortController | null = null;
-    let retryTimer: number | null = null;
-
-    const stopConnection = () => {
-      controller?.abort();
-      controller = null;
-      if (retryTimer !== null) {
-        window.clearTimeout(retryTimer);
-        retryTimer = null;
-      }
-    };
-    const scheduleReconnect = () => {
-      if (stopped || document.hidden || retryTimer !== null) return;
-      retryTimer = window.setTimeout(() => {
-        retryTimer = null;
-        connect();
-      }, 2000);
-    };
-    const connect = () => {
-      if (stopped || document.hidden || controller) return;
-      const nextController = new AbortController();
-      controller = nextController;
-      readEventStream(
-        `/devices/${encodeURIComponent(streamDeviceID)}/overview/stream`,
-        {},
-        {
-          signal: nextController.signal,
-          onEvent: (event, data) => {
-            if (event !== "overview" || !data || selectedIdRef.current !== streamDeviceID) return;
-            try {
-              const nextDetail = camelize<DeviceDetail>(JSON.parse(data));
-              setDetail(nextDetail);
-              setList((current) =>
-                current.map((item) => (item.id === streamDeviceID ? { ...item, ...nextDetail } : item)),
-              );
-            } catch {
-              // Ignore one malformed event; the stream's next snapshot can
-              // still update the page without forcing a reconnect.
-            }
-          },
-        },
-      )
-        .catch(() => {})
-        .finally(() => {
-          if (controller === nextController) controller = null;
-          if (!nextController.signal.aborted) scheduleReconnect();
-        });
-    };
-    const onVisibilityChange = () => {
-      if (document.hidden) stopConnection();
-      else {
-        void loadDetail(streamDeviceID);
-        connect();
-      }
-    };
-
-    connect();
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      stopped = true;
-      stopConnection();
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, [activeTab, selectedId, loadDetail]);
-
-  // Card policy follows the current SIM.
-  const iccid = detail?.modem?.iccid;
-  useEffect(() => {
-    void loadCardPolicy(iccid);
-  }, [iccid, loadCardPolicy]);
 
   const filteredDevices = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -658,49 +453,23 @@ export default function DevicesPage() {
   }, [list, query, statusFilter, sortKey, sortDir]);
 
   const selectedListItem = useMemo(() => list.find((d) => d.id === selectedId) || null, [list, selectedId]);
-  const simOperator = useMemo(() => simOperatorDisplay(detail), [detail]);
   const configDirty = editConfig && configSnapshot ? JSON.stringify(editConfig) !== configSnapshot : false;
   const unconfiguredDiscovered = useMemo(() => discovered.filter((d) => !d.configured), [discovered]);
 
-  const detailOnline = isDeviceOnline(detail);
-	const isReader = detail?.deviceType === "usb_sim_reader";
-	const isNative410 = detail?.deviceType === "wifi_410";
-	useEffect(() => {
-		if (isReader && ["at", "ussd"].includes(activeTab)) setActiveTab("overview");
-	}, [isReader, activeTab]);
+  useEffect(() => {
+    if (activeTab !== "esim" && activeTab !== "config") setActiveTab("config");
+  }, [activeTab]);
   const addAtLimit = deviceLimit > 0 && list.length >= deviceLimit;
   const tabItems = [
-    { key: "overview", label: t("概览") },
     { key: "esim", label: t("eSIM") },
-    { key: "at", label: t("AT 终端") },
-    { key: "ussd", label: t("USSD") },
     { key: "config", label: t("配置") },
-    { key: "card", label: t("卡策略") },
-  ].filter((tab) => !isReader || !["at", "ussd"].includes(tab.key));
-
-  const overviewNode = detail?.id === selectedId ? (
-    <div className="space-y-4">
-      <DeviceOverviewTab
-        key={detail.id}
-        device={detail}
-        simOperatorDisplay={simOperator}
-        customPhoneNumber={cardPolicy?.iccid === detail.modem?.iccid ? cardPolicy.customPhoneNumber : ""}
-        trafficSpeedRx={''}
-        trafficSpeedTx={''}
-        trafficMinuteRx={''}
-        trafficMinuteTx={''}
-        e911Starting={e911Open}
-        onSetupE911={setupE911}
-        onRefresh={refreshAll}
-      />
-    </div>
-  ) : null;
+  ];
 
   return (
     <div className="devices-page">
       <PageHeader
         title={t("设备管理")}
-        subtitle={t("接管 EC20 模组并执行射频、网络、SIM 与终端功能检测")}
+        subtitle={t("管理设备硬件、eSIM Profile 和设备配置")}
         actions={
           <div className="flex items-center gap-2">
             <RefreshButton loading={listLoading} onClick={refreshAll} />
@@ -743,6 +512,7 @@ export default function DevicesPage() {
             filteredDevices={filteredDevices}
             deviceCount={list.length}
             deviceLimit={deviceLimit}
+            candidateByICCID={candidateByICCID}
             onQueryChange={setQuery}
             onStatusFilterChange={setStatusFilter}
             onSortKeyChange={setSortKey}
@@ -751,52 +521,31 @@ export default function DevicesPage() {
           />
         )}
         <div className={`min-w-0 space-y-4 ${isMobile && selectedId ? "" : isMobile ? "hidden" : ""}`}>
-          {isMobile && selectedId && detail ? (
+          {isMobile && selectedId && selectedListItem ? (
             <Button variant="text" onClick={handleBackToList} icon={<ChevronLeftRegular />}>
               {t("返回")}
             </Button>
           ) : null}
-          {detail ? (
+          {selectedListItem ? (
             <>
-			<DeviceDetailHeader
-				device={detail}
-				dataToggling={dataToggling || detail.modemPhase === "rebooting" || ["starting", "stopping"].includes(detail.networkPhase || "")}
-				dataToggleTarget={detail.modemPhase === "rebooting" ? null : dataToggling ? dataToggleTarget : detail.networkPhase === "starting" ? true : detail.networkPhase === "stopping" ? false : null}
-				modemRebooting={detail.modemPhase === "rebooting"}
-                rebooting={rebooting}
-                reconnectingVoWiFi={reconnectingVoWiFi}
-                onCopyText={handleCopyText}
-				onToggleRoamingData={handleToggleRoamingData}
-                onReconnectVowifi={handleReconnectVoWiFi}
-                onRebootModem={handleRebootModem}
-                onOpenSms={handleOpenSms}
-				wifiCallingOnly={isReader}
-				modemControlOnly={isNative410}
-              />
+              <DeviceDetailHeader device={selectedListItem} onCopyText={handleCopyText} />
               <div className="device-detail-tabs ui-card p-6">
                 <Tabs tabs={tabItems} value={activeTab} onChange={handleTabChange} />
                 <div className="mt-5">
-                  {activeTab === "overview" ? overviewNode : null}
                   {activeTab === "esim" ? (
                     <DeviceEsimTab
-                      deviceId={detail.id}
-                      deviceImei={detail.modem?.imei || ""}
+                      deviceId={selectedListItem.id}
+                      hostType={selectedListItem.deviceType}
+                      deviceImei={selectedListItem.modem?.imei || ""}
                       isActive={activeTab === "esim"}
-                      deviceOnline={detailOnline}
+                      deviceOnline={isDeviceOnline(selectedListItem)}
                       rebooting={rebooting}
                       onRebootModem={handleRebootModem}
                       onProfileChanged={handleProfileChanged}
                     />
                   ) : null}
-                  {activeTab === "at" ? (
-                    <DeviceAtTab deviceId={detail.id} backendMode={detail.backendMode} atPort={detail.atPort} running={detail.running} />
-                  ) : null}
-                  {activeTab === "ussd" ? <DeviceUssdTab deviceId={detail.id} /> : null}
                   {activeTab === "config" ? (
-                    <DeviceConfigTab editConfig={editConfig} deviceStatus={detail} saving={saving} deleting={deleting} onSave={handleSaveConfig} onDelete={handleDeleteDevice} onEditConfig={setEditConfig} />
-                  ) : null}
-                  {activeTab === "card" ? (
-                    <CardPolicyPanel deviceId={detail.id} iccid={detail.modem?.iccid} policy={cardPolicy} deviceOnline={detailOnline} onPolicyChanged={handlePolicyChanged} wifiCallingOnly={isReader} />
+                    <DeviceConfigTab editConfig={editConfig} deviceStatus={selectedListItem} saving={saving} deleting={deleting} onSave={handleSaveConfig} onDelete={handleDeleteDevice} onEditConfig={setEditConfig} />
                   ) : null}
                 </div>
               </div>
@@ -822,13 +571,6 @@ export default function DevicesPage() {
         onSelectDevice={selectDiscovered}
         onConfigChange={setAddConfig}
         onSave={saveAdd}
-      />
-      <E911SetupDialog
-        key={selectedId}
-        open={e911Open}
-        deviceId={selectedId}
-        onClose={() => setE911Open(false)}
-        onDone={handleE911Done}
       />
     </div>
   );

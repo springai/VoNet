@@ -203,7 +203,7 @@ func upsertDevice(ctx context.Context, executor contextExecer, value Device) err
 		value.ESIMTransport = "pcsc"
 		value.NetworkEnabled = false
 		value.SMSEnabled = true
-		value.VoWiFiEnabled = true
+		value.VoWiFiEnabled = false
 	}
 	extra, err := normalizeJSONObject(value.Extra)
 	if err != nil {
@@ -330,6 +330,26 @@ func (s *Store) DeleteDevice(ctx context.Context, id string) error {
 		`, strings.TrimSpace(modemIMEI), time.Now().UTC().Unix(), id); err != nil {
 			return fmt.Errorf("anchor SMS history for device %q: %w", id, err)
 		}
+	}
+	if err := clearSimCardBindingsForDevice(ctx, tx, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM sim_card_candidates WHERE device_id = ?
+	`, id); err != nil {
+		return fmt.Errorf("clear SIM card candidates for device %q: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE device_proxy_binding_groups SET device_id = '', updated_at = ?
+		WHERE device_id = ?
+	`, time.Now().UTC().Unix(), id); err != nil {
+		return fmt.Errorf("unbind proxy groups for device %q: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE device_proxy_bindings SET device_id = '', updated_at = ?
+		WHERE device_id = ?
+	`, time.Now().UTC().Unix(), id); err != nil {
+		return fmt.Errorf("unbind profile proxy bindings for device %q: %w", id, err)
 	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM devices WHERE id = ?`, id)
 	if err != nil {

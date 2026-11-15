@@ -22,7 +22,7 @@ const BAR_TONE = {
   gray: "bg-gray-300 dark:bg-gray-600",
 } as const;
 
-export function OverviewNetworkCard({ device, onOpenOperatorSelection, onOpenCellLock, cellLocked, cellLockStatusKnown }: { device: DeviceDetail; onOpenOperatorSelection: () => void; onOpenCellLock?: () => void; cellLocked: boolean; cellLockStatusKnown: boolean }) {
+export function OverviewNetworkCard({ device, onOpenOperatorSelection, onOpenCellLock, cellLocked, cellLockStatusKnown }: { device: DeviceDetail; onOpenOperatorSelection?: () => void; onOpenCellLock?: () => void; cellLocked: boolean; cellLockStatusKnown: boolean }) {
   const { t } = useI18n();
   const modem = device.modem;
   const online = isDeviceOnline(device);
@@ -99,14 +99,16 @@ export function OverviewNetworkCard({ device, onOpenOperatorSelection, onOpenCel
           </div>
         </div>
         {onOpenCellLock ? <CellLockButton compact onClick={onOpenCellLock} locked={cellLocked} statusKnown={cellLockStatusKnown} /> : null}
-        <button
-          type="button"
-          onClick={onOpenOperatorSelection}
-          className="rounded p-1 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
-          title={t("网络选择设置")}
-        >
-          <SettingsRegular className="h-5 w-5 text-gray-500 dark:text-gray-400" />
-        </button>
+        {onOpenOperatorSelection ? (
+          <button
+            type="button"
+            onClick={onOpenOperatorSelection}
+            className="rounded p-1 transition-colors hover:bg-black/5 dark:hover:bg-white/10"
+            title={t("网络选择设置")}
+          >
+            <SettingsRegular className="h-5 w-5 text-gray-500 dark:text-gray-400" />
+          </button>
+        ) : null}
       </div>
       <div className="mb-3 rounded-xl border border-gray-200 px-3.5 py-3 dark:border-white/10">
         <div className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-gray-400">{t("信号强度")}</div>

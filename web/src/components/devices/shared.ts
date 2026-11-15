@@ -61,11 +61,15 @@ export function isRegistered(device?: { modem?: { regStatus?: number } } | null)
 
 // The stored device flag is the desired policy, while runtime.enabled is the
 // live owner of RF/IKE/IMS. A stale desired flag must not replace a healthy
-// cellular overview with an all-red "disabled" VoWiFi pipeline.
+// cellular overview with an all-red "disabled" VoWiFi pipeline. WiFi
+// Calling-only hosts, such as USB SIM readers, have no cellular service mode,
+// so their overview remains on VoWiFi even while the runtime is starting.
 export function isVoWiFiInUse(device?: {
   vowifiEnabled?: boolean;
   vowifiRuntime?: { enabled?: boolean };
-} | null): boolean {
+} | null, wifiCallingOnly = false): boolean {
+  if (!device) return false;
+  if (wifiCallingOnly) return true;
   if (!device?.vowifiEnabled) return false;
   return device.vowifiRuntime?.enabled !== false;
 }
@@ -131,16 +135,11 @@ export async function copyText(value: unknown, msg = tl("已复制")): Promise<b
  * Sensitive-info visibility store (vohive_show_sensitive), shared across tabs.
  * ------------------------------------------------------------------------- */
 const SENSITIVE_KEY = "vonet_show_sensitive";
-let sensitiveValue = readSensitive();
+// Privacy-sensitive views start hidden on every page load. The visibility value
+// is still mirrored to storage for compatibility with older clients, but a
+// previous reveal must not become the next session's default.
+let sensitiveValue = false;
 const sensitiveListeners = new Set<() => void>();
-
-function readSensitive(): boolean {
-  try {
-    return typeof window === "undefined" ? false : window.localStorage.getItem(SENSITIVE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
 function writeSensitive(value: boolean) {
   try {
     if (typeof window !== "undefined") window.localStorage.setItem(SENSITIVE_KEY, value ? "1" : "0");

@@ -1712,3 +1712,82 @@ ike: IKE_AUTH EAP round 1: ike: responder reported fatal notification 10500
 - 需要重新构建并部署包含新前端资源的 VoNet 二进制后再进行实机登录、代理绑定和 eSIM 离线缓存验证。
 
 ---
+
+### 61. SIM 卡管理、PC/SC VoWiFi 与卡片原子恢复
+
+**问题背景**:
+
+- 本次本地开发在第 60 条之后继续扩展了 SIM 卡管理，并修复了 USB SIM 读卡器、VoWiFi 和卡片生命周期中的多处问题。
+- 读卡器没有传统蜂窝 AT 口，但仍被通用硬件操作错误地按 AT modem 处理，产生 `device has no usable AT port` 日志，界面也错误显示 AT 终端和 AT 端口。
+- 卡片概览、卡策略、设备状态使用了不同的在线判定来源，导致“设备在线”但 USSD/卡策略仍被禁用。
+- 删除卡片会触发旧 VoWiFi 生命周期停止操作；如果重新导入只恢复卡片记录、不恢复卡策略，VoWiFi 会停留在 `disabled` 或 `stopping`。
+- eSIM Profile 卡片的绑定协调每次刷新都重新读取 eSIM Inventory，导致 PC/SC 读卡器持续访问卡片，而不是只在身份缺失或变化时读取。
+- 卡片列表中的完整 ICCID 暴露了不必要的敏感信息，导入如果不是原子操作，中途失败还会留下部分卡片。
+
+**主要修改内容**:
+
+1. **SIM 卡数据与原子导入**
+   - 新增 `sim_cards`、卡片绑定、观察记录、卡策略和 APN 等本地数据支持。
+   - 新增 `/api/cards/import` 批量导入接口；一次请求只提交整批卡片配置。
+   - 导出文件只包含 `ICCID`、`卡片名称`、`卡片类型`、`备注` 四个字段。
+   - 导入先校验整批数据，再在同一个 SQLite 事务中创建或更新；任一记录失败都会回滚整批。
+   - 已有卡片只替换名称、类型和备注，不覆盖绑定、策略、IMSI、EID/AID 或其他元数据。
+   - 导入缺失策略时在同一事务内创建安全默认策略，避免删除再导入后出现“缺少策略”。
+
+2. **卡片策略与生命周期恢复**
+   - PC/SC 读卡器策略固定为 `PCSC + VoWiFi + 飞行模式`，不允许蜂窝驻网或 AT 数据路径。
+   - 读卡器缺少卡策略时，策略协调器会自动创建固定策略并请求 VoWiFi 恢复，而不是永久暂停。
+   - 删除、重新导入、换卡和绑定状态切换后，VoWiFi desired state 会在当前停止任务结束后自动继续启用。
+   - VoWiFi 重连请求固定携带当前 ICCID，避免旧绑定存在时返回 409 或重连到错误卡片。
+
+3. **PC/SC 读卡器边界**
+   - PC/SC 读卡器不再暴露 AT 终端、AT 端口或 AT 相关配置。
+   - 通用 modem 控制操作对 PC/SC 设备返回“不支持该能力”，不再产生误导性的 AT 端口错误。
+   - 预期的 PC/SC 能力拒绝不再写入硬件失败日志。
+   - eSIM EID/Profile AID 首次解析后持久化，后续绑定协调复用已保存身份；只有身份缺失、变化或不匹配时才读取 eSIM。
+   - 连续策略协调只读取一次 eSIM Inventory，避免读卡器持续闪烁/持续访问卡片。
+
+4. **SIM 管理前端**
+   - 新增独立的“卡片管理”页面和卡片详情标签：概览、卡片配置、设备配置、卡策略、AT、USSD。
+   - 卡片配置支持修改名称、卡片类型和备注，ICCID 创建后只读。
+   - 增加一键导入卡片和一键导出卡片；导入前确认，成功后显示新增/更新数量。
+   - 卡片列表采用紧凑 SIM 卡卡片布局，状态点位于“当前启用”左侧，在线和策略执行中统一使用绿色。
+   - ICCID 默认部分脱敏，提供统一的敏感信息显示/隐藏按钮。
+   - 当前卡片增加短信和通话按钮，按 ICCID 跳转并自动选中对应卡片。
+   - USSD 入口按卡片在线状态开放；VoWiFi 卡片使用 IMS USSI，不再错误显示蜂窝动画或禁用入口。
+
+5. **概览与仪表盘**
+   - 概览恢复旧版“SIM / 设备”面板，展示 IMEI、ICCID、IMSI、本机号码、原运营商、固件版本、飞行模式、运行模式、ME、SM。
+   - 读卡器概览优先显示 VoWiFi 状态，不因启动阶段的 runtime 状态短暂为 false 而切回蜂窝动画。
+   - 仪表盘拆分为设备列表和卡片列表：设备卡只显示设备/硬件信息，卡片卡显示 VoWiFi 或蜂窝数据状态。
+   - 模块在线率只使用设备数据计算，卡片列表不会改变模块在线率。
+   - 修复设备列表按钮覆盖下一项信息的问题，并调整设备项间距。
+
+**测试与验证**:
+
+- 新增原子导入回滚测试：第二条记录失败时，第一条卡片及其策略也不会保留。
+- 新增导入默认策略测试、已有策略保留测试和 eSIM 身份只读取一次测试。
+- 新增 PC/SC 通用操作不暴露 AT 错误、VoWiFi/USSI 路由、卡片配置、导入导出、敏感信息遮罩和仪表盘分类测试。
+- `go test ./internal/store`、`go test ./cmd/vonet` 通过。
+- 前端 `npm test` 79 项通过，`npm run build` 和 TypeScript 检查通过。
+
+**上游同步注意事项**:
+
+- 下列本地文件包含本次新增功能和修复，合并上游时必须保留本地版本或逐项人工合并，不能直接覆盖：
+  - `internal/store/cards.go`、`internal/store/cards_test.go`、`internal/store/migrations.go`
+  - `internal/server/card_api.go`、`internal/server/card_gate.go`、`internal/server/device_api.go`
+  - `cmd/vonet/card_policy_reconciler.go`、`cmd/vonet/card_policy_reconcile_test.go`
+  - `internal/device/manager.go`、`internal/device/data*.go`
+  - `web/src/pages/CardsPage.tsx`、`web/src/components/cards/`
+  - `web/src/components/dashboard/`、`web/src/components/devices/`
+  - `web/src/pages/DashboardPage.tsx`、`web/src/pages/DevicesPage.tsx`
+- 特别保留：原子导入、导入默认策略、PC/SC AT 屏蔽、eSIM 身份缓存、VoWiFi 重连 ICCID 绑定、敏感 ICCID 遮罩和设备/卡片仪表盘分类。
+- 上游若修改 `internal/store/migrations.go`、`device_api.go` 或 `CardOverviewTab.tsx`，请优先合并本条第 61 条描述的行为，再合并上游 UI/数据库变更。
+
+**安全与部署约束**:
+
+- 导出的卡片配置包含 ICCID 和用户备注，必须作为敏感文件保存；界面默认只显示部分 ICCID。
+- 本次改动不修改真实 SIM、IMSI、设备序列号、PANI、密钥或证书配置；文档仅记录功能和行为。
+- 部署包含新前端资源的 VoNet 二进制后，需要重新验证删除卡片、一键导入、VoWiFi 恢复和 PC/SC 读卡器读取频率。
+
+---

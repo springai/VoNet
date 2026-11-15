@@ -16,11 +16,33 @@ type disconnectingESIMController struct {
 	disconnect      context.CancelFunc
 	flightErrors    []error
 	flightDeadlines []bool
+	activeICCID     string
+	activeAID       string
 }
 
-func (c *disconnectingESIMController) ESIMSwitchProfile(context.Context, string, string, string) error {
+func (c *disconnectingESIMController) ESIMSwitchProfile(_ context.Context, _, iccid, aid string) error {
+	c.activeICCID = iccid
+	c.activeAID = aid
 	c.disconnect()
 	return nil
+}
+
+func (c *disconnectingESIMController) Refresh(context.Context, string) (device.Snapshot, error) {
+	return device.Snapshot{
+		DeviceID: "dev1", Responsive: true, SIMReady: true, ICCID: c.activeICCID,
+	}, nil
+}
+
+func (c *disconnectingESIMController) ESIMListProfiles(context.Context, string) (device.EsimInfo, error) {
+	return device.EsimInfo{Profiles: []device.EsimProfile{{
+		ICCID: c.activeICCID, AID: c.activeAID, State: 1,
+	}}}, nil
+}
+
+func (c *disconnectingESIMController) ESIMInventory(context.Context, string) ([]device.EsimInventoryEntry, error) {
+	return []device.EsimInventoryEntry{{Info: device.EsimInfo{Profiles: []device.EsimProfile{{
+		ICCID: c.activeICCID, AID: c.activeAID, State: 1,
+	}}}}}, nil
 }
 
 func (c *disconnectingESIMController) SetFlight(ctx context.Context, _ string, _ bool) (device.FlightResult, error) {
@@ -51,6 +73,9 @@ func TestESIMSwitchFinalizesAfterClientDisconnect(t *testing.T) {
 				t.Fatal(err)
 			}
 			const targetICCID = "8900000000000000001"
+			if err := db.UpsertSimCard(context.Background(), store.SimCard{ICCID: targetICCID}); err != nil {
+				t.Fatal(err)
+			}
 			if err := db.UpsertCardPolicy(context.Background(), store.CardPolicy{
 				ICCID: targetICCID, VoWiFiEnabled: tc.targetWiFi, AirplaneEnabled: tc.targetWiFi,
 				APN: "target.apn", IPVersion: "IP", Source: "manual",

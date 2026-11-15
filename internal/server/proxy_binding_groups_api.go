@@ -43,7 +43,7 @@ func proxyBindingGroupResponse(value store.DeviceProxyBindingGroupWithRoutes) ma
 	}
 	return map[string]any{
 		"id":           value.ID,
-		"device_id":    value.DeviceID,
+		"device_id":    publicProxyDeviceID(value.DeviceID, value.ICCID),
 		"iccid":        value.ICCID,
 		"profile_name": value.ProfileName,
 		"routes":       routes,
@@ -187,13 +187,11 @@ func (s *Server) handleProxyBindingGroupRoutes(w http.ResponseWriter, r *http.Re
 func (s *Server) validateProxyBindingGroupPayload(payload proxyBindingGroupPayload) (store.DeviceProxyBindingGroup, error) {
 	deviceID := strings.TrimSpace(payload.DeviceID)
 	iccid := strings.TrimSpace(payload.ICCID)
-	if !validDeviceID(deviceID) {
-		return store.DeviceProxyBindingGroup{}, errors.New("device ID must use 1-64 safe characters")
-	}
 	if !validProfileICCID(iccid) {
 		return store.DeviceProxyBindingGroup{}, errors.New("profile ICCID must contain 18 to 22 digits")
 	}
-	if _, err := s.store.Device(context.Background(), deviceID); err != nil {
+	deviceID, err := s.proxyBindingDeviceIDForSave(context.Background(), deviceID, iccid, true)
+	if err != nil {
 		return store.DeviceProxyBindingGroup{}, err
 	}
 	if _, err := validateProxyRouteIDs(payload.ProxyIDs); err != nil {
@@ -221,6 +219,13 @@ func (s *Server) validateProxyBindingGroupPayload(payload proxyBindingGroupPaylo
 // re-evaluated from its first candidate, including when IMS is already stable.
 func (s *Server) requestProxyBindingRouteChange(deviceID, iccid string) (bool, error) {
 	if s.vowifi == nil {
+		return false, nil
+	}
+	binding, err := s.store.SimCardBinding(context.Background(), strings.TrimSpace(iccid))
+	if err == nil && binding.State == store.SimCardBindingActive && strings.TrimSpace(binding.DeviceID) != "" {
+		deviceID = binding.DeviceID
+	}
+	if strings.TrimSpace(deviceID) == "" {
 		return false, nil
 	}
 	return s.requestProfileProxyRouteReconnect(deviceID, iccid)

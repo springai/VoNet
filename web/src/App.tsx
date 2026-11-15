@@ -10,6 +10,7 @@ import { ConfirmHost } from "./components/ui/MessageBox";
 import { LoadingScreen } from "./components/ui/LoadingScreen";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
+import CardsPage from "./pages/CardsPage";
 import DevicesPage from "./pages/DevicesPage";
 import IMEIPoolPage from "./pages/IMEIPoolPage";
 import ProxyPage from "./pages/ProxyPage";
@@ -117,6 +118,7 @@ function AppRoot() {
           }
         >
           <Route index element={<DashboardPage />} />
+          <Route path="cards/*" element={<CardsPage />} />
           <Route path="imei-pool" element={<IMEIPoolPage />} />
           <Route path="devices/*" element={<DevicesPage />} />
           <Route path="proxy" element={<ProxyPage />} />

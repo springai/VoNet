@@ -661,13 +661,25 @@ func TestCardPolicyDefaultValidationAndPersistence(t *testing.T) {
 		"/api/cards/"+iccid+"/policy",
 		"",
 	)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("unregistered policy status = %d, body = %s", recorder.Code, recorder.Body)
+	}
+	if err := test.database.UpsertSimCard(context.Background(), store.SimCard{ICCID: iccid}); err != nil {
+		t.Fatal(err)
+	}
+	recorder = test.request(
+		t,
+		http.MethodGet,
+		"/api/cards/"+iccid+"/policy",
+		"",
+	)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("default policy status = %d, body = %s", recorder.Code, recorder.Body)
 	}
 	response := decodeSettingsResponse(t, recorder)
 	policy := response["data"].(map[string]any)
 	if policy["iccid"] != iccid || policy["source"] != "default" ||
-		policy["ip_version"] != "IPV4V6" || policy["vowifi_enabled"] != true ||
+		policy["ip_version"] != "IPV4V6" || policy["vowifi_enabled"] != false ||
 		policy["airplane_enabled"] != true || policy["custom_phone_number"] != "" {
 		t.Fatalf("default policy = %#v", policy)
 	}
@@ -842,6 +854,9 @@ func TestCardPolicyDefaultValidationAndPersistence(t *testing.T) {
 func TestCardPolicyMBNProfilePersistence(t *testing.T) {
 	test := newSettingsAPITest(t)
 	const iccid = "8985200000000000002"
+	if err := test.database.UpsertSimCard(context.Background(), store.SimCard{ICCID: iccid}); err != nil {
+		t.Fatal(err)
+	}
 	recorder := test.request(t, http.MethodPut, "/api/cards/"+iccid+"/policy", `{"mbn_profile":"CU"}`)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("CU MBN policy status = %d, body = %s", recorder.Code, recorder.Body)

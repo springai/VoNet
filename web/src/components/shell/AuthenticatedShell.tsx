@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
-  BoardRegular, PhoneRegular,
+  BoardRegular, CardUiRegular, PhoneRegular,
   DocumentTextRegular,
   GlobeRegular,
   MailRegular,
@@ -52,13 +52,20 @@ const NAV_GROUPS: SidebarNavGroup[] = [
     ],
   },
   {
+    key: "cards",
+    label: "卡片",
+    items: [
+      { to: "/cards", label: "SIM 管理", icon: CardUiRegular },
+      { to: "/call", label: "通话", icon: PhoneRegular },
+      { to: "/sms", label: "短信", icon: MailRegular },
+    ],
+  },
+  {
     key: "devices",
     label: "设备",
     items: [
       { to: "/devices", label: "设备管理", icon: RouterRegular },
-      { to: "/imei-pool", label: "IMEI池", icon: PulseRegular },
-      { to: "/call", label: "设备通话", icon: PhoneRegular },
-      { to: "/sms", label: "短信检测", icon: MailRegular },
+      { to: "/imei-pool", label: "IMEI 池", icon: PulseRegular },
     ],
   },
   {
@@ -157,7 +164,12 @@ export function AuthenticatedShell({
 
   const currentNavItem = NAV_GROUPS
     .flatMap((group) => group.items)
-    .find((item) => item.to === location.pathname || (item.to !== "/" && location.pathname.startsWith(`${item.to}/`)));
+    .slice()
+    .sort((a, b) => b.to.length - a.to.length)
+    .find((item) =>
+      item.to === location.pathname ||
+      (!item.end && item.to !== "/" && location.pathname.startsWith(`${item.to}/`)),
+    );
   const currentLabel = currentNavItem
     ? t(currentNavItem.label)
     : location.pathname.startsWith("/extensions")

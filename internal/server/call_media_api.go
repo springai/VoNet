@@ -22,6 +22,17 @@ func (s *Server) handleCallMedia(w http.ResponseWriter, r *http.Request, config 
 	if !requireMethod(w, r, http.MethodGet) {
 		return true
 	}
+	expectedICCID := strings.TrimSpace(r.URL.Query().Get("iccid"))
+	execution, ok := s.RequireRegisteredActiveCard(w, r, config.ID, expectedICCID)
+	if !ok {
+		return true
+	}
+	releaseCard, err := s.acquireCardExecution(r.Context(), execution)
+	if err != nil {
+		writeCardGateError(w, err)
+		return true
+	}
+	defer releaseCard()
 	if s.callTransport(config.ID) != "vowifi" {
 		writeError(w, http.StatusNotImplemented, "call_media_unavailable", "browser audio is only available for an active VoWiFi IMS call")
 		return true
@@ -34,6 +45,10 @@ func (s *Server) handleCallMedia(w http.ResponseWriter, r *http.Request, config 
 	controller, ok := s.vowifi.(VoWiFiCallMediaController)
 	if !ok {
 		writeError(w, http.StatusNotImplemented, "call_media_unavailable", "the active IMS session does not expose RTP media")
+		return true
+	}
+	if _, err := s.ResolveRegisteredActiveCard(r.Context(), config.ID, execution.ICCID); err != nil {
+		writeCardGateError(w, err)
 		return true
 	}
 	media, err := controller.CallMedia(r.Context(), config.ID, callID)

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"vonet/internal/device"
 	"vonet/internal/store"
 	"vonet/internal/vowifi"
 )
@@ -28,6 +29,8 @@ func newProfileBindingTestServer(t *testing.T) (*Server, *store.Store, *fakeVoWi
 	if err := database.UpsertDevice(context.Background(), store.Device{ID: "ec20", Name: "EC20", VoWiFiEnabled: true}); err != nil {
 		t.Fatal(err)
 	}
+	registerActiveTestCard(t, database, "ec20", "ec20", testProfileICCID)
+	registerActiveTestCard(t, database, "ec20", "ec20", "89104100000000000001")
 	for _, upstream := range []store.UpstreamProxy{
 		{ID: "route-1", Name: "Route 1", Addr: "127.0.0.1:1080", Enabled: true},
 		{ID: "route-2", Name: "Route 2", Addr: "127.0.0.1:1081", Enabled: true},
@@ -37,7 +40,14 @@ func newProfileBindingTestServer(t *testing.T) (*Server, *store.Store, *fakeVoWi
 		}
 	}
 	controller := &fakeVoWiFiController{state: vowifi.State{DeviceID: "ec20", ICCID: testProfileICCID, Enabled: true}}
-	return &Server{store: database, vowifi: controller, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), maxRequestBodyBytes: 16 << 10}, database, controller
+	return &Server{
+		store: database,
+		devices: fakeDeviceController{entry: device.Device{
+			ID: "ec20", Discovered: true,
+			Snapshot: &device.Snapshot{DeviceID: "ec20", Responsive: true, SIMReady: true, ICCID: testProfileICCID},
+		}},
+		vowifi: controller, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), maxRequestBodyBytes: 16 << 10,
+	}, database, controller
 }
 
 func profileBindingRequest(t *testing.T, server *Server, method, body string) *httptest.ResponseRecorder {
@@ -103,7 +113,11 @@ func TestProxyBindingChangesRestartStableIMSAndEmptyRoutesUseMCC(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	group.ID = "binding:" + group.DeviceID + ":" + group.ICCID
+	groups, err := database.ListDeviceProxyBindingGroups(context.Background(), group.DeviceID)
+	if err != nil || len(groups) != 1 {
+		t.Fatalf("stored groups = %+v, %v", groups, err)
+	}
+	group.ID = groups[0].ID
 	response := proxyBindingGroupRoutesRequest(t, server, group.ID, `{"proxy_ids":["route-2","route-1"]}`)
 	if response.Code != http.StatusOK {
 		t.Fatalf("reorder status = %d, body = %s", response.Code, response.Body.String())
@@ -174,6 +188,45 @@ func TestProxyBindingGroupReportsAdvisoryReconnectState(t *testing.T) {
 	}
 }
 
+func TestUpstreamLifecycleReconnectsCardProxyGroups(t *testing.T) {
+	server, database, controller := newProfileBindingTestServer(t)
+	controller.state = vowifi.State{
+		DeviceID: "ec20",
+		ICCID:    testProfileICCID,
+		Enabled:  true,
+		IMSReady: true,
+	}
+	group := store.DeviceProxyBindingGroup{
+		DeviceID:    "ec20",
+		ICCID:       testProfileICCID,
+		ProfileName: "Profile",
+	}
+	if err := database.SaveDeviceProxyBindingGroup(context.Background(), group, []string{"route-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPatch, "/api/upstream-proxies/route-1", bytes.NewBufferString(`{"enabled":false}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.handleUpstreamProxy(response, request, "route-1")
+	if response.Code != http.StatusOK {
+		t.Fatalf("disable upstream status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if controller.reconnects != 1 {
+		t.Fatalf("reconnects after upstream disable = %d, want 1", controller.reconnects)
+	}
+
+	request = httptest.NewRequest(http.MethodDelete, "/api/upstream-proxies/route-1", nil)
+	response = httptest.NewRecorder()
+	server.handleUpstreamProxy(response, request, "route-1")
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete upstream status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if controller.reconnects != 2 {
+		t.Fatalf("reconnects after upstream delete = %d, want 2", controller.reconnects)
+	}
+}
+
 func TestProfileProxyBindingPersistsAndReconnectsOnlyCurrentICCID(t *testing.T) {
 	server, database, controller := newProfileBindingTestServer(t)
 	response := profileBindingRequest(t, server, http.MethodPost, `{
@@ -226,11 +279,23 @@ func TestProfileProxyBindingSupportsPCSCReader(t *testing.T) {
 	server, database, controller := newProfileBindingTestServer(t)
 	readerICCID := "89104100000000000001"
 	if err := database.UpsertDevice(context.Background(), store.Device{
-		ID: "reader-1", Name: "USB SIM Reader", DeviceType: store.DeviceTypeUSBSIMReader,
+		ID: "reader-1", Name: "USB SIM Reader", DeviceType: store.DeviceTypeUSBSIMReader, VoWiFiEnabled: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
+	registerActiveTestCard(t, database, "reader-1", "reader-1", readerICCID)
+	server.devices = fakeDeviceController{entry: device.Device{
+		ID: "reader-1", Discovered: true,
+		Snapshot: &device.Snapshot{DeviceID: "reader-1", Responsive: true, SIMReady: true, ICCID: readerICCID},
+	}}
 	controller.state = vowifi.State{DeviceID: "reader-1", ICCID: readerICCID, Enabled: true}
+	if _, err := server.ResolveRegisteredActiveCard(context.Background(), "reader-1", readerICCID); err != nil {
+		t.Fatalf("reader card gate: %v", err)
+	}
+	if requested, err := server.requestProfileProxyRouteReconnect("reader-1", readerICCID); err != nil || !requested {
+		t.Fatalf("direct reader reconnect = %v, %v", requested, err)
+	}
+	controller.reconnects = 0
 	response := profileBindingRequest(t, server, http.MethodPost, `{
 		"upstream_proxy_id":"route-1",
 		"bindings":[{"device_id":"reader-1","iccid":"89104100000000000001","profile_name":"Reader Profile"}]
@@ -244,5 +309,40 @@ func TestProfileProxyBindingSupportsPCSCReader(t *testing.T) {
 	}
 	if controller.reconnects != 1 {
 		t.Fatalf("reader reconnects = %d, want 1", controller.reconnects)
+	}
+}
+
+func TestProfileProxyBindingRejectsLegacyOfflinePrebind(t *testing.T) {
+	server, database, controller := newProfileBindingTestServer(t)
+	offlineICCID := "89104100000000000002"
+	if err := database.UpsertSimCard(context.Background(), store.SimCard{ICCID: offlineICCID}); err != nil {
+		t.Fatal(err)
+	}
+	response := profileBindingRequest(t, server, http.MethodPost, `{
+		"upstream_proxy_id":"route-1",
+		"bindings":[{"device_id":"","iccid":"89104100000000000002","profile_name":"Offline Profile"}]
+	}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("legacy offline prebind status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if _, err := database.DeviceProxyBinding(context.Background(), offlineICCID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("legacy offline binding was created: %v", err)
+	}
+	if controller.reconnects != 0 {
+		t.Fatalf("legacy offline prebind reconnects = %d, want 0", controller.reconnects)
+	}
+
+	groupResponse := proxyBindingGroupCreateRequest(t, server, `{
+		"device_id":"","iccid":"89104100000000000002","profile_name":"Offline Profile","proxy_ids":["route-1"]
+	}`)
+	if groupResponse.Code != http.StatusOK {
+		t.Fatalf("group offline prebind status = %d, body = %s", groupResponse.Code, groupResponse.Body.String())
+	}
+	group, err := database.DeviceProxyBindingGroupByICCID(context.Background(), offlineICCID)
+	if err != nil || group.DeviceID != "" || len(group.Routes) != 1 {
+		t.Fatalf("group offline binding = %+v, %v", group, err)
+	}
+	if controller.reconnects != 0 {
+		t.Fatalf("group offline prebind reconnects = %d, want 0", controller.reconnects)
 	}
 }

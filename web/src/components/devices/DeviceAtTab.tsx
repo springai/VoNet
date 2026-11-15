@@ -8,12 +8,13 @@ import { useI18n } from "../../lib/i18n";
 
 export interface DeviceAtTabProps {
   deviceId: string;
+  iccid?: string;
   backendMode?: string;
   atPort?: string;
   running: boolean;
 }
 
-export function DeviceAtTab({ deviceId, backendMode, atPort, running }: DeviceAtTabProps) {
+export function DeviceAtTab({ deviceId, iccid, backendMode, atPort, running }: DeviceAtTabProps) {
   const { t } = useI18n();
   const [cmd, setCmd] = useState("");
   const [template, setTemplate] = useState("");
@@ -39,10 +40,14 @@ export function DeviceAtTab({ deviceId, backendMode, atPort, running }: DeviceAt
     setSending(true);
     setCmd("");
     try {
-      const res = await api<{ ok?: boolean; response?: string; result?: string }>(`/devices/${deviceId}/actions/at`, {
+      const query = iccid ? `?iccid=${encodeURIComponent(iccid)}` : "";
+      const res = await api<{ ok?: boolean; response?: string; result?: string }>(
+        `/devices/${encodeURIComponent(deviceId)}/actions/at${query}`,
+        {
         method: "POST",
         body: { cmd: command, timeoutMs: timeoutMs || 10000, force },
-      });
+        },
+      );
       setLog((prev) => [
         ...prev,
         { ts: Date.now(), cmd: command, ok: res?.ok ?? true, response: res?.response ?? res?.result ?? JSON.stringify(res ?? {}) },

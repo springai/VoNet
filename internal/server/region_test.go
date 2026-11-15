@@ -217,12 +217,16 @@ func TestCountryNameForMCC(t *testing.T) {
 
 func TestHandleVoWiFiEnabledChinaRegionNoLongerBlocked(t *testing.T) {
 	server := regionServer(t, "460001234567890")
+	server.devices = fakeDeviceController{entry: device.Device{ID: "dev1", Discovered: true, Snapshot: &device.Snapshot{
+		DeviceID: "dev1", Responsive: true, SIMReady: true, ICCID: testICCIDCurrent, IMSI: "460001234567890",
+	}}}
 	controller := &fakeVoWiFiController{}
 	server.vowifi = controller
 	config := store.Device{ID: "dev1", Name: "EC20"}
 	if err := server.store.UpsertDevice(context.Background(), config); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
+	registerActiveTestCard(t, server.store, "dev1", "dev1", testICCIDCurrent)
 	request := httptest.NewRequest(http.MethodPatch, "/devices/dev1/vowifi", strings.NewReader(`{"enabled":true}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -240,10 +244,14 @@ func TestHandleVoWiFiEnabledChinaRegionNoLongerBlocked(t *testing.T) {
 
 func TestHandleVoWiFiEnabledAllowedRegionPassesGuard(t *testing.T) {
 	server := regionServer(t, "310260123456789")
+	server.devices = fakeDeviceController{entry: device.Device{ID: "dev1", Discovered: true, Snapshot: &device.Snapshot{
+		DeviceID: "dev1", Responsive: true, SIMReady: true, ICCID: testICCIDCurrent, IMSI: "310260123456789",
+	}}}
 	// Seed the device so the post-guard UpsertDevice succeeds.
 	if err := server.store.UpsertDevice(context.Background(), store.Device{ID: "dev1", Name: "EC20"}); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
+	registerActiveTestCard(t, server.store, "dev1", "dev1", testICCIDCurrent)
 	request := httptest.NewRequest(http.MethodPatch, "/devices/dev1/vowifi", strings.NewReader(`{"enabled":true}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()

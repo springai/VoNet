@@ -1526,8 +1526,17 @@ func (s *Server) handleCardPolicies(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, err)
 		return
 	}
+	registered := make(map[string]struct{})
+	if cards, cardsErr := s.store.ListSimCards(r.Context()); cardsErr == nil {
+		for _, card := range cards {
+			registered[card.ICCID] = struct{}{}
+		}
+	}
 	result := make([]map[string]any, 0, len(policies))
 	for _, policy := range policies {
+		if _, ok := registered[policy.ICCID]; !ok {
+			continue
+		}
 		result = append(result, cardPolicyResponse(policy))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": result})
@@ -1567,15 +1576,25 @@ func (s *Server) handleCardPolicy(w http.ResponseWriter, r *http.Request, iccid 
 			w,
 			http.StatusBadRequest,
 			"invalid_iccid",
-			"ICCID must contain between 10 and 32 decimal digits",
+			"ICCID must contain between 18 and 22 decimal digits",
 		)
 		return
 	}
+	if _, err := s.store.SimCard(r.Context(), iccid); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusConflict, "card_not_registered", "save the SIM card before managing its policy")
+			return
+		}
+		s.writeStoreError(w, err)
+		return
+	}
+	readerPolicy := s.cardPolicyIsReader(r.Context(), iccid)
 	switch r.Method {
 	case http.MethodGet:
 		policy, err := s.store.CardPolicy(r.Context(), iccid)
 		if errors.Is(err, store.ErrNotFound) {
 			policy = defaultCardPolicy(iccid)
+			policy.Source = "default"
 		} else if err != nil {
 			s.writeStoreError(w, err)
 			return
@@ -1587,23 +1606,34 @@ func (s *Server) handleCardPolicy(w http.ResponseWriter, r *http.Request, iccid 
 			policy.VoWiFiEnabled = vowifi
 			policy.AirplaneEnabled = airplane
 		}
+		if readerPolicy {
+			policy.VoWiFiEnabled = true
+			policy.AirplaneEnabled = true
+			policy.NetworkEnabled = false
+			policy.RuntimeMode = "pcsc"
+			policy.APN = ""
+			policy.MBNProfile = ""
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"data": cardPolicyResponse(policy)})
 	case http.MethodPut:
 		var request struct {
+			NetworkEnabled    *bool   `json:"network_enabled"`
 			VoWiFiEnabled     *bool   `json:"vowifi_enabled"`
 			AirplaneEnabled   *bool   `json:"airplane_enabled"`
 			APN               *string `json:"apn"`
 			IPVersion         *string `json:"ip_version"`
 			CustomPhoneNumber *string `json:"custom_phone_number"`
 			MBNProfile        *string `json:"mbn_profile"`
+			RuntimeMode       *string `json:"runtime_mode"`
+			CellularIMSMode   *string `json:"cellular_ims_mode"`
 		}
 		if err := s.decodeJSON(w, r, &request); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		if request.VoWiFiEnabled == nil && request.AirplaneEnabled == nil &&
+		if request.NetworkEnabled == nil && request.VoWiFiEnabled == nil && request.AirplaneEnabled == nil &&
 			request.APN == nil && request.IPVersion == nil && request.CustomPhoneNumber == nil &&
-			request.MBNProfile == nil {
+			request.MBNProfile == nil && request.RuntimeMode == nil && request.CellularIMSMode == nil {
 			writeError(
 				w,
 				http.StatusBadRequest,
@@ -1654,6 +1684,9 @@ func (s *Server) handleCardPolicy(w http.ResponseWriter, r *http.Request, iccid 
 		if request.VoWiFiEnabled != nil {
 			policy.VoWiFiEnabled = *request.VoWiFiEnabled
 		}
+		if request.NetworkEnabled != nil {
+			policy.NetworkEnabled = *request.NetworkEnabled
+		}
 		if request.AirplaneEnabled != nil {
 			policy.AirplaneEnabled = *request.AirplaneEnabled
 		}
@@ -1665,12 +1698,57 @@ func (s *Server) handleCardPolicy(w http.ResponseWriter, r *http.Request, iccid 
 			}
 			policy.MBNProfile = mbnProfile
 		}
+		if request.RuntimeMode != nil {
+			runtimeMode := strings.ToLower(strings.TrimSpace(*request.RuntimeMode))
+			switch runtimeMode {
+			case "at", "qmi", "mbim", "pcsc":
+				policy.RuntimeMode = runtimeMode
+			default:
+				writeError(w, http.StatusBadRequest, "invalid_card_policy", "runtime mode must be AT, QMI, MBIM, or PCSC")
+				return
+			}
+		}
+		if request.CellularIMSMode != nil {
+			imsMode := strings.ToLower(strings.TrimSpace(*request.CellularIMSMode))
+			switch imsMode {
+			case "mbn_default", "force_enabled", "force_disabled":
+				policy.CellularIMSMode = imsMode
+			default:
+				writeError(w, http.StatusBadRequest, "invalid_card_policy", "cellular IMS mode must be mbn_default, force_enabled, or force_disabled")
+				return
+			}
+		}
+		if readerPolicy {
+			invalidReaderPolicy :=
+				(request.NetworkEnabled != nil && *request.NetworkEnabled) ||
+					(request.VoWiFiEnabled != nil && !*request.VoWiFiEnabled) ||
+					(request.AirplaneEnabled != nil && !*request.AirplaneEnabled) ||
+					(request.APN != nil && strings.TrimSpace(*request.APN) != "") ||
+					(request.MBNProfile != nil && strings.TrimSpace(*request.MBNProfile) != "") ||
+					(request.RuntimeMode != nil && !strings.EqualFold(strings.TrimSpace(*request.RuntimeMode), "pcsc")) ||
+					(request.CellularIMSMode != nil && strings.TrimSpace(*request.CellularIMSMode) != "mbn_default")
+			if invalidReaderPolicy {
+				writeError(w, http.StatusConflict, "reader_policy_fixed", "USB SIM readers are fixed to PCSC and VoWiFi-only operation")
+				return
+			}
+			policy.VoWiFiEnabled = true
+			policy.AirplaneEnabled = true
+			policy.NetworkEnabled = false
+			policy.RuntimeMode = "pcsc"
+			policy.APN = ""
+			policy.MBNProfile = ""
+			policy.CellularIMSMode = "mbn_default"
+		}
 		// VoWiFi always owns an RF-off modem. Store airplane=true even when an
 		// older client omits that implication, so disabling VoWiFi cannot expose a
 		// brief cellular attach window.
 		if policy.VoWiFiEnabled {
 			policy.AirplaneEnabled = true
 			policy.NetworkEnabled = false
+		}
+		if policy.NetworkEnabled {
+			policy.VoWiFiEnabled = false
+			policy.AirplaneEnabled = false
 		}
 		if policy.IPVersion == "" {
 			policy.IPVersion = "IPV4V6"
@@ -1734,8 +1812,9 @@ func (s *Server) applyLiveCardMBN(iccid string) {
 func defaultCardPolicy(iccid string) store.CardPolicy {
 	return store.CardPolicy{
 		ICCID:           strings.TrimSpace(iccid),
-		VoWiFiEnabled:   true,
+		VoWiFiEnabled:   false,
 		AirplaneEnabled: true,
+		NetworkEnabled:  false,
 		IPVersion:       "IPV4V6",
 		Source:          "default",
 	}
@@ -1985,15 +2064,7 @@ func decimalLength(value string, minimum, maximum int) bool {
 }
 
 func validICCID(value string) bool {
-	if len(value) < 10 || len(value) > 32 {
-		return false
-	}
-	for _, character := range value {
-		if character < '0' || character > '9' {
-			return false
-		}
-	}
-	return true
+	return decimalLength(value, 18, 22)
 }
 
 func normalizeCustomPhoneNumber(value string) (string, error) {
@@ -2025,13 +2096,15 @@ func normalizeCustomPhoneNumber(value string) (string, error) {
 func cardPolicyResponse(policy store.CardPolicy) map[string]any {
 	response := map[string]any{
 		"iccid":               policy.ICCID,
-		"network_enabled":     false,
+		"network_enabled":     policy.NetworkEnabled,
 		"vowifi_enabled":      policy.VoWiFiEnabled,
 		"airplane_enabled":    policy.AirplaneEnabled,
 		"apn":                 policy.APN,
 		"ip_version":          policy.IPVersion,
 		"custom_phone_number": policy.CustomPhoneNumber,
 		"mbn_profile":         policy.MBNProfile,
+		"runtime_mode":        policy.RuntimeMode,
+		"cellular_ims_mode":   policy.CellularIMSMode,
 		"source":              policy.Source,
 	}
 	if !policy.CreatedAt.IsZero() {

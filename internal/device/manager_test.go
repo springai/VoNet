@@ -46,6 +46,11 @@ func TestManagerDiscoversWiFiCallingOnlyReaderWithoutATPort(t *testing.T) {
 	if !snapshot.Responsive || snapshot.SIMReady || snapshot.SIMStatus != "" || !snapshot.FlightMode {
 		t.Fatalf("reader snapshot = %#v", snapshot)
 	}
+	if _, err := manager.ExecuteAT(context.Background(), items[0].ID, "AT"); !errors.Is(err, ErrUnsupportedCapability) {
+		t.Fatalf("PCSC ExecuteAT error = %v, want ErrUnsupportedCapability", err)
+	} else if strings.Contains(err.Error(), "AT port") || strings.Contains(err.Error(), "ATPort") {
+		t.Fatalf("PCSC capability error leaked AT details: %q", err)
+	}
 }
 
 func TestManagerDiscoverReturnsOnlyCurrentlyPresentDevices(t *testing.T) {

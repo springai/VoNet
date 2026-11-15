@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AddRegular, GlobeRegular } from "@fluentui/react-icons";
 import { api, ApiError, apiMessage } from "../api";
-import type { Country, CountryRule, DeviceListItem, DevicesResponse, UpstreamProxy } from "../types";
+import type { Country, CountryRule, SimCard, UpstreamProxy } from "../types";
 import { usePolling } from "../lib/usePolling";
 import { Button, PageHeader, confirmDialog, message } from "../components/ui";
 import {
@@ -15,14 +15,15 @@ import {
 import { UpstreamDialog } from "../components/proxy/UpstreamDialog";
 import { CountryRulesDialog } from "../components/proxy/CountryRulesDialog";
 import { UpstreamSection } from "../components/proxy/UpstreamSection";
-import { ProxyBindingSection } from "../components/proxy/ProxyBindingSection";
+import { CardProxyBindingSection } from "../components/proxy/CardProxyBindingSection";
+import { listCards } from "../components/cards/cardApi";
 import { tf, useI18n } from "../lib/i18n";
 import { listPlugins, pluginAssetURL, type InstalledPlugin } from "../extensions";
 
 export default function ProxyPage() {
   const { t, lang } = useI18n();
   const [proxies, setProxies] = useState<UpstreamProxy[]>([]);
-  const [devices, setDevices] = useState<DeviceListItem[]>([]);
+  const [cards, setCards] = useState<SimCard[]>([]);
   const [countries, setCountries] = useState<Country[]>([]);
   const [countryRules, setCountryRules] = useState<CountryRule[]>([]);
   const [upstreamLoading, setUpstreamLoading] = useState(true);
@@ -56,14 +57,14 @@ export default function ProxyPage() {
     if (initial) setUpstreamLoading(true);
     setUpstreamError(null);
     try {
-      const [proxyList, deviceList, countryList, ruleList] = await Promise.all([
+      const [proxyList, cardList, countryList, ruleList] = await Promise.all([
         api<UpstreamProxy[]>("/upstream-proxies"),
-        api<DevicesResponse>("/devices"),
+        listCards(),
         api<Country[]>("/upstream-proxy-countries"),
         api<CountryRule[]>("/upstream-proxy-country-rules"),
       ]);
       setProxies(proxyList || []);
-      setDevices(deviceList?.devices || []);
+      setCards(cardList || []);
       setCountries(countryList || []);
       setCountryRules(ruleList || []);
     } catch (error) {
@@ -262,7 +263,7 @@ export default function ProxyPage() {
         <Button icon={<GlobeRegular />} onClick={() => setCountryDialogOpen(true)}>{t("管理国家规则")}</Button>
       </section>
       </div>
-      <ProxyBindingSection proxies={proxies} devices={devices} onChanged={() => void loadUpstream(false)} />
+      <CardProxyBindingSection proxies={proxies} cards={cards} onChanged={() => void loadUpstream(false)} />
       <div className="proxy-section">
       {plugins.filter((plugin) => plugin.enabled).flatMap((plugin) =>
         plugin.contributions.filter((contribution) => contribution.location === "proxy").map((contribution) => (

@@ -743,6 +743,9 @@ func (manager *Manager) clientLocked(
 			return state.client, nil
 		}
 	}
+	if candidate.HardwareKind == pcsc.HardwareKind {
+		return nil, ErrUnsupportedCapability
+	}
 	if !candidate.HasATPort() {
 		return nil, ErrNoATPort
 	}
@@ -782,7 +785,8 @@ func (manager *Manager) setResult(
 	} else {
 		state.lastError = ""
 	}
-	shouldLog := err != nil && manager.logger != nil && previousError != err.Error()
+	shouldLog := err != nil && manager.logger != nil && previousError != err.Error() &&
+		!errors.Is(err, ErrUnsupportedCapability)
 	registrationChanged := snapshot != nil && manager.logger != nil &&
 		(previousSnapshot == nil ||
 			previousSnapshot.RegistrationStatus != snapshot.RegistrationStatus ||

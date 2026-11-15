@@ -15,6 +15,7 @@ import (
 
 	"vonet/internal/developer"
 	"vonet/internal/device"
+	"vonet/internal/loghub"
 	"vonet/internal/smsdecode"
 	"vonet/internal/store"
 	"vonet/internal/vowifi"
@@ -262,6 +263,23 @@ func (s *Server) handleSMSSend(w http.ResponseWriter, r *http.Request) {
 	}
 	entry, physicalID, present := s.physicalForConfig(config)
 	if !s.requirePhysicalDevice(w, present) {
+		return
+	}
+	expectedICCID := strings.TrimSpace(r.URL.Query().Get("iccid"))
+	execution, ok := s.RequireRegisteredActiveCard(w, r, request.DeviceID, expectedICCID)
+	if !ok {
+		return
+	}
+	releaseCard, err := s.acquireCardExecution(r.Context(), execution)
+	if err != nil {
+		writeCardGateError(w, err)
+		return
+	}
+	defer releaseCard()
+	physicalID = execution.PhysicalID
+	entry.Snapshot = &execution.Snapshot
+	if _, err := s.ResolveRegisteredActiveCard(r.Context(), request.DeviceID, execution.ICCID); err != nil {
+		writeCardGateError(w, err)
 		return
 	}
 	limit := developer.SMSHourlyLimit(r.Context(), s.store)
@@ -1281,7 +1299,7 @@ func (s *Server) writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not_found", "the requested record was not found")
 		return
 	}
-	s.logger.Error("database operation failed", "category", "system", "event", "store.operation_failed", "raw_error", err)
+	s.logger.Error("database operation failed", "category", "system", "event", "store.operation_failed", "raw_error", loghub.RedactString(err.Error()))
 	writeError(w, http.StatusInternalServerError, "database_error", "the database operation failed")
 }
 

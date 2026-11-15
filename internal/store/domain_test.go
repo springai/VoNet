@@ -59,7 +59,7 @@ func TestMigrationFromAuthenticationSchema(t *testing.T) {
 		"device_proxy_bindings",
 		"notification_settings", "app_settings", "audit_events",
 		"log_events", "card_policies", "card_apn_profiles", "traffic_buckets",
-		"sms_send_attempts",
+		"sms_send_attempts", "call_history",
 	} {
 		var found string
 		err := database.db.QueryRowContext(ctx, `
@@ -68,6 +68,12 @@ func TestMigrationFromAuthenticationSchema(t *testing.T) {
 		if err != nil || found != table {
 			t.Fatalf("migrated table %q missing: %v", table, err)
 		}
+	}
+	var callHistoryICCID int
+	if err := database.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM pragma_table_info('call_history') WHERE name = 'iccid'
+	`).Scan(&callHistoryICCID); err != nil || callHistoryICCID != 1 {
+		t.Fatalf("call_history iccid column count = %d, err = %v", callHistoryICCID, err)
 	}
 }
 
@@ -621,7 +627,7 @@ func TestUSBSIMReaderConfigurationIsWiFiCallingOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.DeviceBackend != "pcsc" || got.ESIMTransport != "pcsc" || got.NetworkEnabled || !got.SMSEnabled || !got.VoWiFiEnabled || got.SIMPIN != "1234" {
+	if got.DeviceBackend != "pcsc" || got.ESIMTransport != "pcsc" || got.NetworkEnabled || !got.SMSEnabled || got.VoWiFiEnabled || got.SIMPIN != "1234" {
 		t.Fatalf("reader config = %+v", got)
 	}
 	bad := got
@@ -1157,24 +1163,26 @@ func TestEventsPoliciesAndTraffic(t *testing.T) {
 		t.Fatalf("PruneEvents() = %d, %d, %v", auditDeleted, logDeleted, err)
 	}
 
+	mustCreateSimCard(t, database, "8986000000000000001")
+	mustCreateSimCard(t, database, "8986000000000000002")
 	if err := database.UpsertCardPolicy(ctx, CardPolicy{
-		ICCID: "89860001", NetworkEnabled: true, VoWiFiEnabled: true,
+		ICCID: "8986000000000000001", NetworkEnabled: true, VoWiFiEnabled: true,
 		APN: "ims", IPVersion: "ipv4v6", CustomPhoneNumber: "+8613800138000",
 		MBNProfile: "OpenMkt-Commercial-CU",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.UpsertCardPolicy(ctx, CardPolicy{
-		ICCID: "89860002", VoWiFiEnabled: true, AirplaneEnabled: true,
+		ICCID: "8986000000000000002", VoWiFiEnabled: true, AirplaneEnabled: true,
 	}); err != nil {
 		t.Fatalf("RF-safe VoWiFi policy was rejected: %v", err)
 	}
-	policy, err := database.CardPolicy(ctx, "89860001")
+	policy, err := database.CardPolicy(ctx, "8986000000000000001")
 	if err != nil || !policy.VoWiFiEnabled || policy.CustomPhoneNumber != "+8613800138000" ||
 		policy.MBNProfile != "OpenMkt-Commercial-CU" {
 		t.Fatalf("CardPolicy() = %+v, %v", policy, err)
 	}
-	safePolicy, err := database.CardPolicy(ctx, "89860002")
+	safePolicy, err := database.CardPolicy(ctx, "8986000000000000002")
 	if err != nil || !safePolicy.VoWiFiEnabled || !safePolicy.AirplaneEnabled {
 		t.Fatalf("safe CardPolicy() = %+v, %v", safePolicy, err)
 	}
@@ -1223,6 +1231,7 @@ func TestMigration24DuplicateMBNProfileColumnIsIgnored(t *testing.T) {
 		t.Fatal(err)
 	}
 	database := openTestStore(t, path)
+	mustCreateSimCard(t, database, "8985200000000000002")
 	if err := database.UpsertCardPolicy(ctx, CardPolicy{
 		ICCID: "8985200000000000002", IPVersion: "IPV4V6",
 		MBNProfile: "OpenMkt-Commercial-CU",

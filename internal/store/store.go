@@ -14,9 +14,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 35
+const schemaVersion = 39
 
 var ErrNotFound = errors.New("store: not found")
+var ErrAlreadyExists = errors.New("store: already exists")
 
 // Store owns the SQLite connection used by the process.
 type Store struct {
@@ -166,7 +167,8 @@ func migrate(ctx context.Context, db *sql.DB) error {
 					(nextVersion == 25 && strings.Contains(statement, "ADD COLUMN mbn_profile")) ||
 					(nextVersion == 31 && strings.Contains(statement, "ADD COLUMN revert_profile")) ||
 					(nextVersion == 34 && strings.Contains(statement, "ADD COLUMN")) ||
-					(nextVersion == 35 && strings.Contains(statement, "ADD COLUMN"))
+					(nextVersion == 35 && strings.Contains(statement, "ADD COLUMN")) ||
+					(nextVersion >= 36 && strings.Contains(statement, "ADD COLUMN"))
 				if duplicateAdditiveColumn && strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 					continue
 				}

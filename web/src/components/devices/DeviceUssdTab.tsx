@@ -15,7 +15,15 @@ interface UssdResult {
   channel?: string;
 }
 
-export function DeviceUssdTab({ deviceId }: { deviceId: string }) {
+export function DeviceUssdTab({
+  deviceId,
+  iccid,
+  operable = true,
+}: {
+  deviceId: string;
+  iccid?: string;
+  operable?: boolean;
+}) {
   const { t } = useI18n();
   const [input, setInput] = useState("");
   const [timeoutMs, setTimeoutMs] = useState<number>(45000);
@@ -25,6 +33,7 @@ export function DeviceUssdTab({ deviceId }: { deviceId: string }) {
   const [log, setLog] = useState<UssdLogItem[]>([]);
 
   const inSession = !!sessionId;
+  const canOperate = operable && !!deviceId;
   const placeholder = inSession ? t("输入菜单选项数字") : t("例如 *100# 或菜单回复数字");
 
   function clearSession() {
@@ -36,7 +45,10 @@ export function DeviceUssdTab({ deviceId }: { deviceId: string }) {
     const body = inSession
       ? { sessionId, input: command, timeoutMs: timeoutMs || 45000 }
       : { command, timeoutMs: timeoutMs || 45000 };
-    const path = inSession ? `/devices/${deviceId}/actions/ussd/continue` : `/devices/${deviceId}/actions/ussd`;
+    const query = iccid ? `?iccid=${encodeURIComponent(iccid)}` : "";
+    const path = inSession
+      ? `/devices/${encodeURIComponent(deviceId)}/actions/ussd/continue${query}`
+      : `/devices/${encodeURIComponent(deviceId)}/actions/ussd${query}`;
     const res = await api<{ result?: Record<string, unknown>; sessionId?: string; channel?: string }>(path, { method: "POST", body });
     const r = (res?.result || {}) as Record<string, unknown>;
     return {
@@ -51,7 +63,7 @@ export function DeviceUssdTab({ deviceId }: { deviceId: string }) {
 
   async function send() {
     const command = String(input || "").trim();
-    if (!command || loading) return;
+    if (!command || loading || !canOperate) return;
     setLog((prev) => [...prev, { ts: Date.now(), type: "req", content: command }]);
     setLoading(true);
     setInput("");
@@ -84,7 +96,11 @@ export function DeviceUssdTab({ deviceId }: { deviceId: string }) {
     if (!sessionId || loading) return;
     setLoading(true);
     try {
-      await api(`/devices/${deviceId}/actions/ussd/cancel`, { method: "POST", body: { sessionId } });
+      const query = iccid ? `?iccid=${encodeURIComponent(iccid)}` : "";
+      await api(`/devices/${encodeURIComponent(deviceId)}/actions/ussd/cancel${query}`, {
+        method: "POST",
+        body: { sessionId },
+      });
       setLog((prev) => [...prev, { ts: Date.now(), type: "sys", content: t("会话已手动取消") }]);
       clearSession();
     } catch (e) {
@@ -126,6 +142,11 @@ export function DeviceUssdTab({ deviceId }: { deviceId: string }) {
         ))}
         {loading ? <AtTypingBubble label={t("等待网络响应...")} /> : null}
       </div>
+      {!canOperate ? (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
+          {t("当前卡片离线或设备不可用，USSD 仅可查看，不能发送或继续会话。")}
+        </div>
+      ) : null}
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_110px_auto]">
         <div className="space-y-1">
           <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">{inSession ? t("菜单回复") : t("命令 / 回复")}</div>
@@ -133,7 +154,7 @@ export function DeviceUssdTab({ deviceId }: { deviceId: string }) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder={placeholder}
-            disabled={loading}
+            disabled={loading || !canOperate}
             onKeyDown={(e) => {
               if (e.key === "Enter") send();
             }}
@@ -153,7 +174,7 @@ export function DeviceUssdTab({ deviceId }: { deviceId: string }) {
           <div className="select-none text-[11px] font-bold uppercase tracking-wider opacity-0">{t("操作")}</div>
           <div className="flex items-center justify-end gap-2">
             <Button
-              disabled={loading}
+              disabled={loading || !canOperate}
               onClick={() => {
                 setLog([]);
                 clearSession();
@@ -161,7 +182,7 @@ export function DeviceUssdTab({ deviceId }: { deviceId: string }) {
             >
               {t("清空")}
             </Button>
-            <Button variant="primary" loading={loading} disabled={!input} onClick={send} className="!border-0">
+            <Button variant="primary" loading={loading} disabled={!input || !canOperate} onClick={send} className="!border-0">
               {inSession ? t("回复") : t("发送")}
             </Button>
           </div>

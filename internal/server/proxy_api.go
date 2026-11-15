@@ -63,6 +63,83 @@ type upstreamProxyPayload struct {
 	Enabled  bool   `json:"enabled"`
 }
 
+type proxyBindingReference struct {
+	DeviceID string
+	ICCID    string
+	Source   string
+}
+
+const (
+	proxyBindingSourceLegacy = "legacy"
+	proxyBindingSourceGroup  = "group"
+)
+
+func (s *Server) proxyBindingsForUpstream(ctx context.Context, upstreamID string) ([]proxyBindingReference, error) {
+	upstreamID = strings.TrimSpace(upstreamID)
+	references := make(map[string]proxyBindingReference)
+	order := make([]string, 0)
+	add := func(source, deviceID, iccid string) {
+		iccid = strings.TrimSpace(iccid)
+		if iccid == "" {
+			return
+		}
+		reference := proxyBindingReference{DeviceID: strings.TrimSpace(deviceID), ICCID: iccid, Source: source}
+		existing, exists := references[iccid]
+		if exists && existing.Source == proxyBindingSourceGroup {
+			return
+		}
+		if !exists {
+			order = append(order, iccid)
+		}
+		references[iccid] = reference
+	}
+	bindings, err := s.store.ListDeviceProxyBindings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, binding := range bindings {
+		if binding.UpstreamProxyID == upstreamID {
+			add(proxyBindingSourceLegacy, binding.DeviceID, binding.ICCID)
+		}
+	}
+	groups, err := s.store.ListDeviceProxyBindingGroups(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	for _, group := range groups {
+		for _, route := range group.Routes {
+			if route.UpstreamProxyID == upstreamID {
+				add(proxyBindingSourceGroup, group.DeviceID, group.ICCID)
+				break
+			}
+		}
+	}
+	result := make([]proxyBindingReference, 0, len(order))
+	for _, iccid := range order {
+		result = append(result, references[iccid])
+	}
+	return result, nil
+}
+
+func (s *Server) reconnectProxyBindingReferences(references []proxyBindingReference) (bool, []string) {
+	requested := false
+	var errs []string
+	for _, reference := range references {
+		var reconnect bool
+		var err error
+		if reference.Source == proxyBindingSourceGroup {
+			reconnect, err = s.requestProxyBindingRouteChange(reference.DeviceID, reference.ICCID)
+		} else {
+			reconnect, err = s.requestProfileProxyRouteReconnect(reference.DeviceID, reference.ICCID)
+		}
+		requested = requested || reconnect
+		if err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+	return requested, errs
+}
+
 func (s *Server) handleUpstreamProxies(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -126,23 +203,12 @@ func (s *Server) handleUpstreamProxy(w http.ResponseWriter, r *http.Request, id 
 			s.writeStoreError(w, err)
 			return
 		}
-		bindings, err := s.store.ListDeviceProxyBindings(r.Context())
+		references, err := s.proxyBindingsForUpstream(r.Context(), id)
 		if err != nil {
 			s.writeStoreError(w, err)
 			return
 		}
-		reconnectRequested := false
-		var reconnectErrors []string
-		for _, binding := range bindings {
-			if binding.UpstreamProxyID != id {
-				continue
-			}
-			requested, reconnectErr := s.requestProfileProxyRouteReconnect(binding.DeviceID, binding.ICCID)
-			reconnectRequested = reconnectRequested || requested
-			if reconnectErr != nil {
-				reconnectErrors = append(reconnectErrors, reconnectErr.Error())
-			}
-		}
+		reconnectRequested, reconnectErrors := s.reconnectProxyBindingReferences(references)
 		response := upstreamProxyResponse(value.Redacted())
 		response["reconnect_requested"] = reconnectRequested
 		if len(reconnectErrors) > 0 {
@@ -150,7 +216,7 @@ func (s *Server) handleUpstreamProxy(w http.ResponseWriter, r *http.Request, id 
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"data": response})
 	case http.MethodDelete:
-		bindings, listErr := s.store.ListDeviceProxyBindings(r.Context())
+		references, listErr := s.proxyBindingsForUpstream(r.Context(), id)
 		if listErr != nil {
 			s.writeStoreError(w, listErr)
 			return
@@ -159,11 +225,7 @@ func (s *Server) handleUpstreamProxy(w http.ResponseWriter, r *http.Request, id 
 			s.writeStoreError(w, err)
 			return
 		}
-		for _, binding := range bindings {
-			if binding.UpstreamProxyID == id {
-				s.requestProfileProxyRouteReconnect(binding.DeviceID, binding.ICCID)
-			}
-		}
+		s.reconnectProxyBindingReferences(references)
 		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"deleted": true}})
 	default:
 		w.Header().Set("Allow", "PUT, PATCH, DELETE")
@@ -178,6 +240,55 @@ type profileProxyBindingPayload struct {
 	// Accepted for compatibility with the first profile-picker bundle, which
 	// sent the read-only display state together with the writable identity.
 	StateText string `json:"state_text,omitempty"`
+}
+
+const proxyUnboundDevicePrefix = "unbound-"
+
+func proxyUnboundDeviceID(iccid string) string {
+	return proxyUnboundDevicePrefix + strings.TrimSpace(iccid)
+}
+
+func isProxyUnboundDeviceID(deviceID, iccid string) bool {
+	return strings.TrimSpace(deviceID) == proxyUnboundDeviceID(iccid)
+}
+
+func publicProxyDeviceID(deviceID, iccid string) string {
+	if isProxyUnboundDeviceID(deviceID, iccid) {
+		return ""
+	}
+	return deviceID
+}
+
+func (s *Server) proxyBindingDeviceIDForSave(
+	ctx context.Context,
+	requestedDeviceID, iccid string,
+	allowUnbound bool,
+) (string, error) {
+	iccid = strings.TrimSpace(iccid)
+	if _, err := s.store.SimCard(ctx, iccid); err != nil {
+		return "", err
+	}
+	if s.liveCardConflict(iccid) {
+		return "", errors.New("card ICCID is active on multiple devices")
+	}
+	if binding, err := s.store.SimCardBinding(ctx, iccid); err == nil &&
+		binding.State == store.SimCardBindingConflict {
+		return "", errors.New("card ICCID binding is in conflict")
+	}
+	requestedDeviceID = strings.TrimSpace(requestedDeviceID)
+	if requestedDeviceID == "" {
+		if !allowUnbound {
+			return "", errors.New("device ID is required for legacy profile proxy bindings")
+		}
+		return "", nil
+	}
+	if !validDeviceID(requestedDeviceID) {
+		return "", errors.New("device ID must use 1-64 safe characters")
+	}
+	if _, err := s.store.Device(ctx, requestedDeviceID); err != nil {
+		return "", err
+	}
+	return requestedDeviceID, nil
 }
 
 func (s *Server) handleProfileProxyBindings(w http.ResponseWriter, r *http.Request) {
@@ -221,10 +332,6 @@ func (s *Server) handleProfileProxyBindings(w http.ResponseWriter, r *http.Reque
 		for _, item := range request.Bindings {
 			deviceID := strings.TrimSpace(item.DeviceID)
 			iccid := strings.TrimSpace(item.ICCID)
-			if !validDeviceID(deviceID) {
-				writeError(w, http.StatusBadRequest, "invalid_device_id", "device ID must use 1-64 safe characters")
-				return
-			}
 			if !validProfileICCID(iccid) {
 				writeError(w, http.StatusBadRequest, "invalid_iccid", "profile ICCID must contain 18 to 22 digits")
 				return
@@ -234,8 +341,18 @@ func (s *Server) handleProfileProxyBindings(w http.ResponseWriter, r *http.Reque
 				return
 			}
 			seen[iccid] = struct{}{}
-			if _, err := s.store.Device(r.Context(), deviceID); err != nil {
-				s.writeStoreError(w, err)
+			if deviceID == "" {
+				writeError(w, http.StatusBadRequest, "legacy_proxy_binding_requires_device",
+					"legacy profile proxy bindings require a device ID; use proxy-binding-groups for offline pre-binding")
+				return
+			}
+			deviceID, err := s.proxyBindingDeviceIDForSave(r.Context(), deviceID, iccid, false)
+			if err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					writeError(w, http.StatusConflict, "card_not_registered", "save the SIM card before binding a proxy")
+				} else {
+					s.writeStoreError(w, err)
+				}
 				return
 			}
 			if existing, err := s.store.DeviceProxyBinding(r.Context(), iccid); err == nil && existing.UpstreamProxyID != upstream.ID {
@@ -328,12 +445,18 @@ func (s *Server) requestProfileProxyRouteReconnect(deviceID, iccid string) (bool
 	if s.vowifi == nil {
 		return false, nil
 	}
+	if strings.TrimSpace(deviceID) == "" || isProxyUnboundDeviceID(deviceID, iccid) {
+		return false, nil
+	}
 	config, err := s.store.Device(context.Background(), deviceID)
 	if err != nil {
 		return false, err
 	}
-	if !config.VoWiFiEnabled {
+	if !config.VoWiFiEnabled && config.DeviceType != store.DeviceTypeUSBSIMReader {
 		return false, nil
+	}
+	if _, err := s.ResolveRegisteredActiveCard(context.Background(), deviceID, iccid); err != nil {
+		return false, err
 	}
 	state, stateErr := s.vowifi.State(deviceID)
 	if stateErr != nil || strings.TrimSpace(state.ICCID) == "" || strings.TrimSpace(state.ICCID) != strings.TrimSpace(iccid) {
@@ -381,16 +504,12 @@ func (s *Server) saveAndProbeUpstream(
 		s.writeStoreError(w, err)
 		return
 	}
-	bindings, err := s.store.ListDeviceProxyBindings(r.Context())
+	references, err := s.proxyBindingsForUpstream(r.Context(), saved.ID)
 	if err != nil {
 		s.writeStoreError(w, err)
 		return
 	}
-	for _, binding := range bindings {
-		if binding.UpstreamProxyID == saved.ID {
-			s.requestProfileProxyRouteReconnect(binding.DeviceID, binding.ICCID)
-		}
-	}
+	s.reconnectProxyBindingReferences(references)
 	probe, probeErr := localproxy.ProbeSOCKS5(
 		r.Context(),
 		saved.Addr,
@@ -578,7 +697,7 @@ func countryRuleResponse(value store.CountryRule) map[string]any {
 
 func deviceProxyBindingResponse(value store.DeviceProxyBinding) map[string]any {
 	return map[string]any{
-		"device_id":         value.DeviceID,
+		"device_id":         publicProxyDeviceID(value.DeviceID, value.ICCID),
 		"iccid":             value.ICCID,
 		"profile_name":      value.ProfileName,
 		"upstream_proxy_id": value.UpstreamProxyID,

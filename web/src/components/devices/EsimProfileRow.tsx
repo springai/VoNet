@@ -1,12 +1,15 @@
 import { cx } from "../../lib/utils";
 import { Button, Input, Tag } from "../ui";
-import { EsimCardPolicyInline } from "./EsimCardPolicyInline";
 import type { EsimProfileItem } from "./types";
+import type { DeviceType } from "../../types";
 import { useI18n } from "../../lib/i18n";
 import { esimMutationDisabled } from "./esimActionState";
+import { useNavigate } from "react-router-dom";
 
 export interface EsimProfileRowProps {
   deviceId: string;
+  hostType?: DeviceType;
+  eid?: string;
   deviceOnline: boolean;
   profilesStale: boolean;
   aidHex?: string;
@@ -16,19 +19,17 @@ export interface EsimProfileRowProps {
   renameValue: string;
   switching: boolean;
   deleting: boolean;
-  policyOpen: boolean;
   onRenameValueChange: (v: string) => void;
   onSwitch: () => void;
   onStartRename: () => void;
   onSubmitRename: () => void;
   onCancelRename: () => void;
-  onTogglePolicy: () => void;
   onDelete: () => void;
-  onPolicyChanged: () => void;
 }
 
 export function EsimProfileRow(props: EsimProfileRowProps) {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const { profile: p, renaming } = props;
   const active = p.state === 1;
   const mutationDisabled = esimMutationDisabled({
@@ -84,8 +85,26 @@ export function EsimProfileRow(props: EsimProfileRowProps) {
             <Button variant="primary" size="small" plain disabled={mutationDisabled} onClick={props.onStartRename}>
               {t("改名")}
             </Button>
-            <Button variant={props.policyOpen ? "primary" : "default"} size="small" plain disabled={props.profilesStale} onClick={props.onTogglePolicy}>
-              {t("策略")}
+            <Button
+              variant="default"
+              size="small"
+              plain
+              onClick={() => {
+                const params = new URLSearchParams({
+                  new: p.iccid,
+                  cardType: "esim_profile",
+                  deviceId: props.deviceId,
+                });
+                if (props.hostType) params.set("hostType", props.hostType);
+                if (props.eid) params.set("eid", props.eid);
+                if (p.aidHex) params.set("profileAid", p.aidHex);
+                if (p.name || p.serviceProviderName) {
+                  params.set("displayName", p.name || p.serviceProviderName || "");
+                }
+                navigate(`/cards?${params.toString()}`);
+              }}
+            >
+              {t("查看卡片")}
             </Button>
             <span title={active ? t("当前启用的 Profile 不能删除；请先切换到另一张卡") : undefined}>
               <Button variant="danger" size="small" plain loading={props.deleting} disabled={active || mutationDisabled} onClick={props.onDelete}>
@@ -95,17 +114,6 @@ export function EsimProfileRow(props: EsimProfileRowProps) {
           </div>
         ) : null}
       </div>
-      {props.policyOpen ? (
-        <div className="border-t-0 px-4 pb-3">
-          <EsimCardPolicyInline
-            deviceId={props.deviceId}
-            iccid={p.iccid}
-            isActiveCard={active}
-            deviceOnline={props.deviceOnline}
-            onPolicyChanged={props.onPolicyChanged}
-          />
-        </div>
-      ) : null}
     </>
   );
 }

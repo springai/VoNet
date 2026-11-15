@@ -39,11 +39,11 @@ func (s *Store) ReplaceDeviceProxyBindingRoutes(ctx context.Context, groupID str
 	return s.SaveDeviceProxyBindingGroup(ctx, group.DeviceProxyBindingGroup, proxyIDs)
 }
 
-func (s *Store) DeviceProxyBindingGroupExists(ctx context.Context, deviceID, iccid string) (bool, error) {
+func (s *Store) DeviceProxyBindingGroupExistsByICCID(ctx context.Context, iccid string) (bool, error) {
 	var one int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT 1 FROM device_proxy_binding_groups WHERE device_id = ? AND iccid = ? LIMIT 1
-	`, strings.TrimSpace(deviceID), strings.TrimSpace(iccid)).Scan(&one)
+		SELECT 1 FROM device_proxy_binding_groups WHERE iccid = ? LIMIT 1
+	`, strings.TrimSpace(iccid)).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -51,6 +51,10 @@ func (s *Store) DeviceProxyBindingGroupExists(ctx context.Context, deviceID, icc
 		return false, fmt.Errorf("check proxy binding group: %w", err)
 	}
 	return one == 1, nil
+}
+
+func (s *Store) DeviceProxyBindingGroupExists(ctx context.Context, _ string, iccid string) (bool, error) {
+	return s.DeviceProxyBindingGroupExistsByICCID(ctx, iccid)
 }
 func (s *Store) ListDeviceProxyBindingGroups(ctx context.Context, deviceID string) ([]DeviceProxyBindingGroupWithRoutes, error) {
 	query := `SELECT id, device_id, iccid, profile_name, created_at, updated_at FROM device_proxy_binding_groups`

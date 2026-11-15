@@ -379,8 +379,8 @@ func maskedJSONValue(value json.RawMessage) bool {
 func (s *Store) UpsertCardPolicy(ctx context.Context, value CardPolicy) error {
 	value.ICCID = strings.TrimSpace(value.ICCID)
 	value.CustomPhoneNumber = strings.TrimSpace(value.CustomPhoneNumber)
-	if value.ICCID == "" {
-		return errors.New("card policy ICCID is required")
+	if _, err := NormalizeSimICCID(value.ICCID); err != nil {
+		return err
 	}
 	value.IPVersion = strings.ToUpper(strings.TrimSpace(value.IPVersion))
 	switch value.IPVersion {
@@ -398,12 +398,37 @@ func (s *Store) UpsertCardPolicy(ctx context.Context, value CardPolicy) error {
 		updatedAt = now
 	}
 	value.MBNProfile = strings.TrimSpace(value.MBNProfile)
-	_, err := s.db.ExecContext(ctx, `
+	runtimeMode, err := NormalizeCardRuntimeMode(value.RuntimeMode)
+	if err != nil {
+		return err
+	}
+	value.RuntimeMode = runtimeMode
+	cellularIMSMode, err := NormalizeCellularIMSMode(value.CellularIMSMode)
+	if err != nil {
+		return err
+	}
+	value.CellularIMSMode = cellularIMSMode
+	normalizeCardPolicyRFState(&value)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin upsert card policy %q: %w", value.ICCID, err)
+	}
+	defer tx.Rollback()
+	var registered int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM sim_cards WHERE iccid = ?`, value.ICCID,
+	).Scan(&registered); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: SIM card %q is not registered", ErrNotFound, value.ICCID)
+		}
+		return fmt.Errorf("verify SIM card for policy %q: %w", value.ICCID, err)
+	}
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO card_policies (
 			iccid, network_enabled, vowifi_enabled, airplane_enabled,
 			apn, ip_version, custom_phone_number, mbn_profile, cellular_ims_enabled, cellular_ims_managed,
-			source, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			runtime_mode, cellular_ims_mode, source, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(iccid) DO UPDATE SET
 			network_enabled = excluded.network_enabled,
 			vowifi_enabled = excluded.vowifi_enabled,
@@ -414,16 +439,21 @@ func (s *Store) UpsertCardPolicy(ctx context.Context, value CardPolicy) error {
 			mbn_profile = excluded.mbn_profile,
 			cellular_ims_enabled = excluded.cellular_ims_enabled,
 			cellular_ims_managed = excluded.cellular_ims_managed,
+			runtime_mode = excluded.runtime_mode,
+			cellular_ims_mode = excluded.cellular_ims_mode,
 			source = excluded.source,
 			updated_at = excluded.updated_at
 	`,
 		value.ICCID, boolInt(value.NetworkEnabled), boolInt(value.VoWiFiEnabled),
 		boolInt(value.AirplaneEnabled), value.APN, value.IPVersion,
-		value.CustomPhoneNumber, value.MBNProfile, boolInt(value.CellularIMSEnabled), boolInt(value.CellularIMSManaged), value.Source,
-		createdAt.Unix(), updatedAt.Unix(),
+		value.CustomPhoneNumber, value.MBNProfile, boolInt(value.CellularIMSEnabled), boolInt(value.CellularIMSManaged),
+		value.RuntimeMode, value.CellularIMSMode, value.Source, createdAt.Unix(), updatedAt.Unix(),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert card policy %q: %w", value.ICCID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit upsert card policy %q: %w", value.ICCID, err)
 	}
 	return nil
 }
@@ -467,7 +497,7 @@ func (s *Store) DeleteCardPolicy(ctx context.Context, iccid string) error {
 const cardPolicySelect = `
 	SELECT iccid, network_enabled, vowifi_enabled, airplane_enabled,
 		apn, ip_version, custom_phone_number, mbn_profile, cellular_ims_enabled, cellular_ims_managed,
-		source, created_at, updated_at
+		runtime_mode, cellular_ims_mode, source, created_at, updated_at
 	FROM card_policies`
 
 func cardPolicy(row rowScanner) (CardPolicy, error) {
@@ -477,7 +507,7 @@ func cardPolicy(row rowScanner) (CardPolicy, error) {
 	err := row.Scan(
 		&value.ICCID, &networkEnabled, &vowifiEnabled, &airplaneEnabled,
 		&value.APN, &value.IPVersion, &value.CustomPhoneNumber, &value.MBNProfile, &cellularIMSEnabled, &cellularIMSManaged,
-		&value.Source, &createdAt, &updatedAt,
+		&value.RuntimeMode, &value.CellularIMSMode, &value.Source, &createdAt, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CardPolicy{}, ErrNotFound
@@ -492,7 +522,22 @@ func cardPolicy(row rowScanner) (CardPolicy, error) {
 	value.CellularIMSManaged = cellularIMSManaged != 0
 	value.CreatedAt = time.Unix(createdAt, 0).UTC()
 	value.UpdatedAt = time.Unix(updatedAt, 0).UTC()
+	normalizeCardPolicyRFState(&value)
 	return value, nil
+}
+
+// normalizeCardPolicyRFState enforces one authoritative RF mode. VoWiFi wins
+// when both service flags are set because it is the RF-safe operation; a
+// cellular-only policy must not remain in airplane mode.
+func normalizeCardPolicyRFState(value *CardPolicy) {
+	if value.VoWiFiEnabled {
+		value.NetworkEnabled = false
+		value.AirplaneEnabled = true
+		return
+	}
+	if value.NetworkEnabled {
+		value.AirplaneEnabled = false
+	}
 }
 
 func (s *Store) UpsertCardAPNProfile(ctx context.Context, value CardAPNProfile) (CardAPNProfile, error) {

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"vonet/internal/device"
 	"vonet/internal/store"
 	"vonet/internal/vowifi"
 	vowifiruntime "vonet/internal/vowifi/runtime"
@@ -110,11 +111,15 @@ func TestVoWiFiEnableUpdatesPolicyAndQueuesRuntime(t *testing.T) {
 		state: vowifi.State{DeviceID: "ec20", Phase: vowifi.PhaseIdle},
 	}
 	server := &Server{
-		store:               database,
+		store: database,
+		devices: fakeDeviceController{entry: device.Device{ID: "ec20", Discovered: true, Snapshot: &device.Snapshot{
+			DeviceID: "ec20", Responsive: true, SIMReady: true, ICCID: testICCIDCurrent,
+		}}},
 		vowifi:              controller,
 		logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		maxRequestBodyBytes: 4096,
 	}
+	registerActiveTestCard(t, database, "ec20", "ec20", testICCIDCurrent)
 	request := httptest.NewRequest(
 		http.MethodPatch,
 		"/api/devices/ec20/vowifi",
@@ -156,11 +161,15 @@ func TestVoWiFiRepeatedEnableWhileStartingIsAccepted(t *testing.T) {
 		err:   vowifiruntime.ErrOperationInProgress,
 	}
 	server := &Server{
-		store:               database,
+		store: database,
+		devices: fakeDeviceController{entry: device.Device{ID: "ec20", Discovered: true, Snapshot: &device.Snapshot{
+			DeviceID: "ec20", Responsive: true, SIMReady: true, ICCID: testICCIDCurrent,
+		}}},
 		vowifi:              controller,
 		logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		maxRequestBodyBytes: 4096,
 	}
+	registerActiveTestCard(t, database, "ec20", "ec20", testICCIDCurrent)
 	request := httptest.NewRequest(
 		http.MethodPatch,
 		"/api/devices/ec20/vowifi",

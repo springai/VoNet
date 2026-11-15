@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +16,10 @@ import (
 
 type cellularNetworkSetter interface {
 	SetNetwork(context.Context, string, device.NetworkRequest) (device.NetworkResult, error)
+}
+
+func isPCSCNetworkRequest(request device.NetworkRequest) bool {
+	return strings.EqualFold(strings.TrimSpace(request.Backend), "pcsc")
 }
 
 type cellularDataConnectedCallback func(configID, physicalID string, revision uint64)
@@ -264,9 +270,15 @@ func (s *Server) StartCellularDataReconciler(ctx context.Context) {
 			if !present || entry.Snapshot == nil {
 				continue
 			}
+			identity := strings.TrimSpace(entry.Snapshot.ICCID)
+			if config.NetworkEnabled {
+				if _, err := s.ResolveRegisteredActiveCard(ctx, config.ID, identity); err != nil {
+					continue
+				}
+			}
 			request := s.cellularNetworkRequest(ctx, config, entry.Snapshot)
 			request.Enabled = config.NetworkEnabled
-			runtime.requestWithIdentity(config.ID, physicalID, request, strings.TrimSpace(entry.Snapshot.ICCID))
+			runtime.requestWithIdentity(config.ID, physicalID, request, identity)
 		}
 	}()
 }
@@ -317,9 +329,13 @@ func (s *Server) reconcileCellularDataForPhysical(ctx context.Context, physicalI
 		if !present || resolvedPhysicalID != physicalID || entry.Snapshot == nil {
 			continue
 		}
+		identity := strings.TrimSpace(entry.Snapshot.ICCID)
+		if _, err := s.ResolveRegisteredActiveCard(ctx, config.ID, identity); err != nil {
+			continue
+		}
 		request := s.cellularNetworkRequest(ctx, config, entry.Snapshot)
 		request.Enabled = true
-		runtime.requestWithIdentity(config.ID, physicalID, request, strings.TrimSpace(entry.Snapshot.ICCID))
+		runtime.requestWithIdentity(config.ID, physicalID, request, identity)
 	}
 }
 
@@ -424,9 +440,16 @@ func (s *Server) monitorCellularData(ctx context.Context, physicalID string, imm
 		request := s.cellularNetworkRequest(ctx, config, entry.Snapshot)
 		request.Enabled = true
 		identity := strings.TrimSpace(entry.Snapshot.ICCID)
+		if _, err := s.ResolveRegisteredActiveCard(ctx, config.ID, identity); err != nil {
+			runtime.invalidateWithMaintenancePhase(config.ID, true, "recovering", err.Error(), "card_gate")
+			continue
+		}
 		if runtime.sessionIdentityChanged(config.ID, status.Revision, identity) {
 			runtime.invalidateWithMaintenancePhase(config.ID, true, "recovering", "active ICCID/Profile changed", "profile_changed")
 			runtime.requestWithIdentity(config.ID, resolvedPhysicalID, request, identity)
+			continue
+		}
+		if isPCSCNetworkRequest(request) {
 			continue
 		}
 		backend := strings.ToLower(strings.TrimSpace(request.Backend))
@@ -997,27 +1020,35 @@ func (runtime *cellularDataRuntime) run(configID string, entry *cellularDataRunt
 
 		var result device.NetworkResult
 		var err error
-		for attempt := 0; attempt < 3; attempt++ {
-			result, err = runtime.setter.SetNetwork(operationContext, physicalID, request)
-			if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				break
+		if isPCSCNetworkRequest(request) {
+			if request.Enabled {
+				err = fmt.Errorf("%w: PCSC readers do not provide cellular data", device.ErrDataBackendUnavailable)
+			} else {
+				result = device.NetworkResult{Enabled: false, Backend: "pcsc"}
 			}
-			if attempt == 2 {
-				break
-			}
-			delay := time.Duration(2+attempt*3) * time.Second
-			select {
-			case <-operationContext.Done():
-				err = operationContext.Err()
-				attempt = 3
-			case <-time.After(delay):
-				runtime.mu.Lock()
-				if runtime.entries[configID] == entry && entry.status.Revision == revision {
-					entry.status.Phase = "recovering"
-					entry.status.UpdatedAt = time.Now().UTC()
-					runtime.signalLocked(entry)
+		} else {
+			for attempt := 0; attempt < 3; attempt++ {
+				result, err = runtime.setter.SetNetwork(operationContext, physicalID, request)
+				if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					break
 				}
-				runtime.mu.Unlock()
+				if attempt == 2 {
+					break
+				}
+				delay := time.Duration(2+attempt*3) * time.Second
+				select {
+				case <-operationContext.Done():
+					err = operationContext.Err()
+					attempt = 3
+				case <-time.After(delay):
+					runtime.mu.Lock()
+					if runtime.entries[configID] == entry && entry.status.Revision == revision {
+						entry.status.Phase = "recovering"
+						entry.status.UpdatedAt = time.Now().UTC()
+						runtime.signalLocked(entry)
+					}
+					runtime.mu.Unlock()
+				}
 			}
 		}
 		cancel()
@@ -1183,16 +1214,28 @@ func (s *Server) applyCellularData(
 	physicalID string,
 	request device.NetworkRequest,
 ) (device.NetworkResult, error) {
-	if !request.Enabled {
-		s.clearPublicIP(configID)
-	}
-	runtime := s.cellularDataRuntime()
 	identity := ""
 	if s.devices != nil {
 		if entry, err := s.devices.Get(physicalID); err == nil && entry.Snapshot != nil {
 			identity = strings.TrimSpace(entry.Snapshot.ICCID)
 		}
 	}
+	if request.Enabled {
+		if _, err := s.ResolveRegisteredActiveCard(ctx, configID, identity); err != nil {
+			return device.NetworkResult{}, err
+		}
+	} else if !AllowCardStop(configID) {
+		return device.NetworkResult{}, cardGateError(
+			cardGateCodeInvalidDevice,
+			"device ID is invalid",
+			http.StatusBadRequest,
+			nil,
+		)
+	}
+	if !request.Enabled {
+		s.clearPublicIP(configID)
+	}
+	runtime := s.cellularDataRuntime()
 	requested := runtime.requestWithIdentity(configID, physicalID, request, identity)
 	status, err := runtime.wait(ctx, configID, requested.Revision)
 	return device.NetworkResult{Enabled: status.Connected}, err

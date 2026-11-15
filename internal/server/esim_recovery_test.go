@@ -58,12 +58,16 @@ func TestUncertainSwitchKeepsMaintenanceUntilRecoveryActuallyEnds(t *testing.T) 
 			if err := db.UpsertDevice(context.Background(), store.Device{ID: "dev1", Name: "dev1", VoWiFiEnabled: true}); err != nil {
 				t.Fatal(err)
 			}
-			if err := db.UpsertCardPolicy(context.Background(), store.CardPolicy{ICCID: "live-card", VoWiFiEnabled: true, AirplaneEnabled: true}); err != nil {
+			const liveICCID = "8900000000000000001"
+			if err := db.UpsertSimCard(context.Background(), store.SimCard{ICCID: liveICCID}); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.UpsertCardPolicy(context.Background(), store.CardPolicy{ICCID: liveICCID, VoWiFiEnabled: true, AirplaneEnabled: true}); err != nil {
 				t.Fatal(err)
 			}
 			original := errors.New("EnableProfile transport outcome uncertain")
 			c := &recoveringSwitchController{flightTrackingController: flightTrackingController{switchErr: original}, entered: make(chan struct{}, 2), done: make(chan struct{})}
-			c.entry.Snapshot = &device.Snapshot{ICCID: "live-card"}
+			c.entry.Snapshot = &device.Snapshot{ICCID: liveICCID}
 			if failed {
 				c.recoveryErr = errors.New("SIM recovery failed")
 			}
@@ -73,7 +77,7 @@ func TestUncertainSwitchKeepsMaintenanceUntilRecoveryActuallyEnds(t *testing.T) 
 			s := &Server{store: db, devices: c, vowifi: wifi, logger: regionTestLogger()}
 			result := make(chan error, 1)
 			go func() {
-				_, err := s.switchESIMProfile(context.Background(), "dev1", "dev1", "target", "")
+				_, err := s.switchESIMProfile(context.Background(), "dev1", "dev1", "8900000000000000002", "")
 				result <- err
 			}()
 			select {
@@ -108,7 +112,7 @@ func TestUncertainSwitchKeepsMaintenanceUntilRecoveryActuallyEnds(t *testing.T) 
 				if err != nil || config.VoWiFiEnabled || config.NetworkEnabled {
 					t.Fatalf("unverified runtime policy retained: %+v %v", config, err)
 				}
-				policy, err := db.CardPolicy(context.Background(), "live-card")
+				policy, err := db.CardPolicy(context.Background(), liveICCID)
 				if err != nil || !policy.VoWiFiEnabled {
 					t.Fatal("recovery failure overwrote saved card preference")
 				}
@@ -130,11 +134,15 @@ func TestFailureRestorationKeepsMaintenanceUntilLivePolicyIsPrepared(t *testing.
 	if err := db.UpsertDevice(context.Background(), store.Device{ID: "dev1", Name: "dev1", VoWiFiEnabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertCardPolicy(context.Background(), store.CardPolicy{ICCID: "new-card", AirplaneEnabled: true}); err != nil {
+	const newICCID = "8900000000000000001"
+	if err := db.UpsertSimCard(context.Background(), store.SimCard{ICCID: newICCID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertCardPolicy(context.Background(), store.CardPolicy{ICCID: newICCID, AirplaneEnabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	c := &recoveringSwitchController{refreshEntered: make(chan struct{}, 1), allowRefresh: make(chan struct{})}
-	c.entry.Snapshot = &device.Snapshot{ICCID: "new-card"}
+	c.entry.Snapshot = &device.Snapshot{ICCID: newICCID}
 	var release sync.Once
 	defer release.Do(func() { close(c.allowRefresh) })
 	wifi := &automationSwitchWiFi{maintenance: true}

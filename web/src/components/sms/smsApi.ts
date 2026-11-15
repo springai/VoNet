@@ -1,5 +1,5 @@
 import { api } from "../../api";
-import type { DeviceListItem, DevicesResponse, SMSContact, SMSMessage } from "../../types";
+import type { SMSContact, SMSMessage } from "../../types";
 
 // Build a query string keeping snake_case keys (api() only snakeizes JSON bodies, not paths).
 function qs(params: Record<string, string | number | undefined>): string {
@@ -12,14 +12,13 @@ function qs(params: Record<string, string | number | undefined>): string {
   return s ? `?${s}` : "";
 }
 
-export async function listSmsDevices(): Promise<DeviceListItem[]> {
-  const res = await api<DevicesResponse>("/devices");
-  return (res.devices || []).filter((d) => d.running);
-}
-
-export function listContacts(deviceId: string): Promise<SMSContact[]> {
+export function listContacts(deviceId: string, iccid?: string): Promise<SMSContact[]> {
   return api<SMSContact[]>(
-    `/sms/contacts${qs({ limit: 200, device_id: deviceId && deviceId !== "all" ? deviceId : undefined })}`,
+    `/sms/contacts${qs({
+      limit: 200,
+      device_id: deviceId && deviceId !== "all" ? deviceId : undefined,
+      iccid: iccid || undefined,
+    })}`,
   );
 }
 
@@ -51,6 +50,7 @@ export function getThread(q: ThreadQuery): Promise<SMSMessage[]> {
 
 export interface SendSmsPayload {
 	deviceId?: string;
+	iccid?: string;
 	phone: string;
 	message: string;
 }
@@ -72,7 +72,9 @@ export interface SmsSendResult {
 }
 
 export function sendSms(payload: SendSmsPayload): Promise<SmsSendResult> {
-	return api<SmsSendResult>("/sms/send", { method: "POST", body: payload });
+	const { iccid, ...body } = payload;
+	const query = iccid ? `?iccid=${encodeURIComponent(iccid)}` : "";
+	return api<SmsSendResult>(`/sms/send${query}`, { method: "POST", body });
 }
 
 export function deleteMessage(id: number): Promise<{ threadEmpty?: boolean }> {

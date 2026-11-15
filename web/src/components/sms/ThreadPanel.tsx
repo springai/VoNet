@@ -101,8 +101,8 @@ export function ThreadPanel(props: ThreadPanelProps) {
     selectedDevice === "all"
       ? activeThread && (activeThread.localPhone || activeThread.lastDeviceName)
         ? tf("本机：{phone}", { phone: activeThread.localPhone || activeThread.lastDeviceName })
-        : t("全部设备")
-      : tf("设备：{device}", { device: selectedDevice });
+        : t("全部卡片")
+      : tf("卡片：{device}", { device: selectedDevice });
 
   function onComposerKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {

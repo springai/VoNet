@@ -19,3 +19,8 @@ export function deviceTypeImage(value?: string | null): string {
   const normalized = normalizeDeviceType(value);
   return DEVICE_TYPES.find((item) => item.value === normalized)?.image || "/ec20.png";
 }
+
+export function deviceTypeLabel(value?: string | null): string {
+  const normalized = normalizeDeviceType(value);
+  return DEVICE_TYPES.find((item) => item.value === normalized)?.label || "";
+}

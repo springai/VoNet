@@ -1,10 +1,10 @@
 import { useCallback, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../../api";
 import { useI18n } from "../../lib/i18n";
 import { usePolling } from "../../lib/usePolling";
-import type { DeviceListItem, DevicesResponse } from "../../types";
+import type { SimCard } from "../../types";
 import { Button, Modal } from "../ui";
+import { activeCardDevice, listCards } from "../cards/cardApi";
 import {
   answerCall,
   findIncomingCall,
@@ -14,12 +14,12 @@ import {
 } from "./callApi";
 
 interface IncomingCallTarget {
-  device: DeviceListItem;
+  card: SimCard;
   call: CallInfo;
 }
 
-function incomingCallKey(deviceId: string, call: CallInfo): string {
-  return call.id || `${deviceId}:${call.index ?? call.number ?? ""}`;
+function incomingCallKey(card: SimCard, call: CallInfo): string {
+  return call.id || `${card.iccid}:${call.index ?? call.number ?? ""}`;
 }
 
 export function IncomingCallMonitor() {
@@ -33,12 +33,13 @@ export function IncomingCallMonitor() {
   const pollIncomingCalls = useCallback(async () => {
     const requestId = ++requestIdRef.current;
     try {
-      const response = await api<DevicesResponse>("/devices");
-      const devices = (response.devices || []).filter((device) => device.running);
+      const cards = await listCards();
+      const activeCards = cards.filter((card) => card.status === "active" && activeCardDevice(card));
       const results = await Promise.allSettled(
-        devices.map(async (device) => ({
-          device,
-          calls: (await listCalls(device.id)).calls || [],
+        activeCards.map(async (card) => ({
+          card,
+          deviceId: activeCardDevice(card)!,
+          calls: (await listCalls(activeCardDevice(card)!, card.iccid)).calls || [],
         })),
       );
       if (requestId !== requestIdRef.current) return;
@@ -46,8 +47,8 @@ export function IncomingCallMonitor() {
       for (const result of results) {
         if (result.status !== "fulfilled") continue;
         const call = findIncomingCall(result.value.calls);
-        if (call && !handledCallKeysRef.current.has(incomingCallKey(result.value.device.id, call))) {
-          setTarget({ device: result.value.device, call });
+        if (call && !handledCallKeysRef.current.has(incomingCallKey(result.value.card, call))) {
+          setTarget({ card: result.value.card, call });
           return;
         }
       }
@@ -63,13 +64,15 @@ export function IncomingCallMonitor() {
     if (!target || busy) return;
     setBusy(true);
     try {
-      handledCallKeysRef.current.add(incomingCallKey(target.device.id, target.call));
-      await answerCall(target.device.id, target.call.id);
+      const deviceId = activeCardDevice(target.card);
+      if (!deviceId || target.card.status !== "active") return;
+      handledCallKeysRef.current.add(incomingCallKey(target.card, target.call));
+      await answerCall(deviceId, target.call.id, target.card.iccid);
       try {
         sessionStorage.setItem("vonet_has_answered", "1");
       } catch {}
       setTarget(null);
-      navigate(`/call?device=${encodeURIComponent(target.device.id)}`);
+      navigate(`/call?iccid=${encodeURIComponent(target.card.iccid)}`);
     } finally {
       setBusy(false);
     }
@@ -79,8 +82,10 @@ export function IncomingCallMonitor() {
     if (!target || busy) return;
     setBusy(true);
     try {
-      handledCallKeysRef.current.add(incomingCallKey(target.device.id, target.call));
-      await rejectCall(target.device.id, target.call.id);
+      const deviceId = activeCardDevice(target.card);
+      if (!deviceId || target.card.status !== "active") return;
+      handledCallKeysRef.current.add(incomingCallKey(target.card, target.call));
+      await rejectCall(deviceId, target.call.id, target.card.iccid);
       setTarget(null);
     } finally {
       setBusy(false);
@@ -103,7 +108,7 @@ export function IncomingCallMonitor() {
         <div>
           <div className="incoming-call-number">{target?.call.number || t("未知号码")}</div>
           <div className="incoming-call-label">
-            {target?.device.name || target?.device.id || t("设备通话")}
+            {target?.card.displayName || target?.card.iccid || t("通话")}
           </div>
         </div>
       </div>

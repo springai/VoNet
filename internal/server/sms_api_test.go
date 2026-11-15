@@ -824,6 +824,7 @@ func TestHandleSMSSendEnforcesGlobalHourlyLimit(t *testing.T) {
 	if err := database.UpsertDevice(ctx, store.Device{ID: "ec20_1", Name: "EC20"}); err != nil {
 		t.Fatal(err)
 	}
+	registerActiveTestCard(t, database, "ec20_1", "ec20_1", testICCIDCurrent)
 	if reservation, err := database.ReserveSMSSend(ctx, "another-device", 1, time.Now().UTC()); err != nil || !reservation.Allowed {
 		t.Fatalf("seed global SMS reservation = %+v, %v", reservation, err)
 	}
@@ -834,7 +835,7 @@ func TestHandleSMSSendEnforcesGlobalHourlyLimit(t *testing.T) {
 		devices: fakeDeviceController{entry: device.Device{
 			ID:         "ec20_1",
 			Discovered: true,
-			Snapshot:   &device.Snapshot{DeviceID: "ec20_1"},
+			Snapshot:   &device.Snapshot{DeviceID: "ec20_1", Responsive: true, SIMReady: true, ICCID: testICCIDCurrent},
 		}},
 	}
 	request := httptest.NewRequest(

@@ -161,12 +161,13 @@ function RoundBtn({ icon, label, color, bg, onClick, active }: {
 
 interface CallPanelProps {
   deviceId: string;
+  iccid?: string;
   externalNumber?: string;
   onNumberConsumed?: () => void;
   onPhaseChange?: (phase: CallPhase) => void;
 }
 
-export function CallPanel({ deviceId, externalNumber, onNumberConsumed, onPhaseChange }: CallPanelProps) {
+export function CallPanel({ deviceId, iccid, externalNumber, onNumberConsumed, onPhaseChange }: CallPanelProps) {
   const { t } = useI18n();
   const [phoneNumber, setPhoneNumber] = useState("");
   const [phase, setPhase] = useState<CallPhase>("idle");
@@ -213,7 +214,7 @@ export function CallPanel({ deviceId, externalNumber, onNumberConsumed, onPhaseC
 
   const pollCalls = useCallback(async () => {
     try {
-      const resp = await listCalls(deviceId);
+      const resp = await listCalls(deviceId, iccid);
       setTransport(resp.transport || "");
       const calls = resp.calls || [];
       console.log("[CallPanel] pollCalls:", calls.length, "calls", JSON.stringify(calls), "hasAnswered:", hasAnsweredRef.current);
@@ -254,12 +255,12 @@ export function CallPanel({ deviceId, externalNumber, onNumberConsumed, onPhaseC
           // When phase leaves "incoming" (caller hung up, answered, rejected, etc.)
           // and we have a pending incoming that is still "ringing", save as missed.
           if (pendingIncomingRef.current && pendingIncomingRef.current.status === "ringing" && phase === "incoming" && newPhase !== "incoming") {
-            recordCallHistory(deviceId, pendingIncomingRef.current.number, "incoming", "missed").catch(() => {});
+            recordCallHistory(deviceId, pendingIncomingRef.current.number, "incoming", "missed", iccid).catch(() => {});
             pendingIncomingRef.current = null;
           }
           // Also timeout: if still "incoming" after 60s, save as missed (stale CLCC)
           if (pendingIncomingRef.current && pendingIncomingRef.current.status === "ringing" && newPhase === "incoming" && Date.now() - pendingIncomingRef.current.time > 60000) {
-            recordCallHistory(deviceId, pendingIncomingRef.current.number, "incoming", "missed").catch(() => {});
+            recordCallHistory(deviceId, pendingIncomingRef.current.number, "incoming", "missed", iccid).catch(() => {});
             pendingIncomingRef.current = null;
           }
         setPhase(newPhase);
@@ -277,7 +278,7 @@ export function CallPanel({ deviceId, externalNumber, onNumberConsumed, onPhaseC
         } else if (newPhase === "idle") {
           // Save answered calls to history when call ends
           if (pendingIncomingRef.current && pendingIncomingRef.current.status === "answered") {
-            recordCallHistory(deviceId, pendingIncomingRef.current.number, "incoming", "answered").catch(() => {});
+            recordCallHistory(deviceId, pendingIncomingRef.current.number, "incoming", "answered", iccid).catch(() => {});
           }
           pendingIncomingRef.current = null;
           lastIncomingRef.current = null;
@@ -293,7 +294,7 @@ export function CallPanel({ deviceId, externalNumber, onNumberConsumed, onPhaseC
     } catch (err) {
       console.error("[CallPanel] pollCalls error:", err);
     }
-  }, [deviceId]);
+  }, [deviceId, iccid]);
 
   useEffect(() => {
     pollCalls();
@@ -314,7 +315,7 @@ export function CallPanel({ deviceId, externalNumber, onNumberConsumed, onPhaseC
 
   const startAudio = useCallback((callId: string) => {
     try {
-      const ws = connectCallMedia(deviceId, callId);
+      const ws = connectCallMedia(deviceId, callId, iccid);
       wsRef.current = ws;
       navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
         streamRef.current = stream;
@@ -376,7 +377,7 @@ export function CallPanel({ deviceId, externalNumber, onNumberConsumed, onPhaseC
     } catch (err) {
       console.error("[CallPanel] startAudio error:", err);
     }
-  }, [deviceId, muted, stopAudio, t]);
+  }, [deviceId, iccid, muted, stopAudio, t]);
 
   const handleDial = useCallback(async () => {
     const num = phoneNumber.trim();
@@ -387,13 +388,13 @@ export function CallPanel({ deviceId, externalNumber, onNumberConsumed, onPhaseC
       dialedNumberRef.current = num;
       dialStartTimeRef.current = Date.now();
       try { sessionStorage.setItem(DIAL_STORAGE_KEY, num); sessionStorage.setItem("vonet_dial_start", String(dialStartTimeRef.current)); } catch {}
-      await dialCall(deviceId, num);
+      await dialCall(deviceId, num, 0, iccid);
       message.success(t("正在拨号"));
     } catch (err: any) {
       setPhase("idle");
       message.error(err.message || t("拨号失败"));
     }
-  }, [phoneNumber, deviceId, t]);
+  }, [phoneNumber, deviceId, iccid, t]);
 
   const handleAnswer = useCallback(async () => {
     try {
@@ -402,7 +403,7 @@ export function CallPanel({ deviceId, externalNumber, onNumberConsumed, onPhaseC
       if (pendingIncomingRef.current) {
         pendingIncomingRef.current.status = "answered";
       }
-      await answerCall(deviceId, activeCall?.id);
+      await answerCall(deviceId, activeCall?.id, iccid);
       message.success(t("已接听"));
       setPhase("connected");
       setCallDuration(0);
@@ -414,12 +415,12 @@ export function CallPanel({ deviceId, externalNumber, onNumberConsumed, onPhaseC
       hasAnsweredRef.current = false; try { sessionStorage.removeItem("vonet_has_answered"); } catch {}
       message.error(err.message || t("接听失败"));
     }
-  }, [deviceId, activeCall, transport, startAudio, t]);
+  }, [deviceId, iccid, activeCall, transport, startAudio, t]);
 
   const handleHangup = useCallback(async () => {
     try {
       userHangupRef.current = true;
-      await hangupCall(deviceId, activeCall?.id);
+      await hangupCall(deviceId, activeCall?.id, iccid);
       stopAudio();
       setPhase("idle");
       setActiveCall(undefined);
@@ -435,12 +436,12 @@ export function CallPanel({ deviceId, externalNumber, onNumberConsumed, onPhaseC
       userHangupRef.current = false;
       message.error(err.message || t("挂断失败"));
     }
-  }, [deviceId, activeCall, stopAudio, t]);
+  }, [deviceId, iccid, activeCall, stopAudio, t]);
 
   const handleReject = useCallback(async () => {
     try {
       userHangupRef.current = true;
-      await rejectCall(deviceId, activeCall?.id);
+      await rejectCall(deviceId, activeCall?.id, iccid);
       setPhase("idle");
       setActiveCall(undefined);
       hasAnsweredRef.current = false; try { sessionStorage.removeItem("vonet_has_answered"); } catch {}
@@ -451,16 +452,16 @@ export function CallPanel({ deviceId, externalNumber, onNumberConsumed, onPhaseC
       userHangupRef.current = false;
       message.error(err.message || t("拒接失败"));
     }
-  }, [deviceId, activeCall, t]);
+  }, [deviceId, iccid, activeCall, t]);
 
   const handleDtmf = useCallback(async (digit: string) => {
     playDtmfTone(digit);
     try {
-      await sendDTMF(deviceId, digit, activeCall?.id);
+      await sendDTMF(deviceId, digit, activeCall?.id, iccid);
     } catch (err: any) {
       message.error(err.message || t("发送 DTMF 失败"));
     }
-  }, [deviceId, activeCall, t]);
+  }, [deviceId, iccid, activeCall, t]);
 
   const handleMute = useCallback(() => {
     setMuted((m) => {

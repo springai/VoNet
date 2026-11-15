@@ -32,6 +32,9 @@ func TestResetExperimentalRestoresDefaults(t *testing.T) {
 	if err := database.UpsertDevice(ctx, store.Device{ID: "modem-1", Name: "modem-1", NetworkEnabled: true}); err != nil {
 		t.Fatal(err)
 	}
+	if err := database.UpsertSimCard(ctx, store.SimCard{ICCID: "8901000000000000001"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := database.UpsertCardPolicy(ctx, store.CardPolicy{ICCID: "8901000000000000001", NetworkEnabled: true, IPVersion: "IPV4V6"}); err != nil {
 		t.Fatal(err)
 	}

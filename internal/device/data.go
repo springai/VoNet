@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"vonet/internal/modem"
+	"vonet/internal/pcsc"
 )
 
 var apnPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$`)
@@ -237,6 +238,12 @@ func (manager *Manager) SetNetwork(
 	state, err := manager.lookup(id)
 	if err != nil {
 		return NetworkResult{}, err
+	}
+	if manager.candidateFor(state).HardwareKind == pcsc.HardwareKind {
+		if !request.Enabled {
+			return NetworkResult{Enabled: false, Backend: "pcsc"}, nil
+		}
+		return NetworkResult{}, fmt.Errorf("%w: PCSC readers do not provide cellular data", ErrDataBackendUnavailable)
 	}
 	apn := strings.TrimSpace(request.APN)
 	if request.Enabled && !ValidAPN(apn) {

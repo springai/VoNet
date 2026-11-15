@@ -6,7 +6,7 @@ import { ApiError, apiMessage } from "../api";
 import { Button, ErrorState, PageHeader, RefreshButton, Spinner, confirmDialog, message } from "../components/ui";
 import { usePolling } from "../lib/usePolling";
 import { cx } from "../lib/utils";
-import type { DeviceListItem, SMSMessage } from "../types";
+import type { SimCard, SMSMessage } from "../types";
 import {
   analyzeSmsEncoding,
   deriveThread,
@@ -22,12 +22,12 @@ import {
   deleteThread,
   getThread,
   listContacts,
-  listSmsDevices,
   sendSms,
   type DeleteThreadQuery,
   type SmsSendResult,
   type ThreadQuery,
 } from "../components/sms/smsApi";
+import { activeCardDevice, listCards } from "../components/cards/cardApi";
 import { ContactList } from "../components/sms/ContactList";
 import { ThreadPanel } from "../components/sms/ThreadPanel";
 import { NewSmsModal, type NewSmsPayload } from "../components/sms/NewSmsModal";
@@ -45,6 +45,7 @@ interface DeviceFilterOption {
   id: string;
   label: string;
   healthy: boolean;
+  card?: SimCard;
 }
 
 function toLoadError(e: unknown): LoadError {
@@ -78,14 +79,14 @@ export default function SmsPage() {
   const { t, lang } = useI18n();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const [devices, setDevices] = useState<DeviceListItem[]>([]);
+  const [cards, setCards] = useState<SimCard[]>([]);
   const [devicesError, setDevicesError] = useState<LoadError | null>(null);
   const [devicesOkAt, setDevicesOkAt] = useState<number | null>(null);
   const [contacts, setContacts] = useState<SmsThread[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
   const [contactsError, setContactsError] = useState<LoadError | null>(null);
   const [contactsOkAt, setContactsOkAt] = useState<number | null>(null);
-  const [selectedDevice, setSelectedDevice] = useState<string>(() => searchParams.get("device") || "all");
+  const [selectedDevice, setSelectedDevice] = useState<string>(() => searchParams.get("iccid") || searchParams.get("device") || "all");
   const [selectedKey, setSelectedKey] = useState<string>(() => searchParams.get("contact") || "");
   const [searchQuery, setSearchQuery] = useState("");
   const [messages, setMessages] = useState<SMSMessage[]>([]);
@@ -129,6 +130,15 @@ export default function SmsPage() {
   const isDesktop = !isMobile;
   const showContactColumn = isDesktop || !selectedKey;
   const showDetailColumn = isDesktop || !!selectedKey;
+  const devices = useMemo(
+    () => cards.map((card) => ({
+      id: card.iccid,
+      name: card.displayName || card.carrier || card.iccid,
+      healthy: card.status === "active",
+      card,
+    })),
+    [cards],
+  );
 
   // Setter helpers keep state and its mirror ref in sync immediately.
   const setDevice = (d: string) => { deviceRef.current = d; setSelectedDevice(d); };
@@ -155,26 +165,42 @@ export default function SmsPage() {
   const composerLength = useMemo(() => Array.from(composer || "").length, [composer]);
   const deviceFilters = useMemo<DeviceFilterOption[]>(
     () => [
-      { id: "all", label: t("全部设备"), healthy: true },
+      { id: "all", label: t("全部卡片"), healthy: true },
       ...devices.map((d) => ({
         id: d.id,
         label: d.name || d.id,
-        healthy: !!d.running && (d.controlOnline ?? d.healthy) === true,
+        healthy: d.healthy,
+        card: d.card,
       })),
     ],
-    [devices],
+    [devices, t],
   );
   const deviceSelectOptions = useMemo(() => deviceFilters.map((o) => ({ value: o.id, label: o.label })), [deviceFilters]);
 
   const isUnread = (t: SmsThread) => t.unread;
+  const resolveCardTarget = useCallback((value: string, threadICCID?: string) => {
+    const card = value !== "all"
+      ? devices.find((item) => item.id === value)?.card
+      : devices.find((item) => item.id === (threadICCID || "").replace(/\s+/g, ""))?.card;
+    return {
+      card,
+      iccid: card?.iccid || (value !== "all" ? value : ""),
+      deviceId: activeCardDevice(card) || "",
+    };
+  }, [devices]);
 
   const syncQuery = useCallback(
     (device: string, contactKey: string) => {
       setSearchParams(
         (prev) => {
           const p = new URLSearchParams(prev);
-          if (device && device !== "all") p.set("device", device);
-          else p.delete("device");
+          if (device && device !== "all") {
+            p.set("iccid", device);
+            p.delete("device");
+          } else {
+            p.delete("iccid");
+            p.delete("device");
+          }
           if (contactKey) p.set("contact", contactKey);
           else p.delete("contact");
           return p;
@@ -243,11 +269,11 @@ export default function SmsPage() {
     const id = ++deviceReqId.current;
     setDevicesError(null);
     try {
-      const list = await listSmsDevices();
+      const list = await listCards();
       if (id !== deviceReqId.current) return false;
-      setDevices(list);
+      setCards(list);
       setDevicesOkAt(Date.now());
-      if (deviceRef.current !== "all" && !list.some((d) => d.id === deviceRef.current)) {
+      if (deviceRef.current !== "all" && !list.some((card) => card.iccid === deviceRef.current)) {
         setDevice("all");
         setKey("");
         setMessagesState([]);
@@ -267,9 +293,11 @@ export default function SmsPage() {
     if (!silent) setContactsLoadingState(true);
     setContactsError(null);
     try {
-      const raw = await listContacts(device);
+      const target = resolveCardTarget(device);
+      const raw = await listContacts(target.deviceId || "all", target.iccid || undefined);
       if (id !== contactReqId.current) return null;
-      const threads = sortThreads(raw.map(deriveThread));
+      const scoped = target.iccid ? raw.filter((contact) => (contact.iccid || "").replace(/\s+/g, "") === target.iccid) : raw;
+      const threads = sortThreads(scoped.map(deriveThread));
       setContactsState(threads);
       setContactsOkAt(Date.now());
       return threads;
@@ -280,7 +308,7 @@ export default function SmsPage() {
     } finally {
       if (id === contactReqId.current && !silent) setContactsLoadingState(false);
     }
-  }, []);
+  }, [resolveCardTarget]);
 
   const loadThreadFor = useCallback(async (thread: SmsThread | null, device: string, silent: boolean): Promise<boolean> => {
     if (!thread) {
@@ -291,12 +319,15 @@ export default function SmsPage() {
     const id = ++threadReqId.current;
     if (!silent) setMessagesLoadingState(true);
     const query: ThreadQuery = { peer: thread.peer, limit: THREAD_PAGE };
-    if (device !== "all") query.deviceId = device;
-    else {
+    if (device !== "all") {
+      const target = resolveCardTarget(device, thread.iccid);
+      query.deviceId = target.deviceId;
+      query.iccid = target.iccid;
+    } else {
       query.modemImei = thread.modemImei;
+      if (thread.iccid) query.iccid = thread.iccid;
+      else query.imsi = thread.imsi;
     }
-		if (thread.iccid) query.iccid = thread.iccid;
-		else query.imsi = thread.imsi;
     try {
       const list = sortMessages(await getThread(query));
       if (id !== threadReqId.current) return false;
@@ -310,7 +341,7 @@ export default function SmsPage() {
     } finally {
       if (id === threadReqId.current && !silent) setMessagesLoadingState(false);
     }
-  }, []);
+  }, [resolveCardTarget]);
 
   const selectContact = useCallback(
     async (key: string, opts: { syncRoute?: boolean; silent?: boolean; scrollToBottom?: boolean } = {}) => {
@@ -419,12 +450,15 @@ export default function SmsPage() {
     try {
       const oldest = messagesRef.current[0];
       const query: ThreadQuery = { peer: thread.peer, limit: THREAD_PAGE, beforeTs: oldest.timestamp, beforeId: oldest.id };
-      if (device !== "all") query.deviceId = device;
-      else {
+      if (device !== "all") {
+        const target = resolveCardTarget(device, thread.iccid);
+        query.deviceId = target.deviceId;
+        query.iccid = target.iccid;
+      } else {
         query.modemImei = thread.modemImei;
+        if (thread.iccid) query.iccid = thread.iccid;
+        else query.imsi = thread.imsi;
       }
-			if (thread.iccid) query.iccid = thread.iccid;
-			else query.imsi = thread.imsi;
       const older = sortMessages(await getThread(query));
       setMessagesState([...older, ...messagesRef.current]);
       setHasMoreState(older.length === THREAD_PAGE);
@@ -438,7 +472,7 @@ export default function SmsPage() {
     } finally {
       setLoadingMoreState(false);
     }
-  }, []);
+  }, [resolveCardTarget]);
 
   const onDetailScroll = useCallback(
     (e: UIEvent<HTMLDivElement>) => {
@@ -454,14 +488,14 @@ export default function SmsPage() {
     const text = composer.trim();
     if (!text) return;
     const device = deviceRef.current;
-    const deviceId = device !== "all" ? device : thread.deviceId || devices[0]?.id || "";
-    if (!deviceId) {
-      message.warning(t("暂无可用设备"));
+    const target = resolveCardTarget(device, thread.iccid);
+    if (!target.card || target.card.status !== "active" || !target.deviceId) {
+      message.warning(t("请选择当前启用的卡片"));
       return;
     }
     setSending(true);
     try {
-      const result = await sendSms({ deviceId, phone: thread.peer, message: text });
+      const result = await sendSms({ deviceId: target.deviceId, iccid: target.iccid, phone: thread.peer, message: text });
       showSmsSendOutcome(result);
       setComposer("");
       scrollToBottomNow();
@@ -473,7 +507,7 @@ export default function SmsPage() {
     } finally {
       setSending(false);
     }
-  }, [composer, devices, refreshCurrent, scrollToBottomNow, t]);
+  }, [composer, resolveCardTarget, refreshCurrent, scrollToBottomNow, t]);
 
   const openNewSms = useCallback(() => {
     setNewSmsDevice(deviceRef.current !== "all" ? deviceRef.current : devices[0]?.id || "");
@@ -482,13 +516,23 @@ export default function SmsPage() {
 
   const sendNewSms = useCallback(
     async (payload: NewSmsPayload) => {
-      if (!payload.deviceId || !payload.phone || !payload.message) {
+      if (!payload.iccid || !payload.phone || !payload.message) {
         message.warning(t("请填写完整信息"));
+        return;
+      }
+      const target = resolveCardTarget(payload.iccid);
+      if (!target.card || target.card.status !== "active" || !target.deviceId) {
+        message.warning(t("请选择当前启用的卡片"));
         return;
       }
       setSending(true);
       try {
-        const res = await sendSms({ deviceId: payload.deviceId, phone: payload.phone, message: payload.message });
+        const res = await sendSms({
+          deviceId: target.deviceId,
+          iccid: target.iccid,
+          phone: payload.phone,
+          message: payload.message,
+        });
         showSmsSendOutcome(res);
         setNewSmsOpen(false);
         window.setTimeout(() => {
@@ -500,7 +544,7 @@ export default function SmsPage() {
         setSending(false);
       }
     },
-    [refreshCurrent, t],
+    [resolveCardTarget, refreshCurrent, t],
   );
 
   const deleteMessageAction = useCallback(
@@ -540,10 +584,14 @@ export default function SmsPage() {
       if (!ok) return;
       setDeletingThreadKey(t.key);
       try {
-        const q: DeleteThreadQuery =
-          deviceRef.current !== "all"
-						? { deviceId: deviceRef.current, iccid: t.iccid || undefined, imsi: t.iccid ? undefined : t.imsi, peer: t.peer }
-						: { deviceId: "all", modemImei: t.modemImei, iccid: t.iccid || undefined, imsi: t.iccid ? undefined : t.imsi, peer: t.peer };
+        const target = resolveCardTarget(deviceRef.current, t.iccid);
+        const q: DeleteThreadQuery = {
+          deviceId: target.deviceId || undefined,
+          modemImei: target.deviceId ? undefined : t.modemImei,
+          iccid: target.iccid || t.iccid || undefined,
+          imsi: target.iccid || t.iccid ? undefined : t.imsi,
+          peer: t.peer,
+        };
         await deleteThread(q);
         message.success(tl("已删除对话"));
         if (keyRef.current === t.key) clearSelection(true);
@@ -554,7 +602,7 @@ export default function SmsPage() {
         setDeletingThreadKey(null);
       }
     },
-    [deletingThreadKey, clearSelection, loadContacts, lang],
+    [deletingThreadKey, clearSelection, loadContacts, lang, resolveCardTarget],
   );
 
   const closeActionSheet = useCallback(() => {
@@ -621,8 +669,8 @@ export default function SmsPage() {
   return (
     <div ref={pageRef} className="sms-page workspace-page flex h-[calc(100vh-168px)] flex-col">
       <PageHeader
-        title={t("短信功能检测")}
-        subtitle={t("通过收发测试验证模组 SMS 收发功能是否正常")}
+        title={t("短信")}
+        subtitle={t("查看、发送和检测 SIM 卡短信")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <RefreshButton loading={contactsLoading} onClick={refreshAll} />
@@ -765,12 +813,12 @@ export default function SmsPage() {
         </div>
       ) : null}
       {exportOpen && (
-        <SmsExportModal devices={devices} defaultDeviceId={selectedDevice} onClose={() => setExportOpen(false)} />
+        <SmsExportModal cards={cards} defaultICCID={selectedDevice} onClose={() => setExportOpen(false)} />
       )}
       <NewSmsModal
         open={newSmsOpen}
-        devices={devices}
-        defaultDeviceId={newSmsDevice}
+        cards={cards}
+        defaultICCID={newSmsDevice}
         sending={sending}
         onClose={() => setNewSmsOpen(false)}
         onSend={sendNewSms}

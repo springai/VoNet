@@ -2,6 +2,7 @@ import { cx } from "../../lib/utils";
 import { CountryFlag } from "../CountryFlag";
 import { EsimProfileRow } from "./EsimProfileRow";
 import type { EsimChipInfo, EsimEid, EsimProfileGroup } from "./types";
+import type { DeviceType } from "../../types";
 import { useI18n } from "../../lib/i18n";
 
 export interface SpaceNotice {
@@ -11,6 +12,7 @@ export interface SpaceNotice {
 
 export interface EsimEuiccGroupProps {
   deviceId: string;
+  hostType?: DeviceType;
   deviceOnline: boolean;
   profilesStale: boolean;
   group: EsimProfileGroup;
@@ -22,15 +24,12 @@ export interface EsimEuiccGroupProps {
   renameValue: string;
   switchingIccid: string | null;
   deletingIccid: string | null;
-  policyIccid: string | null;
   onRenameValueChange: (v: string) => void;
   onSwitch: (iccid: string, state: number | undefined, aidHex?: string) => void;
   onStartRename: (iccid: string, name?: string) => void;
   onSubmitRename: (iccid: string, aidHex?: string) => void;
   onCancelRename: () => void;
-  onTogglePolicy: (iccid: string) => void;
   onDelete: (iccid: string, name: string | undefined, aidHex?: string) => void;
-  onPolicyChanged: () => void;
 }
 
 function normAid(aid?: string): string {
@@ -140,6 +139,8 @@ export function EsimEuiccGroup(props: EsimEuiccGroupProps) {
             <EsimProfileRow
               key={p.iccid}
               deviceId={props.deviceId}
+              hostType={props.hostType}
+              eid={group.eid}
               deviceOnline={props.deviceOnline}
               profilesStale={props.profilesStale}
               aidHex={group.aidHex}
@@ -149,15 +150,12 @@ export function EsimEuiccGroup(props: EsimEuiccGroupProps) {
               renameValue={props.renameValue}
               switching={props.switchingIccid === p.iccid}
               deleting={props.deletingIccid === p.iccid}
-              policyOpen={props.policyIccid === p.iccid}
               onRenameValueChange={props.onRenameValueChange}
               onSwitch={() => props.onSwitch(p.iccid, p.state, group.aidHex)}
               onStartRename={() => props.onStartRename(p.iccid, p.name)}
               onSubmitRename={() => props.onSubmitRename(p.iccid, group.aidHex)}
               onCancelRename={props.onCancelRename}
-              onTogglePolicy={() => props.onTogglePolicy(p.iccid)}
               onDelete={() => props.onDelete(p.iccid, p.name, group.aidHex)}
-              onPolicyChanged={props.onPolicyChanged}
             />
           ))}
         </div>

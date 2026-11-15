@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-// DeviceProxyBindingGroup is one manual proxy policy for a device and ICCID.
+// DeviceProxyBindingGroup is one manual proxy policy for an ICCID. DeviceID is
+// optional so a route can be prepared before the card is bound to a device.
 type DeviceProxyBindingGroup struct {
 	ID          string
 	DeviceID    string
@@ -45,16 +46,14 @@ type DeviceProxyBindingGroupWithRoutes struct {
 }
 
 func ensureProxyRouteSchema(ctx context.Context, db *sql.DB) error {
-	statements := []string{
+	createStatements := []string{
 		`CREATE TABLE IF NOT EXISTS device_proxy_binding_groups (
 			id TEXT PRIMARY KEY,
-			device_id TEXT NOT NULL,
-			iccid TEXT NOT NULL,
+			device_id TEXT NOT NULL DEFAULT '',
+			iccid TEXT NOT NULL UNIQUE,
 			profile_name TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL,
-			UNIQUE(device_id, iccid),
-			FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+			updated_at INTEGER NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS device_proxy_binding_routes (
 			id TEXT PRIMARY KEY,
@@ -81,19 +80,46 @@ func ensureProxyRouteSchema(ctx context.Context, db *sql.DB) error {
 			FOREIGN KEY (current_route_id) REFERENCES device_proxy_binding_routes(id) ON DELETE SET NULL,
 			FOREIGN KEY (sticky_route_id) REFERENCES device_proxy_binding_routes(id) ON DELETE SET NULL
 		)`,
+		`CREATE INDEX IF NOT EXISTS device_proxy_binding_routes_proxy_idx
+			ON device_proxy_binding_routes(upstream_proxy_id)`,
+	}
+	for _, statement := range createStatements {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("apply proxy route schema: %w", err)
+		}
+	}
+	legacyNeedsRebuild, err := legacyProxyBindingSchemaNeedsRebuild(ctx, db)
+	if err != nil {
+		return err
+	}
+	if legacyNeedsRebuild {
+		if err := rebuildLegacyProxyBindingSchema(ctx, db); err != nil {
+			return err
+		}
+	}
+	needsRebuild, err := proxyBindingGroupSchemaNeedsRebuild(ctx, db)
+	if err != nil {
+		return err
+	}
+	if needsRebuild {
+		if err := rebuildProxyBindingGroupSchema(ctx, db); err != nil {
+			return err
+		}
+	}
+	migrationStatements := []string{
 		`INSERT OR IGNORE INTO device_proxy_binding_groups (
 			id, device_id, iccid, profile_name, created_at, updated_at
 		)
-		SELECT 'binding:' || device_id || ':' || iccid, device_id, iccid, profile_name, created_at, updated_at
+		SELECT 'binding:' || iccid, COALESCE(device_id, ''), iccid, profile_name, created_at, updated_at
 		FROM device_proxy_bindings`,
 		`INSERT OR IGNORE INTO device_proxy_binding_routes (
 			id, binding_group_id, upstream_proxy_id, priority, created_at, updated_at
 		)
-		SELECT 'route:' || device_id || ':' || iccid || ':' || upstream_proxy_id,
-			'binding:' || device_id || ':' || iccid, upstream_proxy_id, 0, created_at, updated_at
+		SELECT 'route:binding:' || iccid || ':' || upstream_proxy_id,
+			'binding:' || iccid, upstream_proxy_id, 0, created_at, updated_at
 		FROM device_proxy_bindings`,
 	}
-	for _, statement := range statements {
+	for _, statement := range migrationStatements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("apply proxy route schema: %w", err)
 		}
@@ -101,8 +127,183 @@ func ensureProxyRouteSchema(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func proxyBindingGroupID(deviceID, iccid string) string {
-	return "binding:" + strings.TrimSpace(deviceID) + ":" + strings.TrimSpace(iccid)
+func proxyBindingGroupSchemaNeedsRebuild(ctx context.Context, db *sql.DB) (bool, error) {
+	var ddl string
+	err := db.QueryRowContext(ctx, `
+		SELECT COALESCE(sql, '') FROM sqlite_master
+		WHERE type = 'table' AND name = 'device_proxy_binding_groups'
+	`).Scan(&ddl)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read proxy binding group schema: %w", err)
+	}
+	normalized := strings.Join(strings.Fields(strings.ToLower(ddl)), " ")
+	return strings.Contains(normalized, "unique(device_id, iccid)") ||
+		strings.Contains(normalized, "foreign key (device_id) references devices"), nil
+}
+
+func legacyProxyBindingSchemaNeedsRebuild(ctx context.Context, db *sql.DB) (bool, error) {
+	var ddl string
+	err := db.QueryRowContext(ctx, `
+		SELECT COALESCE(sql, '') FROM sqlite_master
+		WHERE type = 'table' AND name = 'device_proxy_bindings'
+	`).Scan(&ddl)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read legacy proxy binding schema: %w", err)
+	}
+	normalized := strings.Join(strings.Fields(strings.ToLower(ddl)), " ")
+	return strings.Contains(normalized, "foreign key (device_id) references devices"), nil
+}
+
+func rebuildLegacyProxyBindingSchema(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("disable foreign keys for legacy proxy binding rebuild: %w", err)
+	}
+	defer func() {
+		_, _ = db.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	}()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin legacy proxy binding rebuild: %w", err)
+	}
+	defer tx.Rollback()
+	for _, statement := range []string{
+		`CREATE TABLE device_proxy_bindings_v2 (
+			iccid TEXT PRIMARY KEY,
+			device_id TEXT NOT NULL DEFAULT '',
+			profile_name TEXT NOT NULL DEFAULT '',
+			upstream_proxy_id TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			FOREIGN KEY (upstream_proxy_id)
+				REFERENCES upstream_proxies(id) ON DELETE CASCADE
+		)`,
+		`INSERT INTO device_proxy_bindings_v2 (
+			iccid, device_id, profile_name, upstream_proxy_id, created_at, updated_at
+		)
+		SELECT iccid, COALESCE(device_id, ''), profile_name, upstream_proxy_id,
+			created_at, updated_at
+		FROM device_proxy_bindings`,
+		`DROP TABLE device_proxy_bindings`,
+		`ALTER TABLE device_proxy_bindings_v2 RENAME TO device_proxy_bindings`,
+		`CREATE INDEX IF NOT EXISTS device_proxy_bindings_proxy_idx
+			ON device_proxy_bindings(upstream_proxy_id)`,
+		`CREATE INDEX IF NOT EXISTS device_proxy_bindings_device_idx
+			ON device_proxy_bindings(device_id, iccid)`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("rebuild legacy proxy binding schema: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit legacy proxy binding rebuild: %w", err)
+	}
+	return nil
+}
+
+func rebuildProxyBindingGroupSchema(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("disable foreign keys for proxy binding rebuild: %w", err)
+	}
+	defer func() {
+		_, _ = db.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	}()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin proxy binding group rebuild: %w", err)
+	}
+	defer tx.Rollback()
+	for _, statement := range []string{
+		`CREATE TABLE device_proxy_binding_groups_v2 (
+			id TEXT PRIMARY KEY,
+			device_id TEXT NOT NULL DEFAULT '',
+			iccid TEXT NOT NULL UNIQUE,
+			profile_name TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`INSERT INTO device_proxy_binding_groups_v2 (
+			id, device_id, iccid, profile_name, created_at, updated_at
+		)
+		SELECT g.id, COALESCE(g.device_id, ''), g.iccid, g.profile_name,
+			g.created_at, g.updated_at
+		FROM device_proxy_binding_groups g
+		WHERE g.id = (
+			SELECT candidate.id
+			FROM device_proxy_binding_groups candidate
+			WHERE candidate.iccid = g.iccid
+			ORDER BY candidate.updated_at DESC, candidate.id DESC
+			LIMIT 1
+		)`,
+		`CREATE TABLE device_proxy_binding_routes_v2 (
+			id TEXT PRIMARY KEY,
+			binding_group_id TEXT NOT NULL,
+			upstream_proxy_id TEXT NOT NULL,
+			priority INTEGER NOT NULL CHECK (priority >= 0),
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			UNIQUE(binding_group_id, upstream_proxy_id),
+			UNIQUE(binding_group_id, priority),
+			FOREIGN KEY (binding_group_id)
+				REFERENCES device_proxy_binding_groups(id) ON DELETE CASCADE,
+			FOREIGN KEY (upstream_proxy_id)
+				REFERENCES upstream_proxies(id) ON DELETE CASCADE
+		)`,
+		`INSERT INTO device_proxy_binding_routes_v2 (
+			id, binding_group_id, upstream_proxy_id, priority, created_at, updated_at
+		)
+		SELECT r.id, r.binding_group_id, r.upstream_proxy_id, r.priority,
+			r.created_at, r.updated_at
+		FROM device_proxy_binding_routes r
+		JOIN device_proxy_binding_groups_v2 g ON g.id = r.binding_group_id`,
+		`CREATE TABLE device_proxy_route_state_v2 (
+			binding_group_id TEXT PRIMARY KEY,
+			current_route_id TEXT,
+			sticky_route_id TEXT,
+			route_failures INTEGER NOT NULL DEFAULT 0 CHECK (route_failures >= 0),
+			last_success_at INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL,
+			FOREIGN KEY (binding_group_id)
+				REFERENCES device_proxy_binding_groups(id) ON DELETE CASCADE,
+			FOREIGN KEY (current_route_id)
+				REFERENCES device_proxy_binding_routes(id) ON DELETE SET NULL,
+			FOREIGN KEY (sticky_route_id)
+				REFERENCES device_proxy_binding_routes(id) ON DELETE SET NULL
+		)`,
+		`INSERT INTO device_proxy_route_state_v2 (
+			binding_group_id, current_route_id, sticky_route_id,
+			route_failures, last_success_at, updated_at
+		)
+		SELECT s.binding_group_id, s.current_route_id, s.sticky_route_id,
+			s.route_failures, s.last_success_at, s.updated_at
+		FROM device_proxy_route_state s
+		JOIN device_proxy_binding_groups_v2 g ON g.id = s.binding_group_id`,
+		`DROP TABLE device_proxy_route_state`,
+		`DROP TABLE device_proxy_binding_routes`,
+		`DROP TABLE device_proxy_binding_groups`,
+		`ALTER TABLE device_proxy_binding_groups_v2 RENAME TO device_proxy_binding_groups`,
+		`ALTER TABLE device_proxy_binding_routes_v2 RENAME TO device_proxy_binding_routes`,
+		`ALTER TABLE device_proxy_route_state_v2 RENAME TO device_proxy_route_state`,
+		`CREATE INDEX IF NOT EXISTS device_proxy_binding_routes_proxy_idx
+			ON device_proxy_binding_routes(upstream_proxy_id)`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("rebuild proxy binding group schema: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit proxy binding group rebuild: %w", err)
+	}
+	return nil
+}
+
+func proxyBindingGroupID(iccid string) string {
+	return "binding:" + strings.TrimSpace(iccid)
 }
 
 func proxyBindingRouteID(groupID, upstreamID string) string {
@@ -113,10 +314,10 @@ func normalizeProxyBindingGroup(value DeviceProxyBindingGroup) (DeviceProxyBindi
 	value.DeviceID = strings.TrimSpace(value.DeviceID)
 	value.ICCID = strings.TrimSpace(value.ICCID)
 	value.ProfileName = strings.TrimSpace(value.ProfileName)
-	if value.DeviceID == "" || value.ICCID == "" {
-		return DeviceProxyBindingGroup{}, errors.New("proxy binding group requires device ID and ICCID")
+	if value.ICCID == "" {
+		return DeviceProxyBindingGroup{}, errors.New("proxy binding group requires ICCID")
 	}
-	value.ID = proxyBindingGroupID(value.DeviceID, value.ICCID)
+	value.ID = proxyBindingGroupID(value.ICCID)
 	now := time.Now().UTC()
 	if value.CreatedAt.IsZero() {
 		value.CreatedAt = now
@@ -163,12 +364,27 @@ func (s *Store) SaveDeviceProxyBindingGroup(ctx context.Context, value DevicePro
 		return fmt.Errorf("begin proxy binding group save: %w", err)
 	}
 	defer tx.Rollback()
+	var existingID string
+	var existingCreatedAt int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, created_at FROM device_proxy_binding_groups WHERE iccid = ?
+	`, value.ICCID).Scan(&existingID, &existingCreatedAt)
+	switch {
+	case err == nil:
+		value.ID = existingID
+		value.CreatedAt = time.Unix(existingCreatedAt, 0).UTC()
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		return fmt.Errorf("read existing proxy binding group %q: %w", value.ICCID, err)
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO device_proxy_binding_groups (
 			id, device_id, iccid, profile_name, created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
+		ON CONFLICT(iccid) DO UPDATE SET
+			device_id = excluded.device_id,
 			profile_name = excluded.profile_name,
+			created_at = device_proxy_binding_groups.created_at,
 			updated_at = excluded.updated_at
 	`, value.ID, value.DeviceID, value.ICCID, value.ProfileName, value.CreatedAt.Unix(), value.UpdatedAt.Unix()); err != nil {
 		return fmt.Errorf("save proxy binding group: %w", err)
@@ -193,11 +409,11 @@ func (s *Store) SaveDeviceProxyBindingGroup(ctx context.Context, value DevicePro
 	return tx.Commit()
 }
 
-func (s *Store) DeviceProxyBindingGroup(ctx context.Context, deviceID, iccid string) (DeviceProxyBindingGroupWithRoutes, error) {
+func (s *Store) DeviceProxyBindingGroupByICCID(ctx context.Context, iccid string) (DeviceProxyBindingGroupWithRoutes, error) {
 	group, err := scanProxyBindingGroup(s.db.QueryRowContext(ctx, `
 		SELECT id, device_id, iccid, profile_name, created_at, updated_at
-		FROM device_proxy_binding_groups WHERE device_id = ? AND iccid = ?
-	`, strings.TrimSpace(deviceID), strings.TrimSpace(iccid)))
+		FROM device_proxy_binding_groups WHERE iccid = ?
+	`, strings.TrimSpace(iccid)))
 	if err != nil {
 		return DeviceProxyBindingGroupWithRoutes{}, err
 	}
@@ -206,6 +422,12 @@ func (s *Store) DeviceProxyBindingGroup(ctx context.Context, deviceID, iccid str
 		return DeviceProxyBindingGroupWithRoutes{}, err
 	}
 	return DeviceProxyBindingGroupWithRoutes{DeviceProxyBindingGroup: group, Routes: routes}, nil
+}
+
+// DeviceProxyBindingGroup keeps the historical deviceID+ICCID signature while
+// resolving ownership by ICCID alone.
+func (s *Store) DeviceProxyBindingGroup(ctx context.Context, _ string, iccid string) (DeviceProxyBindingGroupWithRoutes, error) {
+	return s.DeviceProxyBindingGroupByICCID(ctx, iccid)
 }
 
 func (s *Store) listDeviceProxyBindingGroupsUnsafe(ctx context.Context, deviceID string) ([]DeviceProxyBindingGroupWithRoutes, error) {
@@ -264,14 +486,18 @@ func (s *Store) ListDeviceProxyBindingRoutes(ctx context.Context, groupID string
 	return values, rows.Err()
 }
 
-func (s *Store) DeleteDeviceProxyBindingGroup(ctx context.Context, deviceID, iccid string) error {
+func (s *Store) DeleteDeviceProxyBindingGroupByICCID(ctx context.Context, iccid string) error {
 	result, err := s.db.ExecContext(ctx, `
-		DELETE FROM device_proxy_binding_groups WHERE device_id = ? AND iccid = ?
-	`, strings.TrimSpace(deviceID), strings.TrimSpace(iccid))
+		DELETE FROM device_proxy_binding_groups WHERE iccid = ?
+	`, strings.TrimSpace(iccid))
 	if err != nil {
 		return fmt.Errorf("delete proxy binding group: %w", err)
 	}
 	return requireAffected(result)
+}
+
+func (s *Store) DeleteDeviceProxyBindingGroup(ctx context.Context, _ string, iccid string) error {
+	return s.DeleteDeviceProxyBindingGroupByICCID(ctx, iccid)
 }
 
 func (s *Store) SaveDeviceProxyRouteState(ctx context.Context, value DeviceProxyRouteState) error {

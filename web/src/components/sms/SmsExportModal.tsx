@@ -1,20 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowDownloadRegular } from "@fluentui/react-icons";
 import { api, apiMessage } from "../../api";
-import type { DeviceListItem, DevicesResponse } from "../../types";
+import type { SimCard } from "../../types";
 import { tf, useI18n } from "../../lib/i18n";
 import { Button, Input, Modal, Select, message } from "../ui";
 import { buildSMSExportQuery, readSMSExportDownload, type SMSExportFormat } from "./smsExport";
+import { activeCardDevice } from "../cards/cardApi";
 
 interface SmsExportModalProps {
-  devices: DeviceListItem[];
-  defaultDeviceId: string;
+  cards: SimCard[];
+  defaultICCID: string;
   onClose: () => void;
 }
 
-export function SmsExportModal({ devices, defaultDeviceId, onClose }: SmsExportModalProps) {
+export function SmsExportModal({ cards, defaultICCID, onClose }: SmsExportModalProps) {
   const { t } = useI18n();
-  const [deviceId, setDeviceId] = useState(defaultDeviceId || "all");
+  const [iccid, setICCID] = useState(defaultICCID || "all");
   const [format, setFormat] = useState<SMSExportFormat>("json");
   const [timeRange, setTimeRange] = useState<"all" | "range">("all");
   const [startDate, setStartDate] = useState("");
@@ -22,29 +23,17 @@ export function SmsExportModal({ devices, defaultDeviceId, onClose }: SmsExportM
   const [busy, setBusy] = useState(false);
   const request = useRef<AbortController | null>(null);
 
-  const [exportDevices, setExportDevices] = useState(devices);
-
   useEffect(() => () => { request.current?.abort(); }, []);
-  useEffect(() => {
-    const controller = new AbortController();
-    // The SMS page lists running devices for sending. Archives must also
-    // allow selecting configured devices that are offline or stopped.
-    void api<DevicesResponse>("/devices", { signal: controller.signal }).then((response) => {
-      if (!controller.signal.aborted) setExportDevices(response.devices || []);
-    }).catch(() => {
-      if (!controller.signal.aborted) message.warning(t("设备列表加载失败，仍可按当前选择导出。"));
-    });
-    return () => controller.abort();
-  }, []);
 
   const deviceOptions = [
-    { value: "all", label: t("全部设备") },
-    ...exportDevices.map((device) => ({ value: device.id, label: device.name ? `${device.name} (${device.id})` : device.id })),
+    { value: "all", label: t("全部卡片") },
+    ...cards.map((card) => ({
+      value: card.iccid,
+      label: `${card.displayName || card.carrier || card.iccid}${card.status === "active" ? "" : "（离线）"}`,
+    })),
   ];
-  // Retain an explicit selection if a device disappears during polling. Never
-  // silently turn a specific-device export into an all-device export.
-  if (deviceId !== "all" && !exportDevices.some((device) => device.id === deviceId)) {
-    deviceOptions.push({ value: deviceId, label: deviceId });
+  if (iccid !== "all" && !cards.some((card) => card.iccid === iccid)) {
+    deviceOptions.push({ value: iccid, label: iccid });
   }
 
   function close() {
@@ -54,9 +43,22 @@ export function SmsExportModal({ devices, defaultDeviceId, onClose }: SmsExportM
 
   async function download() {
     if (request.current) return;
+    const selectedCard = iccid === "all" ? null : cards.find((card) => card.iccid === iccid) || null;
+    const selectedDeviceId = selectedCard ? activeCardDevice(selectedCard) : "";
+    if (selectedCard && (!selectedDeviceId || selectedCard.status !== "active")) {
+      message.warning(t("只能导出当前启用卡片的短信"));
+      return;
+    }
     let query: URLSearchParams;
     try {
-      query = buildSMSExportQuery({ deviceId, format, timeRange, startDate, endDate });
+      query = buildSMSExportQuery({
+        deviceId: selectedDeviceId || "all",
+        iccid: selectedCard?.iccid,
+        format,
+        timeRange,
+        startDate,
+        endDate,
+      });
     } catch (e) {
       message.error(t(apiMessage(e)));
       return;
@@ -108,8 +110,8 @@ export function SmsExportModal({ devices, defaultDeviceId, onClose }: SmsExportM
     >
       <div className="mt-2 space-y-4">
         <div>
-          <div className="mb-1.5 text-sm font-medium text-gray-700 dark:text-gray-300">{t("导出设备")}</div>
-          <Select value={deviceId} disabled={busy} options={deviceOptions} onChange={(value) => { setDeviceId(value); }} />
+          <div className="mb-1.5 text-sm font-medium text-gray-700 dark:text-gray-300">{t("导出卡片")}</div>
+          <Select value={iccid} disabled={busy} options={deviceOptions} onChange={(value) => { setICCID(value); }} />
         </div>
         <div>
           <div className="mb-1.5 text-sm font-medium text-gray-700 dark:text-gray-300">{t("时间范围")}</div>

@@ -2,6 +2,7 @@ export type SMSExportFormat = "json" | "html";
 
 export interface SMSExportOptions {
   deviceId: string;
+  iccid?: string;
   format: SMSExportFormat;
   timeRange: "all" | "range";
   startDate: string;

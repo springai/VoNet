@@ -32,6 +32,7 @@ type automationSwitchDevices struct {
 	flight      bool
 	switched    bool
 	switchICCID string
+	switchAID   string
 	server      *Server
 }
 
@@ -48,8 +49,24 @@ func (d *automationSwitchDevices) ESIMSwitchProfile(_ context.Context, _ string,
 		d.server.smsSyncMu.Unlock()
 		return errors.New("SIM switch did not serialize with modem SMS synchronization")
 	}
-	d.switched, d.switchICCID = true, iccid
+	d.switched, d.switchICCID, d.switchAID = true, iccid, aid
 	return nil
+}
+
+func (d *automationSwitchDevices) Refresh(context.Context, string) (device.Snapshot, error) {
+	return device.Snapshot{Responsive: true, SIMReady: true, ICCID: d.switchICCID}, nil
+}
+
+func (d *automationSwitchDevices) ESIMListProfiles(context.Context, string) (device.EsimInfo, error) {
+	return device.EsimInfo{Profiles: []device.EsimProfile{{
+		ICCID: d.switchICCID, AID: d.switchAID, State: 1,
+	}}}, nil
+}
+
+func (d *automationSwitchDevices) ESIMInventory(context.Context, string) ([]device.EsimInventoryEntry, error) {
+	return []device.EsimInventoryEntry{{Info: device.EsimInfo{Profiles: []device.EsimProfile{{
+		ICCID: d.switchICCID, AID: d.switchAID, State: 1,
+	}}}}}, nil
 }
 
 func TestAutomationESIMSwitchCoordinatesLifecycleAndRestoresTargetPolicy(t *testing.T) {
@@ -64,6 +81,9 @@ func TestAutomationESIMSwitchCoordinatesLifecycleAndRestoresTargetPolicy(t *test
 			t.Fatal(err)
 		}
 		const target = "8900000000000000002"
+		if err := db.UpsertSimCard(ctx, store.SimCard{ICCID: target}); err != nil {
+			t.Fatal(err)
+		}
 		if err := db.UpsertCardPolicy(ctx, store.CardPolicy{
 			ICCID: target, VoWiFiEnabled: targetWiFi, AirplaneEnabled: true, APN: "target.apn",
 		}); err != nil {
