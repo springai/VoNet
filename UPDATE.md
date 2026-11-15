@@ -1865,3 +1865,33 @@ ike: IKE_AUTH EAP round 1: ike: responder reported fatal notification 10500
 - 同步 lifecycle 测试时只合入等待 worker 空闲的测试修复，不改变当前 VoNet 的 card-policy desired-state 恢复逻辑。
 
 ---
+
+### 63. Auth 恢复冒烟 schema 校验修复与 Actions 策略调整
+
+**问题背景**:
+
+- 当前数据库迁移版本已经是 schema 39，但 `scripts/ci/auth_restore_smoke.py` 仍把完整迁移数据库固定断言为 schema 35。
+- GitHub Actions 的 Docker smoke 在 `bootstrap-admin` 正常完成后，于 `assert-full` 阶段报错 `auth restore smoke: user_version is not 35`；linux/amd64 和 linux/arm64 使用同一错误提前退出。
+- `automatic release threshold` 和 `Sync Apple Carrier Bundles` 不再需要自动运行；继续开启会触发额外发布流程或周期性上游同步。
+
+**主要修改内容**:
+
+- 将 auth restore smoke 的完整 schema 期望值从 35 更新为当前 `internal/store` 的 schema 39。
+- schema 34 恢复快照、WAL 边界、`auth-cleanup --no-migrate` 和恢复后凭据清理仍固定校验 schema 34，没有放宽恢复边界。
+- `assert-migrated` 改为按当前 `SCHEMA_VERSION` 校验恢复迁移结果，避免错误文案继续写死 schema 35。
+- 未修改运行时数据库 migration、业务表结构或恢复命令语义。
+- 已在 GitHub Actions 中手动停用 `automatic release threshold` 与 `Sync Apple Carrier Bundles`，并取消仍在执行的 automatic release run；两个工作流文件保留，后续需要时可在 Actions 中重新启用。
+
+**验证结果**:
+
+- `python -m py_compile scripts/ci/auth_restore_smoke.py` 通过。
+- 本地完整复现 auth restore smoke 通过：生成完整数据库、制作 schema 34 WAL/SHM 快照、验证恢复数据、执行 bootstrap migration、执行 `auth-cleanup --no-migrate` 并验证清理结果。
+- `go test ./internal/store ./cmd/vonet` 通过。
+- 提交 `fc06c60` 的 GitHub Actions Docker 验证通过；`linux/amd64` 与 `linux/arm64` 的完整 migration、schema 34 restore cleanup、runtime/QMI/smart-card smoke 均成功。
+- Docker `build-and-push` 多架构镜像构建和推送成功；两次独立运行 `43745058643`、`43745080313` 均为 success。
+
+**兼容与后续约束**:
+
+- schema 34 恢复测试仍必须保持真实 34 边界，不应改成 `>= 34` 或只检查若干字段。
+- 后续若 `internal/store/store.go` 的 `schemaVersion` 再次提升，应同步更新 `scripts/ci/auth_restore_smoke.py` 的 `SCHEMA_VERSION`，否则 Docker smoke 会再次误报。
+- GitHub Actions 的 disabled 状态属于仓库运行配置，不会出现在代码 diff 中；同步工作流文件时不要误以为功能已经自动恢复。
