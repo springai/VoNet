@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 
-SCHEMA_VERSION = 35
+SCHEMA_VERSION = 39
 RESTORED_SCHEMA_VERSION = 34
 CREATED_AT = 1_700_000_000
 EXPIRES_AT = 4_102_444_800
@@ -222,7 +222,7 @@ def prepare_fixture(source: Path, output: Path) -> None:
         try:
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA journal_mode = WAL")
-            require("secure_cookies" in sqlite_columns(connection, "sessions"), "source is not schema 35")
+            require("secure_cookies" in sqlite_columns(connection, "sessions"), "source is not current schema")
             connection.execute("ALTER TABLE sessions DROP COLUMN secure_cookies")
             connection.execute(
                 f"PRAGMA user_version = {RESTORED_SCHEMA_VERSION}"
@@ -438,7 +438,10 @@ def assert_migrated(database: Path) -> None:
             connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok",
             "migrated database failed integrity_check",
         )
-        require(sqlite_version(connection) == SCHEMA_VERSION, "restore did not migrate to schema 35")
+        require(
+            sqlite_version(connection) == SCHEMA_VERSION,
+            f"restore did not migrate to schema {SCHEMA_VERSION}",
+        )
         require(
             "secure_cookies" in sqlite_columns(connection, "sessions"),
             "restore migration did not add sessions.secure_cookies",
