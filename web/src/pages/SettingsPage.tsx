@@ -33,7 +33,6 @@ import { PushplusTab, TelegramTab } from "../components/settings/BotTabs";
 import { BarkTab, EmailTab, LarkTab, WebhookTab, WecomTab, MeowTab, QQBotTab } from "../components/settings/PushTabs";
 import { PluginsCard } from "../components/settings/PluginsCard";
 import { HTTPSCard } from "../components/settings/HTTPSCard";
-import { DeviceQuotaCard } from "../components/settings/DeviceQuotaCard";
 import { SMSRateLimitCard } from "../components/settings/SMSRateLimitCard";
 import { SMSAutoClearCard } from "../components/settings/SMSAutoClearCard";
 
@@ -126,10 +125,8 @@ export default function SettingsPage() {
   const [httpsSettings, setHTTPSSettings] = useState<HTTPSSettings | null>(null);
   const [loadingHTTPS, setLoadingHTTPS] = useState(false);
   const [systemLimits, setSystemLimits] = useState<SystemLimitsSettings | null>(null);
-  const [deviceLimit, setDeviceLimit] = useState(5);
   const [smsHourlyLimit, setSMSHourlyLimit] = useState(10);
   const [loadingLimits, setLoadingLimits] = useState(false);
-  const [savingLimits, setSavingLimits] = useState(false);
   const [savingSMSLimit, setSavingSMSLimit] = useState(false);
   const [apiTokens, setApiTokens] = useState<ApiTokenListItem[]>([]);
   const [tokensError, setTokensError] = useState(false);
@@ -266,10 +263,9 @@ export default function SettingsPage() {
     try {
       const data = await api<SystemLimitsSettings>("/settings/limits");
       setSystemLimits(data);
-      setDeviceLimit(data.deviceLimit);
       setSMSHourlyLimit(data.smsHourlyLimit);
     } catch (error) {
-      message.error(apiMessage(error) || (lang === "zh" ? "设备配额配置加载失败" : "Failed to load device quota settings"));
+      message.error(apiMessage(error) || (lang === "zh" ? "系统限制配置加载失败" : "Failed to load system limit settings"));
     } finally {
       setLoadingLimits(false);
     }
@@ -283,25 +279,6 @@ export default function SettingsPage() {
     void fetchHTTPS();
     void fetchSystemLimits();
   }, [fetchSystemInfo, fetchSecurity, fetchSMSSettings, fetchApiTokens, fetchHTTPS, fetchSystemLimits]);
-
-  const onSaveDeviceLimit = useCallback(async () => {
-    const maximum = systemLimits?.maxDeviceLimit ?? 999;
-    if (!Number.isInteger(deviceLimit) || deviceLimit < 1 || deviceLimit > maximum) {
-      message.error(lang === "zh" ? `设备配额必须是 1 到 ${maximum} 的整数` : `Device quota must be an integer between 1 and ${maximum}`);
-      return;
-    }
-    setSavingLimits(true);
-    try {
-      const data = await api<SystemLimitsSettings>("/settings/limits", { method: "PUT", body: { deviceLimit } });
-      setSystemLimits(data);
-      setDeviceLimit(data.deviceLimit);
-      message.success(lang === "zh" ? "设备配额已保存" : "Device quota saved");
-    } catch (error) {
-      message.error(apiMessage(error) || (lang === "zh" ? "设备配额保存失败" : "Failed to save device quota"));
-    } finally {
-      setSavingLimits(false);
-    }
-  }, [systemLimits, deviceLimit, lang]);
 
   const onSaveSMSHourlyLimit = useCallback(async () => {
     if (!Number.isInteger(smsHourlyLimit) || smsHourlyLimit < 1) {
@@ -764,14 +741,6 @@ export default function SettingsPage() {
           value={httpsSettings}
           loading={loadingHTTPS}
           onUploaded={setHTTPSSettings}
-        />
-        <DeviceQuotaCard
-          value={systemLimits}
-          limit={deviceLimit}
-          loading={loadingLimits}
-          saving={savingLimits}
-          onLimitChange={setDeviceLimit}
-          onSave={onSaveDeviceLimit}
         />
         <SMSRateLimitCard
           limit={smsHourlyLimit}

@@ -1959,3 +1959,21 @@ ike: IKE_AUTH EAP round 1: ike: responder reported fatal notification 10500
 - `npm test` 84/84 通过，包括代理秘密默认全隐藏的敏感信息测试。
 - `go test ./internal/server ./internal/store` 通过，包括传入设备 ID 时强制生成 ICCID-only 绑定的回归测试。
 - `npm run build` 与 TypeScript 检查通过。
+
+---
+
+### 66. 移除设备数量限制
+
+**主要修改内容**:
+
+- 删除添加设备时的数量上限校验，已有 5 台设备后仍可继续添加，不再返回 `device_limit_reached`。
+- `/api/devices` 不再返回 `device_limit`，系统限制接口也不再读取或保存设备配额。
+- 删除系统设置中的设备配额卡片，以及设备列表中的 `当前数量 / 配额` 标签。
+- 添加设备按钮不再因数量被禁用，设备管理页面永久不限制设备数量。
+- 旧数据库中的 `developer.device_limit` 配置会被忽略；短信发送速率限制继续独立保留。
+
+**验证结果**:
+
+- 新增回归测试：数据库已有 5 台设备时可成功创建第 6 台，且设备响应不包含 `device_limit`。
+- `go test ./internal/developer ./internal/server ./internal/pcsc` 通过。
+- `npm test` 84/84 通过，`npm run build` 与 TypeScript 检查通过。

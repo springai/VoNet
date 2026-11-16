@@ -19,9 +19,6 @@ func TestResetExperimentalRestoresDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	if err := SetDeviceLimit(ctx, database, 8); err != nil {
-		t.Fatal(err)
-	}
 	if err := SetSMSHourlyLimit(ctx, database, 18); err != nil {
 		t.Fatal(err)
 	}
@@ -43,9 +40,6 @@ func TestResetExperimentalRestoresDefaults(t *testing.T) {
 	}
 	if err := ResetExperimental(ctx, database); err != nil {
 		t.Fatal(err)
-	}
-	if limit := DeviceLimit(ctx, database, true); limit != DefaultDeviceLimit {
-		t.Fatalf("device limit = %d, want %d", limit, DefaultDeviceLimit)
 	}
 	if limit := SMSHourlyLimit(ctx, database); limit != DefaultSMSHourlyLimit {
 		t.Fatalf("SMS hourly limit = %d, want %d", limit, DefaultSMSHourlyLimit)
@@ -70,18 +64,6 @@ func TestResetExperimentalRestoresDefaults(t *testing.T) {
 	}
 	if _, err := database.AppSetting(ctx, exportproxy.SettingKey); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("export proxy configurations were not deleted: %v", err)
-	}
-}
-
-func TestSetDeviceLimitValidatesRange(t *testing.T) {
-	ctx := context.Background()
-	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "vonet.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-	if SetDeviceLimit(ctx, database, 0) == nil || SetDeviceLimit(ctx, database, MaxDeviceLimit+1) == nil {
-		t.Fatal("out-of-range device limit was accepted")
 	}
 }
 
@@ -124,22 +106,6 @@ func TestSetSMSHourlyLimitRequiresPositiveInteger(t *testing.T) {
 	}
 	if got := SMSHourlyLimit(ctx, database); got != 21 {
 		t.Fatalf("SMS hourly limit = %d, want 21", got)
-	}
-}
-
-func TestStoredDeviceLimitAboveHardMaximumIsClamped(t *testing.T) {
-	ctx := context.Background()
-	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "vonet.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-	value, _ := json.Marshal(map[string]int{"limit": MaxDeviceLimit + 1})
-	if err := database.UpsertAppSetting(ctx, store.AppSetting{Key: DeviceLimitSettingKey, Value: value}); err != nil {
-		t.Fatal(err)
-	}
-	if got := DeviceLimit(ctx, database, true); got != MaxDeviceLimit {
-		t.Fatalf("device limit = %d, want %d", got, MaxDeviceLimit)
 	}
 }
 

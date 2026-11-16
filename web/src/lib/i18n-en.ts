@@ -1322,8 +1322,6 @@ export const EN_DICT: Record<string, string> = {
   添加设备: "Add Device",
   重新扫描: "Rescan",
   请选择左侧设备查看详情: "Select a device on the left to view details",
-  "设备数量已达上限，无法继续添加": "Device limit reached; cannot add more",
-  配额: "Quota",
   "暂无设备，点击右上角“添加设备”开始接管": 'No devices yet. Click "Add Device" in the top-right to start adopting',
   按周期统计该设备的上下行流量: "Uplink/downlink traffic for this device by period",
   固件: "Firmware",

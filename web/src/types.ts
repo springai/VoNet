@@ -179,7 +179,6 @@ export interface DeviceListItem {
 }
 
 export interface DevicesResponse {
-  deviceLimit: number;
   devices: DeviceListItem[];
 }
 
@@ -653,9 +652,6 @@ export interface HTTPSSettings {
 }
 
 export interface SystemLimitsSettings {
-  deviceLimit: number;
-  defaultDeviceLimit: number;
-  maxDeviceLimit: number;
   smsHourlyLimit: number;
   defaultSmsHourlyLimit: number;
   autoClearModemStorage?: boolean;

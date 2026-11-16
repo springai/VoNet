@@ -104,7 +104,7 @@ func mergePCSCAndUSBReaders(readers, physical []Reader) []Reader {
 // USB SIM-reader discovery. VMware/Ubuntu commonly installs four readers named
 // "Virtual PCD 00 00" through "00 03" even though no USB reader exists. They
 // have only a pcsc: fallback path and must not become managed hardware or
-// consume the device quota. A real USB CCID reader always has a sysfs USB path
+// appear in the managed device list. A real USB CCID reader always has a sysfs USB path
 // after enrichment and is therefore retained even if it has an unusual name.
 func filterVirtualPCDReaders(readers []Reader) []Reader {
 	filtered := readers[:0]

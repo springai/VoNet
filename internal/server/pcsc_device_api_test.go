@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -96,6 +97,62 @@ func TestPCSCDeviceCreateUsesTransactionalLease(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"pcsc_imei":"`+fixedIMEI+`"`) {
 		t.Fatalf("create response lacks lease: %s", recorder.Body.String())
+	}
+}
+
+func TestDeviceCreationHasNoCountLimit(t *testing.T) {
+	ctx := context.Background()
+	database, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	for index := 1; index <= 5; index++ {
+		id := fmt.Sprintf("existing-%d", index)
+		if err := database.UpsertDevice(ctx, store.Device{ID: id, Name: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entry := pcscServerTestEntry("SER-UNLIMITED")
+	controller := &discoverySnapshotController{
+		fakeDeviceController: fakeDeviceController{entry: entry},
+		entries:              []device.Device{entry},
+	}
+	server := &Server{
+		store: database, devices: controller,
+		logger: regionTestLogger(), maxRequestBodyBytes: 64 << 10,
+	}
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
+	listResponse := httptest.NewRecorder()
+	if !server.handleDevices(listResponse, listRequest) {
+		t.Fatal("handleDevices GET returned false")
+	}
+	if strings.Contains(listResponse.Body.String(), `"device_limit"`) {
+		t.Fatalf("device response exposes a count limit: %s", listResponse.Body.String())
+	}
+
+	request := pcscServerTestRequest(t, map[string]any{
+		"id":              "sixth-device",
+		"name":            "Sixth device",
+		"device_type":     "usb_sim_reader",
+		"control_device":  "SER-UNLIMITED",
+		"usb_path":        "usb-SER-UNLIMITED",
+		"device_backend":  "pcsc",
+		"esim_transport":  "pcsc",
+		"pcsc_imei_mode":  "random",
+		"network_enabled": false,
+		"sms_enabled":     true,
+		"vowifi_enabled":  true,
+	})
+	recorder := httptest.NewRecorder()
+	if !server.handleDevices(recorder, request) {
+		t.Fatal("handleDevices POST returned false")
+	}
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("sixth device status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if _, err := database.Device(ctx, "Reader-SER-UNLIMITED"); err != nil {
+		t.Fatalf("sixth device was not created: %v", err)
 	}
 }
 
