@@ -85,7 +85,7 @@ func (s *Server) handleProxyBindingGroups(w http.ResponseWriter, r *http.Request
 				s.writeStoreError(w, err)
 				return
 			}
-			reconnected, reconnectErr := s.requestProxyBindingRouteChange(group.DeviceID, group.ICCID)
+			reconnected, reconnectErr := s.requestProxyBindingRouteChange(group.ICCID)
 			writeJSON(w, http.StatusOK, map[string]any{"data": s.proxyBindingReconnectMeta(map[string]any{
 				"device_id":    group.DeviceID,
 				"iccid":        group.ICCID,
@@ -98,7 +98,7 @@ func (s *Server) handleProxyBindingGroups(w http.ResponseWriter, r *http.Request
 			s.writeStoreError(w, err)
 			return
 		}
-		reconnected, reconnectErr := s.requestProxyBindingRouteChange(group.DeviceID, group.ICCID)
+		reconnected, reconnectErr := s.requestProxyBindingRouteChange(group.ICCID)
 		saved, err := s.store.DeviceProxyBindingGroup(r.Context(), group.DeviceID, group.ICCID)
 		if err != nil {
 			s.writeStoreError(w, err)
@@ -130,7 +130,7 @@ func (s *Server) handleProxyBindingGroup(w http.ResponseWriter, r *http.Request,
 			s.writeStoreError(w, err)
 			return
 		}
-		reconnected, reconnectErr := s.requestProxyBindingRouteChange(value.DeviceID, value.ICCID)
+		reconnected, reconnectErr := s.requestProxyBindingRouteChange(value.ICCID)
 		writeJSON(w, http.StatusOK, map[string]any{"data": s.proxyBindingReconnectMeta(map[string]any{"deleted": true}, reconnected, reconnectErr)})
 	default:
 		w.Header().Set("Allow", "GET, DELETE")
@@ -166,7 +166,7 @@ func (s *Server) handleProxyBindingGroupRoutes(w http.ResponseWriter, r *http.Re
 			s.writeStoreError(w, err)
 			return
 		}
-		reconnected, reconnectErr := s.requestProxyBindingRouteChange(group.DeviceID, group.ICCID)
+		reconnected, reconnectErr := s.requestProxyBindingRouteChange(group.ICCID)
 		group.Routes = nil
 		writeJSON(w, http.StatusOK, map[string]any{"data": s.proxyBindingReconnectMeta(proxyBindingGroupResponse(group), reconnected, reconnectErr)})
 		return
@@ -175,7 +175,7 @@ func (s *Server) handleProxyBindingGroupRoutes(w http.ResponseWriter, r *http.Re
 		s.writeStoreError(w, err)
 		return
 	}
-	reconnected, reconnectErr := s.requestProxyBindingRouteChange(group.DeviceID, group.ICCID)
+	reconnected, reconnectErr := s.requestProxyBindingRouteChange(group.ICCID)
 	saved, err := s.store.DeviceProxyBindingGroupByID(r.Context(), id)
 	if err != nil {
 		s.writeStoreError(w, err)
@@ -185,13 +185,11 @@ func (s *Server) handleProxyBindingGroupRoutes(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) validateProxyBindingGroupPayload(payload proxyBindingGroupPayload) (store.DeviceProxyBindingGroup, error) {
-	deviceID := strings.TrimSpace(payload.DeviceID)
 	iccid := strings.TrimSpace(payload.ICCID)
 	if !validProfileICCID(iccid) {
 		return store.DeviceProxyBindingGroup{}, errors.New("profile ICCID must contain 18 to 22 digits")
 	}
-	deviceID, err := s.proxyBindingDeviceIDForSave(context.Background(), deviceID, iccid, true)
-	if err != nil {
+	if _, err := s.proxyBindingDeviceIDForSave(context.Background(), "", iccid, true); err != nil {
 		return store.DeviceProxyBindingGroup{}, err
 	}
 	if _, err := validateProxyRouteIDs(payload.ProxyIDs); err != nil {
@@ -210,22 +208,23 @@ func (s *Server) validateProxyBindingGroupPayload(payload proxyBindingGroupPaylo
 	if name == "" {
 		name = iccid
 	}
-	value := store.DeviceProxyBindingGroup{DeviceID: deviceID, ICCID: iccid, ProfileName: name}
+	value := store.DeviceProxyBindingGroup{ICCID: iccid, ProfileName: name}
 	value.ID = payload.ID
 	return value, nil
 }
 
 // Route changes restart Wi-Fi Calling immediately so the persisted route list is
 // re-evaluated from its first candidate, including when IMS is already stable.
-func (s *Server) requestProxyBindingRouteChange(deviceID, iccid string) (bool, error) {
+func (s *Server) requestProxyBindingRouteChange(iccid string) (bool, error) {
 	if s.vowifi == nil {
 		return false, nil
 	}
 	binding, err := s.store.SimCardBinding(context.Background(), strings.TrimSpace(iccid))
-	if err == nil && binding.State == store.SimCardBindingActive && strings.TrimSpace(binding.DeviceID) != "" {
-		deviceID = binding.DeviceID
+	if err != nil || binding.State != store.SimCardBindingActive {
+		return false, nil
 	}
-	if strings.TrimSpace(deviceID) == "" {
+	deviceID := strings.TrimSpace(binding.DeviceID)
+	if deviceID == "" {
 		return false, nil
 	}
 	return s.requestProfileProxyRouteReconnect(deviceID, iccid)

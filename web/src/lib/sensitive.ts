@@ -8,3 +8,11 @@ export function maskICCID(value?: string | null): string {
 export function displayICCID(value: string | undefined | null, showSensitive: boolean): string {
   return showSensitive ? String(value ?? "").replace(/\s+/g, "") || "--" : maskICCID(value);
 }
+
+export function maskSecret(value?: string | null): string {
+  return String(value ?? "").trim() ? "********" : "--";
+}
+
+export function displaySecret(value: string | undefined | null, showSensitive: boolean): string {
+  return showSensitive ? String(value ?? "").trim() || "--" : maskSecret(value);
+}

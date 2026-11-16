@@ -639,18 +639,20 @@ export interface SystemInfo {
   os?: string;
   architecture?: string;
   uptime?: string;
-  developer?: boolean;
 }
 
 export interface HTTPSSettings {
   enabled: boolean;
   httpUrl: string;
   httpsUrl: string;
+  certificateSource?: "self_signed" | "uploaded";
+  certificateSubject?: string;
   fingerprint?: string;
   notAfter?: string;
+  restartPending?: boolean;
 }
 
-export interface DeveloperSettings {
+export interface SystemLimitsSettings {
   deviceLimit: number;
   defaultDeviceLimit: number;
   maxDeviceLimit: number;

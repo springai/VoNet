@@ -66,9 +66,9 @@ func (s *Server) lookupCellularPublicIP(ctx context.Context, networkInterface st
 	return lookup(ctx, networkInterface)
 }
 
-func (s *Server) overviewPublicIP(config store.Device, entry *device.Device, developerActive bool) map[string]any {
+func (s *Server) overviewPublicIP(config store.Device, entry *device.Device, featuresAvailable bool) map[string]any {
 	result := map[string]any{"detected": false}
-	if !developerActive || !config.NetworkEnabled || entry == nil || entry.Snapshot == nil {
+	if !featuresAvailable || !config.NetworkEnabled || entry == nil || entry.Snapshot == nil {
 		return result
 	}
 	iccid := strings.TrimSpace(entry.Snapshot.ICCID)
@@ -88,7 +88,7 @@ func (s *Server) overviewPublicIP(config store.Device, entry *device.Device, dev
 // manual toggles, modem reboots, IMS-triggered reboots, and service startup;
 // the web UI only reads the resulting cache.
 func (s *Server) schedulePublicIPDetection(configID, physicalID string, revision uint64) {
-	if s == nil || s.store == nil || s.devices == nil || !s.developerActive(context.Background()) {
+	if s == nil || s.store == nil || s.devices == nil || !s.featuresAvailable(context.Background()) {
 		return
 	}
 	runtime := s.cellularDataRuntime()
@@ -146,10 +146,6 @@ func (s *Server) handleCellularPublicIP(w http.ResponseWriter, r *http.Request, 
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		w.Header().Set("Allow", "GET, POST")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
-		return true
-	}
-	if !s.developerActive(r.Context()) {
-		writeError(w, http.StatusForbidden, "developer_mode_required", "public IP detection through roaming data is available only in developer mode")
 		return true
 	}
 	if r.Method != http.MethodGet || config.NetworkEnabled {

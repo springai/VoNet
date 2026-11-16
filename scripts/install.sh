@@ -393,7 +393,7 @@ install_binary() {
 
 # --- Data directory ----------------------------------------------------------
 ensure_data_dir() {
-    install -d -m 0755 /opt/vonet/data
+    install -d -m 0755 /opt/vonet/data/etc/certs
     chown -R root:root /opt/vonet
 }
 
@@ -453,6 +453,7 @@ Group=root
 WorkingDirectory=/opt/vonet
 EnvironmentFile=${ENV_FILE}
 Environment=VONET_DATABASE_PATH=/opt/vonet/data/vonet.db
+Environment=VONET_CERTIFICATE_DIR=/opt/vonet/data/etc/certs
 ExecStart=${BINARY_PATH}
 Restart=on-failure
 RestartSec=3s

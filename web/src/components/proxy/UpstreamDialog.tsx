@@ -2,6 +2,9 @@ import { Button, Input, Modal } from "../ui";
 import { Field, SectionHeader, ToggleRow } from "./formUi";
 import { ipv6Hint, type UpstreamForm, type UpstreamProbeResult } from "./shared";
 import { tl, useI18n } from "../../lib/i18n";
+import { SensitiveInfoButton } from "../ui/SensitiveInfoButton";
+import { useShowSensitive } from "../devices/shared";
+import { displaySecret } from "../../lib/sensitive";
 
 export interface UpstreamDialogProps {
   open: boolean;
@@ -38,6 +41,7 @@ function authMethodLabel(method?: string): string {
 
 function ProbeResultPanel({ probe }: { probe: UpstreamProbeResult }) {
   const { t } = useI18n();
+  const [showSensitive] = useShowSensitive();
   const reachable = !!probe.reachable;
   const handshakeOk = !!probe.handshakeOk;
   const associateOk = !!probe.udpAssociateOk;
@@ -61,22 +65,24 @@ function ProbeResultPanel({ probe }: { probe: UpstreamProbeResult }) {
       />
       {probe.relayAddr ? (
         <div className="text-[11px] text-gray-400">
-          {t("UDP 中继地址：")}<span className="font-mono">{probe.relayAddr}</span>
+          {t("UDP 中继地址：")}<span className="font-mono">{displaySecret(probe.relayAddr, showSensitive)}</span>
         </div>
       ) : null}
       {probe.dnsName && probe.dnsServer ? (
         <div className="text-[11px] text-gray-400">
-          {t("UDP 测试：")}<span className="font-mono">{probe.dnsName} @ {probe.dnsServer}</span>
+          {t("UDP 测试：")}<span className="font-mono">{showSensitive ? `${probe.dnsName} @ ${probe.dnsServer}` : "********"}</span>
         </div>
       ) : null}
       {probe.hint ? <div className="text-[11px] text-gray-500 dark:text-gray-400">{probe.hint}</div> : null}
-      {probe.error ? <div className="break-all text-[11px] text-red-500">{probe.error}</div> : null}
+      {probe.error ? <div className="break-all text-[11px] text-red-500">{displaySecret(probe.error, showSensitive)}</div> : null}
     </div>
   );
 }
 
 export function UpstreamDialog({ open, editing, form, testing, probe, onPatch, onTest, onClose, onSubmit }: UpstreamDialogProps) {
   const { t } = useI18n();
+  const [showSensitive] = useShowSensitive();
+  const protectedValue = (value: string) => showSensitive ? value : value ? "********" : "";
   return (
     <Modal
       open={open}
@@ -96,6 +102,9 @@ export function UpstreamDialog({ open, editing, form, testing, probe, onPatch, o
       }
     >
       <div className="space-y-6 pb-6">
+        <div className="flex justify-end">
+          <SensitiveInfoButton showLabel />
+        </div>
         <div className="space-y-4">
           <SectionHeader tone="indigo" title={t("代理信息")} />
           <div className="grid grid-cols-2 gap-4">
@@ -108,7 +117,8 @@ export function UpstreamDialog({ open, editing, form, testing, probe, onPatch, o
           </div>
           <Field label={t("Socks5 地址")}>
             <Input
-              value={form.addr}
+              value={protectedValue(form.addr)}
+              readOnly={!showSensitive}
               placeholder={t("host:port，例如 1.2.3.4:1080 或 [2001:db8::1]:1080")}
               onChange={(e) => onPatch({ addr: e.target.value })}
             />
@@ -129,10 +139,10 @@ export function UpstreamDialog({ open, editing, form, testing, probe, onPatch, o
           <SectionHeader tone="amber" title={t("鉴权设置（可选）")} />
           <div className="grid grid-cols-2 gap-4">
             <Field label={t("用户名")}>
-              <Input value={form.username} placeholder={t("留空则免鉴权")} onChange={(e) => onPatch({ username: e.target.value })} />
+              <Input value={protectedValue(form.username)} readOnly={!showSensitive} placeholder={t("留空则免鉴权")} onChange={(e) => onPatch({ username: e.target.value })} />
             </Field>
             <Field label={t("密码")}>
-              <Input type="password" value={form.password} placeholder={t("留空则免鉴权")} onChange={(e) => onPatch({ password: e.target.value })} />
+              <Input type={showSensitive ? "text" : "password"} value={protectedValue(form.password)} readOnly={!showSensitive} placeholder={t("留空则免鉴权")} onChange={(e) => onPatch({ password: e.target.value })} />
               <div className="mt-1 text-xs text-gray-400">{t("编辑已有代理时留空会保持原密码不变。")}</div>
             </Field>
           </div>

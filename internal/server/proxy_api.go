@@ -128,7 +128,7 @@ func (s *Server) reconnectProxyBindingReferences(references []proxyBindingRefere
 		var reconnect bool
 		var err error
 		if reference.Source == proxyBindingSourceGroup {
-			reconnect, err = s.requestProxyBindingRouteChange(reference.DeviceID, reference.ICCID)
+			reconnect, err = s.requestProxyBindingRouteChange(reference.ICCID)
 		} else {
 			reconnect, err = s.requestProfileProxyRouteReconnect(reference.DeviceID, reference.ICCID)
 		}

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"vonet/internal/developer"
 	"vonet/internal/device"
 	"vonet/internal/exportproxy"
 	"vonet/internal/store"
@@ -45,14 +44,7 @@ func TestPublicIPGetClearsCacheWhenCellularDataIsDisabled(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	enabled, err := json.Marshal(map[string]bool{"enabled": true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := database.UpsertAppSetting(ctx, store.AppSetting{Key: developer.EnabledSettingKey, Value: enabled}); err != nil {
-		t.Fatal(err)
-	}
-	server := &Server{store: database, developerEnabled: true, publicIPs: make(map[string]cachedPublicIP)}
+	server := &Server{store: database, publicIPs: make(map[string]cachedPublicIP)}
 	server.savePublicIP("ec20", "8944100001", exportproxy.PublicIPInfo{IP: "203.0.113.8", CountryCode: "GB"})
 
 	request := httptest.NewRequest(http.MethodGet, "/api/devices/ec20/network/public-ip", nil)
@@ -110,13 +102,6 @@ func TestCellularConnectedAutomaticallyDetectsPublicIP(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	enabled, err := json.Marshal(map[string]bool{"enabled": true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := database.UpsertAppSetting(ctx, store.AppSetting{Key: developer.EnabledSettingKey, Value: enabled}); err != nil {
-		t.Fatal(err)
-	}
 	if err := database.UpsertDevice(ctx, store.Device{
 		ID: "ec20", Name: "EC20", DeviceType: store.DeviceTypePCIeEC20EC25,
 		Interface: "wwan0", NetworkEnabled: true,
@@ -130,7 +115,7 @@ func TestCellularConnectedAutomaticallyDetectsPublicIP(t *testing.T) {
 	}}}
 	called := make(chan string, 1)
 	server := &Server{
-		store: database, developerEnabled: true, devices: controller,
+		store: database, devices: controller,
 		logger: regionTestLogger(), publicIPs: make(map[string]cachedPublicIP),
 		lookupPublicIP: func(_ context.Context, networkInterface string) (exportproxy.PublicIPInfo, error) {
 			called <- networkInterface

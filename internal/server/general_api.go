@@ -16,7 +16,6 @@ import (
 
 	"vonet/internal/auth"
 	"vonet/internal/buildinfo"
-	"vonet/internal/developer"
 	"vonet/internal/i18n"
 	"vonet/internal/loghub"
 	"vonet/internal/store"
@@ -76,8 +75,8 @@ func (s *Server) routeGeneralAPI(w http.ResponseWriter, r *http.Request) bool {
 		s.handleHTTPSSettings(w, r)
 	case "settings/https/certificate":
 		s.handleHTTPSCertificate(w, r)
-	case "settings/developer":
-		s.handleDeveloperSettings(w, r)
+	case "settings/limits", "settings/developer":
+		s.handleSystemLimits(w, r)
 	default:
 		return false
 	}
@@ -368,13 +367,12 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 			"os":           runtime.GOOS,
 			"architecture": runtime.GOARCH,
 			"uptime":       formatDuration(time.Since(s.startedAt)),
-			"developer":    s.developerActive(r.Context()),
 		},
 	})
 }
 
-func (s *Server) developerActive(ctx context.Context) bool {
-	return s.developerEnabled && developer.Enabled(ctx, s.store)
+func (s *Server) featuresAvailable(ctx context.Context) bool {
+	return true
 }
 
 func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {

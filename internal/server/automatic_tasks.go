@@ -86,7 +86,7 @@ func (scheduler *automaticTaskScheduler) run() {
 func (scheduler *automaticTaskScheduler) claim() {
 	var runs []store.AutomaticTaskRun
 	var err error
-	if scheduler.server.developerActive(scheduler.ctx) {
+	if scheduler.server.featuresAvailable(scheduler.ctx) {
 		runs, err = scheduler.server.store.ClaimDueAutomaticTasks(scheduler.ctx, time.Now().UTC(), 50)
 	} else {
 		runs, err = scheduler.server.store.ClaimDueAvailableAutomaticTasks(scheduler.ctx, time.Now().UTC(), 50)
@@ -134,7 +134,7 @@ func (scheduler *automaticTaskScheduler) execute(run store.AutomaticTaskRun) {
 		_ = scheduler.server.store.UpdateAutomaticTaskRun(context.Background(), run)
 		return
 	}
-	if err := validateAutomaticTaskAvailability(scheduler.server.developerActive(scheduler.ctx), task.TaskType, task.Environment); err != nil {
+	if err := validateAutomaticTaskAvailability(scheduler.server.featuresAvailable(scheduler.ctx), task.TaskType, task.Environment); err != nil {
 		run.Status, run.Error, run.FinishedAt = "failed", err.Error(), time.Now().UTC()
 		_ = scheduler.server.store.UpdateAutomaticTaskRun(context.Background(), run)
 		return
@@ -187,7 +187,7 @@ func (scheduler *automaticTaskScheduler) execute(run store.AutomaticTaskRun) {
 }
 
 func (s *Server) executeAutomaticTask(ctx context.Context, task store.AutomaticTask, progress automaticTaskProgress) (output string, err error) {
-	if err := validateAutomaticTaskAvailability(s.developerActive(ctx), task.TaskType, task.Environment); err != nil {
+	if err := validateAutomaticTaskAvailability(s.featuresAvailable(ctx), task.TaskType, task.Environment); err != nil {
 		return "", automaticTaskExecutionError{err: err, retryable: false}
 	}
 	if _, err := s.ResolveRegisteredActiveCard(ctx, task.DeviceID, ""); err != nil {
@@ -861,7 +861,7 @@ func (s *Server) handleAutomaticTasks(w http.ResponseWriter, r *http.Request) {
 			s.writeStoreError(w, err)
 			return
 		}
-		if !s.developerActive(r.Context()) {
+		if !s.featuresAvailable(r.Context()) {
 			visible := tasks[:0]
 			for _, task := range tasks {
 				if validateAutomaticTaskAvailability(false, task.TaskType, task.Environment) == nil {
@@ -925,7 +925,7 @@ func (s *Server) handleAutomaticTaskRuns(w http.ResponseWriter, r *http.Request)
 	var runs []store.AutomaticTaskRun
 	var total int
 	var err error
-	if s.developerActive(r.Context()) {
+	if s.featuresAvailable(r.Context()) {
 		runs, total, err = s.store.ListAutomaticTaskRunsPaginated(r.Context(), limit, offset)
 	} else {
 		runs, total, err = s.store.ListAvailableAutomaticTaskRunsPaginated(r.Context(), limit, offset)
@@ -959,7 +959,7 @@ func (s *Server) handleAutomaticTaskRunNow(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusConflict, "wifi_calling_only_device", err.Error())
 		return
 	}
-	if err := validateAutomaticTaskAvailability(s.developerActive(r.Context()), task.TaskType, task.Environment); err != nil {
+	if err := validateAutomaticTaskAvailability(s.featuresAvailable(r.Context()), task.TaskType, task.Environment); err != nil {
 		writeError(w, http.StatusNotFound, "task_unavailable", err.Error())
 		return
 	}
@@ -1013,7 +1013,7 @@ func (s *Server) decodeAutomaticTask(r *http.Request, id int64) (store.Automatic
 	if request.TaskType == "public_ip" && request.Environment != "cellular" {
 		return store.AutomaticTask{}, errors.New("public IP tasks must use cellular direct mode")
 	}
-	if err := validateAutomaticTaskAvailability(s.developerActive(r.Context()), request.TaskType, request.Environment); err != nil {
+	if err := validateAutomaticTaskAvailability(s.featuresAvailable(r.Context()), request.TaskType, request.Environment); err != nil {
 		return store.AutomaticTask{}, err
 	}
 	if err := validateAutomaticTaskDeviceCapabilities(selectedDevice, request.TaskType, request.Environment); err != nil {

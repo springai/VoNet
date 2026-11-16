@@ -12,8 +12,8 @@ import (
 func TestPublicOriginIPv6Normalization(t *testing.T) {
 	for _, tc := range []struct{ input, want string }{
 		{"https://[2001:0DB8:0:0:0:0:0:1]:8443", "https://[2001:db8::1]:8443"},
-		{"http://[0:0:0:0:0:0:0:1]:7575", "http://[::1]:7575"},
-		{"http://[::ffff:192.168.1.20]:7575", "http://[::ffff:c0a8:114]:7575"},
+		{"http://[0:0:0:0:0:0:0:1]:17575", "http://[::1]:17575"},
+		{"http://[::ffff:192.168.1.20]:17575", "http://[::ffff:c0a8:114]:17575"},
 		{"http://[::ffff:10.0.0.2]:80", "http://[::ffff:a00:2]"},
 		{"https://[FD00:0:0:0:0:0:0:1]:443", "https://[fd00::1]"},
 		{"https://Example.COM:8443", "https://example.com:8443"},

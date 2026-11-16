@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertRegular, CheckmarkRegular } from "@fluentui/react-icons";
 import { ApiError, api, apiMessage, getApiTokens, getSecuritySettings, revokeApiToken, updateSecuritySettings } from "../api";
-import type { ApiTokenListItem, DeveloperSettings, DeviceListItem, DevicesResponse, HTTPSSettings, NotificationSettings, SecuritySettings, SMSSettings, SystemInfo } from "../types";
+import type { ApiTokenListItem, SystemLimitsSettings, DeviceListItem, DevicesResponse, HTTPSSettings, NotificationSettings, SecuritySettings, SMSSettings, SystemInfo } from "../types";
 import { Button, PageHeader, confirmDialog, message } from "../components/ui";
 import { CardDecor, CardIcon, CardTitle, SecurityCard, SystemInfoCard } from "../components/settings/Cards";
 import type { PasswordForm, UpdateInfo } from "../components/settings/Cards";
@@ -125,12 +125,11 @@ export default function SettingsPage() {
   const [savingSecurity, setSavingSecurity] = useState(false);
   const [httpsSettings, setHTTPSSettings] = useState<HTTPSSettings | null>(null);
   const [loadingHTTPS, setLoadingHTTPS] = useState(false);
-  const [savingHTTPS, setSavingHTTPS] = useState(false);
-  const [developerSettings, setDeveloperSettings] = useState<DeveloperSettings | null>(null);
+  const [systemLimits, setSystemLimits] = useState<SystemLimitsSettings | null>(null);
   const [deviceLimit, setDeviceLimit] = useState(5);
   const [smsHourlyLimit, setSMSHourlyLimit] = useState(10);
-  const [loadingDeveloper, setLoadingDeveloper] = useState(false);
-  const [savingDeveloper, setSavingDeveloper] = useState(false);
+  const [loadingLimits, setLoadingLimits] = useState(false);
+  const [savingLimits, setSavingLimits] = useState(false);
   const [savingSMSLimit, setSavingSMSLimit] = useState(false);
   const [apiTokens, setApiTokens] = useState<ApiTokenListItem[]>([]);
   const [tokensError, setTokensError] = useState(false);
@@ -262,17 +261,17 @@ export default function SettingsPage() {
     }
   }, [lang]);
 
-  const fetchDeveloperSettings = useCallback(async () => {
-    setLoadingDeveloper(true);
+  const fetchSystemLimits = useCallback(async () => {
+    setLoadingLimits(true);
     try {
-      const data = await api<DeveloperSettings>("/settings/developer");
-      setDeveloperSettings(data);
+      const data = await api<SystemLimitsSettings>("/settings/limits");
+      setSystemLimits(data);
       setDeviceLimit(data.deviceLimit);
       setSMSHourlyLimit(data.smsHourlyLimit);
     } catch (error) {
       message.error(apiMessage(error) || (lang === "zh" ? "设备配额配置加载失败" : "Failed to load device quota settings"));
     } finally {
-      setLoadingDeveloper(false);
+      setLoadingLimits(false);
     }
   }, [lang]);
 
@@ -281,52 +280,28 @@ export default function SettingsPage() {
     void fetchSecurity();
     void fetchSMSSettings();
     void fetchApiTokens();
-  }, [fetchSystemInfo, fetchSecurity, fetchSMSSettings, fetchApiTokens]);
-
-  useEffect(() => {
-    if (systemInfo.developer) {
-      void fetchHTTPS();
-      void fetchDeveloperSettings();
-    } else {
-      setHTTPSSettings(null);
-      setDeveloperSettings(null);
-      setDeviceLimit(5);
-      setSMSHourlyLimit(10);
-    }
-  }, [systemInfo.developer, fetchHTTPS, fetchDeveloperSettings]);
-
-  const onToggleHTTPS = useCallback(async (enabled: boolean) => {
-    setSavingHTTPS(true);
-    try {
-      const data = await api<HTTPSSettings>("/settings/https", { method: "PUT", body: { enabled } });
-      setHTTPSSettings(data);
-      message.success(lang === "zh" ? (enabled ? "HTTPS 已开启，正在切换连接" : "HTTPS 已关闭，正在恢复 HTTP") : (enabled ? "HTTPS enabled; reconnecting" : "HTTPS disabled; returning to HTTP"));
-      const target = enabled ? data.httpsUrl : data.httpUrl;
-      window.setTimeout(() => window.location.replace(target + window.location.pathname + window.location.search + window.location.hash), 700);
-    } catch (error) {
-      message.error(apiMessage(error) || (lang === "zh" ? "HTTPS 配置保存失败" : "Failed to save HTTPS settings"));
-      setSavingHTTPS(false);
-    }
-  }, [lang]);
+    void fetchHTTPS();
+    void fetchSystemLimits();
+  }, [fetchSystemInfo, fetchSecurity, fetchSMSSettings, fetchApiTokens, fetchHTTPS, fetchSystemLimits]);
 
   const onSaveDeviceLimit = useCallback(async () => {
-    const maximum = developerSettings?.maxDeviceLimit ?? 999;
+    const maximum = systemLimits?.maxDeviceLimit ?? 999;
     if (!Number.isInteger(deviceLimit) || deviceLimit < 1 || deviceLimit > maximum) {
       message.error(lang === "zh" ? `设备配额必须是 1 到 ${maximum} 的整数` : `Device quota must be an integer between 1 and ${maximum}`);
       return;
     }
-    setSavingDeveloper(true);
+    setSavingLimits(true);
     try {
-      const data = await api<DeveloperSettings>("/settings/developer", { method: "PUT", body: { deviceLimit } });
-      setDeveloperSettings(data);
+      const data = await api<SystemLimitsSettings>("/settings/limits", { method: "PUT", body: { deviceLimit } });
+      setSystemLimits(data);
       setDeviceLimit(data.deviceLimit);
       message.success(lang === "zh" ? "设备配额已保存" : "Device quota saved");
     } catch (error) {
       message.error(apiMessage(error) || (lang === "zh" ? "设备配额保存失败" : "Failed to save device quota"));
     } finally {
-      setSavingDeveloper(false);
+      setSavingLimits(false);
     }
-  }, [developerSettings, deviceLimit, lang]);
+  }, [systemLimits, deviceLimit, lang]);
 
   const onSaveSMSHourlyLimit = useCallback(async () => {
     if (!Number.isInteger(smsHourlyLimit) || smsHourlyLimit < 1) {
@@ -335,8 +310,8 @@ export default function SettingsPage() {
     }
     setSavingSMSLimit(true);
     try {
-      const data = await api<DeveloperSettings>("/settings/developer", { method: "PUT", body: { smsHourlyLimit } });
-      setDeveloperSettings(data);
+      const data = await api<SystemLimitsSettings>("/settings/limits", { method: "PUT", body: { smsHourlyLimit } });
+      setSystemLimits(data);
       setSMSHourlyLimit(data.smsHourlyLimit);
       message.success(lang === "zh" ? "短信发送速率限制已保存" : "SMS rate limit saved");
     } catch (error) {
@@ -785,32 +760,27 @@ export default function SettingsPage() {
           onToggle={onToggleSMSAutoClear}
         />
 
-        {systemInfo.developer ? (
-          <>
-            <HTTPSCard
-              value={httpsSettings}
-              loading={loadingHTTPS}
-              saving={savingHTTPS}
-              onToggle={onToggleHTTPS}
-            />
-            <DeviceQuotaCard
-              value={developerSettings}
-              limit={deviceLimit}
-              loading={loadingDeveloper}
-              saving={savingDeveloper}
-              onLimitChange={setDeviceLimit}
-              onSave={onSaveDeviceLimit}
-            />
-            <SMSRateLimitCard
-              limit={smsHourlyLimit}
-              loading={loadingDeveloper}
-              saving={savingSMSLimit}
-              onLimitChange={setSMSHourlyLimit}
-              onSave={onSaveSMSHourlyLimit}
-            />
-            <PluginsCard />
-          </>
-        ) : null}
+        <HTTPSCard
+          value={httpsSettings}
+          loading={loadingHTTPS}
+          onUploaded={setHTTPSSettings}
+        />
+        <DeviceQuotaCard
+          value={systemLimits}
+          limit={deviceLimit}
+          loading={loadingLimits}
+          saving={savingLimits}
+          onLimitChange={setDeviceLimit}
+          onSave={onSaveDeviceLimit}
+        />
+        <SMSRateLimitCard
+          limit={smsHourlyLimit}
+          loading={loadingLimits}
+          saving={savingSMSLimit}
+          onLimitChange={setSMSHourlyLimit}
+          onSave={onSaveSMSHourlyLimit}
+        />
+        <PluginsCard />
 
         <div className="notify-card ui-card group relative overflow-hidden p-8 lg:col-span-2">
           <CardDecor />

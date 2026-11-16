@@ -20,7 +20,7 @@ import (
 // TestSSOFlowCookieSecureOverride covers issuance and deletion under the global override.
 func TestSSOFlowCookieSecureOverride(t *testing.T) {
 	for _, force := range []bool{false, true} {
-		for _, origin := range []string{"http://192.168.1.20:7575", "https://vonet.example"} {
+		for _, origin := range []string{"http://192.168.1.20:17575", "https://vonet.example"} {
 			for _, clear := range []bool{false, true} {
 				server := &Server{secureCookies: force}
 				flow := store.SSOFlow{
@@ -58,7 +58,7 @@ func TestSessionCSRFReplacementRemembersSecureLogin(t *testing.T) {
 		{name: "trusted proxy", entry: "http://vonet.example", trust: true, secure: true},
 		{name: "force Secure", entry: "http://vonet.example", force: true, secure: true},
 		{name: "HTTP API client", entry: "http://vonet.example"},
-		{name: "private HTTP browser", entry: "http://192.168.111.27:7575", origin: "http://192.168.111.27:7575"},
+		{name: "private HTTP browser", entry: "http://192.168.111.27:17575", origin: "http://192.168.111.27:17575"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newSSOHTTPFixture(t)

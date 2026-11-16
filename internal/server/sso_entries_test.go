@@ -120,11 +120,11 @@ func TestSSOAutomaticBrowserEntries(t *testing.T) {
 		secure, directTLS bool
 	}{
 		{"https://vonet.example", true, false},
-		{"http://192.168.111.27:7575", false, false},
-		{"http://127.0.0.1:7575", false, false},
-		{"http://[::1]:7575", false, false},
-		{"http://[::ffff:c0a8:114]:7575", false, false},
-		{"https://192.168.111.27:7575", true, true},
+		{"http://192.168.111.27:17575", false, false},
+		{"http://127.0.0.1:17575", false, false},
+		{"http://[::1]:17575", false, false},
+		{"http://[::ffff:c0a8:114]:17575", false, false},
+		{"https://192.168.111.27:17575", true, true},
 	} {
 		t.Run(tc.origin, func(t *testing.T) {
 			recorder := do(tc.origin, http.MethodGet, "/api/auth/sso/start", nil, nil, "", tc.directTLS)
@@ -144,7 +144,7 @@ func TestSSOAutomaticBrowserEntries(t *testing.T) {
 			callback := sso.CallbackPath + "?code=fixture-code&state=" +
 				url.QueryEscape(authorizationURL.Query().Get("state"))
 			wrong := do(
-				"http://10.0.0.99:7575",
+				"http://10.0.0.99:17575",
 				http.MethodGet,
 				callback,
 				nil,

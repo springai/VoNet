@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"vonet/internal/developer"
 	"vonet/internal/device"
 	"vonet/internal/exportproxy"
 	"vonet/internal/modem"
@@ -1146,17 +1145,11 @@ func TestHandleOverviewStreamReflectsConfigChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	if err := database.UpsertAppSetting(ctx, store.AppSetting{
-		Key:   developer.EnabledSettingKey,
-		Value: []byte(`{"enabled":true}`),
-	}); err != nil {
-		t.Fatal(err)
-	}
 	if err := database.UpsertDevice(ctx, store.Device{ID: "dev1", Name: "Test device", NetworkEnabled: true}); err != nil {
 		t.Fatal(err)
 	}
 
-	server := &Server{store: database, logger: regionTestLogger(), developerEnabled: true}
+	server := &Server{store: database, logger: regionTestLogger()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
 		config, err := database.Device(r.Context(), "dev1")
@@ -1214,11 +1207,6 @@ func TestHandleCellularDataRejectsDisableWhileExportProxyActive(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	if err := database.UpsertAppSetting(ctx, store.AppSetting{
-		Key: developer.EnabledSettingKey, Value: json.RawMessage(`{"enabled":true}`),
-	}); err != nil {
-		t.Fatal(err)
-	}
 	deviceConfig := store.Device{ID: "modem-1", Name: "modem-1", Interface: "wwan0", NetworkEnabled: true}
 	if err := database.UpsertDevice(ctx, deviceConfig); err != nil {
 		t.Fatal(err)
@@ -1244,7 +1232,6 @@ func TestHandleCellularDataRejectsDisableWhileExportProxyActive(t *testing.T) {
 	server := &Server{
 		store:               database,
 		logger:              regionTestLogger(),
-		developerEnabled:    true,
 		exportProxy:         proxyManager,
 		devices:             fakeDeviceController{},
 		maxRequestBodyBytes: 1 << 20,

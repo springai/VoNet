@@ -4,6 +4,7 @@ import { api, ApiError, apiMessage } from "../api";
 import type { Country, CountryRule, SimCard, UpstreamProxy } from "../types";
 import { usePolling } from "../lib/usePolling";
 import { Button, PageHeader, confirmDialog, message } from "../components/ui";
+import { SensitiveInfoButton } from "../components/ui/SensitiveInfoButton";
 import {
   emptyUpstreamForm,
   ipv6AddrError,
@@ -242,7 +243,12 @@ export default function ProxyPage() {
       <PageHeader
         title={t("代理管理")}
         subtitle={t("管理上游代理、MCC 国家规则和 SIM / Profile 代理顺序")}
-        actions={<Button variant="primary" icon={<AddRegular />} onClick={() => openUpstreamDialog()}>{t("新增代理")}</Button>}
+        actions={(
+          <div className="flex items-center gap-2">
+            <SensitiveInfoButton showLabel />
+            <Button variant="primary" icon={<AddRegular />} onClick={() => openUpstreamDialog()}>{t("新增代理")}</Button>
+          </div>
+        )}
       />
       <UpstreamSection
         rows={proxyRows}

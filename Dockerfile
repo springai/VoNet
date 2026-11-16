@@ -41,7 +41,7 @@ RUN apk add --no-cache ca-certificates ccid iproute2 nftables pcsc-lite qmi-util
     addgroup -S -g 1000 vonet && \
     adduser -S -D -H -u 1000 -G vonet vonet
 
-RUN mkdir -p /opt/vonet/bin /opt/vonet/data && \
+RUN mkdir -p /opt/vonet/bin /opt/vonet/data/etc/certs && \
     chown -R vonet:vonet /opt/vonet
 
 COPY --from=go-builder /out/vonet /opt/vonet/bin/vonet
@@ -55,9 +55,11 @@ RUN ln -s /opt/vonet/bin/vonet /usr/local/bin/vonet && \
 # container. The container already needs host networking and privileged device
 # access for modem, QMI, IPsec, and hot-plug support.
 USER root
+WORKDIR /opt/vonet
 VOLUME ["/opt/vonet/data"]
-EXPOSE 7575
-ENV VONET_ADDR=0.0.0.0:7575 \
-    VONET_DATABASE_PATH=/opt/vonet/data/vonet.db
+EXPOSE 17575
+ENV VONET_ADDR=0.0.0.0:17575 \
+    VONET_DATABASE_PATH=/opt/vonet/data/vonet.db \
+    VONET_CERTIFICATE_DIR=/opt/vonet/data/etc/certs
 
 ENTRYPOINT ["/usr/local/bin/vonet-entrypoint"]

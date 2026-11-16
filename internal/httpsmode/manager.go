@@ -1,6 +1,7 @@
 package httpsmode
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -10,7 +11,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"vonet/internal/store"
@@ -29,57 +28,41 @@ import (
 const SettingKey = "transport.self_signed_https"
 
 type State struct {
-	Enabled     bool      `json:"enabled"`
-	HTTPURL     string    `json:"http_url"`
-	HTTPSURL    string    `json:"https_url"`
-	Fingerprint string    `json:"fingerprint,omitempty"`
-	NotAfter    time.Time `json:"not_after,omitempty"`
+	Enabled            bool      `json:"enabled"`
+	HTTPURL            string    `json:"http_url"`
+	HTTPSURL           string    `json:"https_url"`
+	CertificateSource  string    `json:"certificate_source"`
+	CertificateSubject string    `json:"certificate_subject,omitempty"`
+	Fingerprint        string    `json:"fingerprint,omitempty"`
+	NotAfter           time.Time `json:"not_after,omitempty"`
+	RestartPending     bool      `json:"restart_pending,omitempty"`
 }
 
 type Manager struct {
-	store   *store.Store
 	dir     string
 	address string
-	enabled atomic.Bool
 	mu      sync.RWMutex
 	cert    *tls.Certificate
+	source  string
 }
 
-func New(ctx context.Context, database *store.Store, dir, address string) (*Manager, error) {
-	manager := &Manager{store: database, dir: dir, address: address}
-	setting, err := database.AppSetting(ctx, SettingKey)
-	if err == nil {
-		var document struct {
-			Enabled bool `json:"enabled"`
-		}
-		if json.Unmarshal(setting.Value, &document) == nil && document.Enabled {
-			if err := manager.ensureCertificate(); err != nil {
-				return nil, err
-			}
-			manager.enabled.Store(true)
-		}
-	} else if !errors.Is(err, store.ErrNotFound) {
+func New(ctx context.Context, _ *store.Store, dir, address string) (*Manager, error) {
+	manager := &Manager{dir: dir, address: address}
+	if err := manager.ensureCertificate(); err != nil {
 		return nil, err
 	}
 	return manager, nil
 }
 
-func (manager *Manager) Enabled() bool { return manager != nil && manager.enabled.Load() }
+func (manager *Manager) Enabled() bool { return manager != nil }
 
 func (manager *Manager) SetEnabled(ctx context.Context, enabled bool) (State, error) {
-	if enabled {
-		if err := manager.ensureCertificate(); err != nil {
-			return State{}, err
-		}
+	if !enabled {
+		return State{}, errors.New("HTTPS is required and cannot be disabled")
 	}
-	raw, err := json.Marshal(map[string]bool{"enabled": enabled})
-	if err != nil {
+	if err := manager.ensureCertificate(); err != nil {
 		return State{}, err
 	}
-	if err := manager.store.UpsertAppSetting(ctx, store.AppSetting{Key: SettingKey, Value: raw}); err != nil {
-		return State{}, err
-	}
-	manager.enabled.Store(enabled)
 	return manager.State(""), nil
 }
 
@@ -89,7 +72,7 @@ func (manager *Manager) State(host string) State {
 		host = manager.address
 	}
 	state := State{
-		Enabled:  manager.Enabled(),
+		Enabled:  true,
 		HTTPURL:  "http://" + host,
 		HTTPSURL: "https://" + host,
 	}
@@ -104,8 +87,13 @@ func (manager *Manager) State(host string) State {
 		}
 		state.Fingerprint = strings.Join(parts, ":")
 		state.NotAfter = manager.cert.Leaf.NotAfter
+		state.CertificateSource = manager.source
+		state.CertificateSubject = manager.cert.Leaf.Subject.String()
 	}
 	manager.mu.RUnlock()
+	if state.CertificateSource == "" {
+		state.CertificateSource = "self_signed"
+	}
 	return state
 }
 
@@ -128,22 +116,37 @@ func (manager *Manager) CertificatePEM() ([]byte, error) {
 	if err := manager.ensureCertificate(); err != nil {
 		return nil, err
 	}
-	return os.ReadFile(filepath.Join(manager.dir, "selfsigned.crt"))
+	manager.mu.RLock()
+	source := manager.source
+	manager.mu.RUnlock()
+	name := "selfsigned.crt"
+	if source == "uploaded" {
+		name = "custom.crt"
+	}
+	return os.ReadFile(filepath.Join(manager.dir, name))
 }
 
 func (manager *Manager) ensureCertificate() error {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if manager.cert != nil && manager.cert.Leaf != nil && time.Until(manager.cert.Leaf.NotAfter) > 30*24*time.Hour {
+	if manager.cert != nil && manager.cert.Leaf != nil && time.Now().Before(manager.cert.Leaf.NotAfter) {
 		return nil
 	}
 	if err := os.MkdirAll(manager.dir, 0o750); err != nil {
 		return fmt.Errorf("create TLS directory: %w", err)
 	}
+	customCertPath := filepath.Join(manager.dir, "custom.crt")
+	customKeyPath := filepath.Join(manager.dir, "custom.key")
+	if cert, err := loadCertificate(customCertPath, customKeyPath); err == nil && time.Now().Before(cert.Leaf.NotAfter) {
+		manager.cert = cert
+		manager.source = "uploaded"
+		return nil
+	}
 	certPath := filepath.Join(manager.dir, "selfsigned.crt")
 	keyPath := filepath.Join(manager.dir, "selfsigned.key")
 	if cert, err := loadCertificate(certPath, keyPath); err == nil && time.Until(cert.Leaf.NotAfter) > 30*24*time.Hour {
 		manager.cert = cert
+		manager.source = "self_signed"
 		return nil
 	}
 	certPEM, keyPEM, err := generateCertificate(manager.address)
@@ -161,7 +164,62 @@ func (manager *Manager) ensureCertificate() error {
 		return err
 	}
 	manager.cert = cert
+	manager.source = "self_signed"
 	return nil
+}
+
+// InstallCertificate validates a PEM certificate and matching private key,
+// persists the pair under the configured certificate directory, and switches
+// the live TLS certificate without restarting the HTTP server.
+func (manager *Manager) InstallCertificate(ctx context.Context, certPEM, keyPEM []byte) (State, error) {
+	if err := ctx.Err(); err != nil {
+		return State{}, err
+	}
+	cert, err := parseCertificatePair(certPEM, keyPEM)
+	if err != nil {
+		return State{}, err
+	}
+	if err := os.MkdirAll(manager.dir, 0o750); err != nil {
+		return State{}, fmt.Errorf("create TLS directory: %w", err)
+	}
+	certPath := filepath.Join(manager.dir, "custom.crt")
+	keyPath := filepath.Join(manager.dir, "custom.key")
+	if err := writePrivateFile(keyPath, keyPEM, 0o600); err != nil {
+		return State{}, fmt.Errorf("write TLS private key: %w", err)
+	}
+	if err := writePrivateFile(certPath, certPEM, 0o644); err != nil {
+		return State{}, fmt.Errorf("write TLS certificate: %w", err)
+	}
+	manager.mu.Lock()
+	manager.cert = cert
+	manager.source = "uploaded"
+	manager.mu.Unlock()
+	return manager.State(""), nil
+}
+
+func parseCertificatePair(certPEM, keyPEM []byte) (*tls.Certificate, error) {
+	if len(bytes.TrimSpace(certPEM)) == 0 {
+		return nil, errors.New("certificate PEM is empty")
+	}
+	if len(bytes.TrimSpace(keyPEM)) == 0 {
+		return nil, errors.New("private key PEM is empty")
+	}
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("certificate and private key do not form a valid pair: %w", err)
+	}
+	cert.Leaf, err = x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("parse certificate: %w", err)
+	}
+	now := time.Now()
+	if now.Before(cert.Leaf.NotBefore) {
+		return nil, errors.New("certificate is not valid yet")
+	}
+	if !now.Before(cert.Leaf.NotAfter) {
+		return nil, errors.New("certificate has expired")
+	}
+	return &cert, nil
 }
 
 func loadCertificate(certPath, keyPath string) (*tls.Certificate, error) {

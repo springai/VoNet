@@ -3,10 +3,11 @@ import { ArrowDown, ArrowUp, Pencil, Plus, Trash2, X } from "lucide-react";
 import { api, apiMessage } from "../../api";
 import type { ProxyBindingGroup, ProxyBindingReconnectState } from "../../proxy_types";
 import type { SimCard, UpstreamProxy } from "../../types";
-import { activeCardDevice } from "../cards/cardApi";
 import { usePolling } from "../../lib/usePolling";
 import { Button, EmptyState, Input, Modal, Select, StatusDot, Tag, confirmDialog, message } from "../ui";
 import { useI18n } from "../../lib/i18n";
+import { useShowSensitive } from "../devices/shared";
+import { displayICCID } from "../../lib/sensitive";
 
 interface Props {
   cards: SimCard[];
@@ -23,6 +24,7 @@ function cardStatusTone(card: SimCard) {
 
 export function CardProxyBindingSection({ cards, proxies, onChanged }: Props) {
   const { t } = useI18n();
+  const [showSensitive] = useShowSensitive();
   const [groups, setGroups] = useState<ProxyBindingGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -115,7 +117,6 @@ export function CardProxyBindingSection({ cards, proxies, onChanged }: Props) {
         result = await api<ProxyBindingReconnectState>("/proxy-binding-groups", {
           method: "POST",
           body: {
-            deviceId: activeCardDevice(currentCard) || "",
             iccid: currentCard.iccid,
             profileName: currentCard.displayName || currentCard.iccid,
             proxyIds: routes,
@@ -174,7 +175,6 @@ export function CardProxyBindingSection({ cards, proxies, onChanged }: Props) {
             <tr>
               <th className="px-5 py-3">{t("卡片")}</th>
               <th className="px-4 py-3">ICCID</th>
-              <th className="px-4 py-3">{t("当前设备")}</th>
               <th className="px-4 py-3">{t("代理顺序")}</th>
               <th className="px-5 py-3 text-right">{t("操作")}</th>
             </tr>
@@ -188,15 +188,12 @@ export function CardProxyBindingSection({ cards, proxies, onChanged }: Props) {
                     <div className="flex items-center gap-2">
                       <StatusDot tone={cardStatusTone(card)} />
                       <div>
-                        <div className="font-semibold text-gray-900 dark:text-white">{card.displayName || card.iccid}</div>
+                        <div className="font-semibold text-gray-900 dark:text-white">{card.displayName || displayICCID(card.iccid, showSensitive)}</div>
                         <div className="mt-1 text-xs text-gray-400">{card.carrier || t("运营商未知")}</div>
                       </div>
                     </div>
                   </td>
-                  <td className="px-4 py-4 font-mono text-xs text-gray-500">{card.iccid}</td>
-                  <td className="px-4 py-4 text-gray-600 dark:text-gray-300">
-                    {card.binding?.deviceName || card.binding?.deviceId || t("离线")}
-                  </td>
+                  <td className="px-4 py-4 font-mono text-xs text-gray-500">{displayICCID(card.iccid, showSensitive)}</td>
                   <td className="px-4 py-4">
                     {group?.routes?.length ? (
                       <div className="flex flex-wrap gap-1">
@@ -253,8 +250,8 @@ export function CardProxyBindingSection({ cards, proxies, onChanged }: Props) {
         {editingCard ? (
           <div className="space-y-4">
             <div className="ui-panel-muted p-4">
-              <div className="font-semibold text-gray-900 dark:text-white">{editingCard.displayName || editingCard.iccid}</div>
-              <div className="mt-1 font-mono text-xs text-gray-500">{editingCard.iccid}</div>
+              <div className="font-semibold text-gray-900 dark:text-white">{editingCard.displayName || displayICCID(editingCard.iccid, showSensitive)}</div>
+              <div className="mt-1 font-mono text-xs text-gray-500">{displayICCID(editingCard.iccid, showSensitive)}</div>
               <div className="mt-2 text-xs text-gray-500">
                 {editingCard.status === "active" ? t("当前启用，保存后立即重连 VoWiFi") : t("卡片当前离线，上线后自动应用此绑定")}
               </div>

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ const maxConfigBytes = 1 << 20
 type Config struct {
 	Address             string
 	DatabasePath        string
+	CertificateDir      string
 	SessionTTL          time.Duration
 	SecureCookies       bool
 	ShutdownTimeout     time.Duration
@@ -28,8 +30,9 @@ type Config struct {
 }
 
 type fileConfig struct {
-	Address      *string `json:"address"`
-	DatabasePath *string `json:"database_path"`
+	Address        *string `json:"address"`
+	DatabasePath   *string `json:"database_path"`
+	CertificateDir *string `json:"certificate_dir"`
 	// Retain the legacy keys only so upgrades do not reject an existing config
 	// file. They are deliberately ignored: administrator credentials are read
 	// exclusively from SQLite.
@@ -47,8 +50,9 @@ type fileConfig struct {
 // credentials are initialized separately and stored only in SQLite.
 func Default() Config {
 	return Config{
-		Address:             "0.0.0.0:7575",
+		Address:             "0.0.0.0:17575",
 		DatabasePath:        "./data/vonet.db",
+		CertificateDir:      "./data/etc/certs",
 		SessionTTL:          24 * time.Hour,
 		SecureCookies:       false,
 		ShutdownTimeout:     10 * time.Second,
@@ -62,24 +66,39 @@ func Default() Config {
 // applies VONET_* environment overrides.
 func Load() (Config, error) {
 	cfg := Default()
+	certificateDirConfigured := false
 
 	if path := strings.TrimSpace(os.Getenv("VONET_CONFIG")); path != "" {
 		fileValues, err := loadFile(path)
 		if err != nil {
 			return Config{}, err
 		}
+		certificateDirConfigured = fileValues.CertificateDir != nil
 		if err := applyFile(&cfg, fileValues); err != nil {
 			return Config{}, fmt.Errorf("load config %q: %w", path, err)
 		}
 	}
 
+	if _, ok := os.LookupEnv("VONET_CERTIFICATE_DIR"); ok {
+		certificateDirConfigured = true
+	}
 	if err := applyEnvironment(&cfg); err != nil {
 		return Config{}, err
+	}
+	if !certificateDirConfigured {
+		cfg.CertificateDir = certificateDirForDatabase(cfg.DatabasePath)
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func certificateDirForDatabase(databasePath string) string {
+	if strings.TrimSpace(databasePath) == "" {
+		return filepath.Join("data", "etc", "certs")
+	}
+	return filepath.Join(filepath.Dir(databasePath), "etc", "certs")
 }
 
 func loadFile(path string) (fileConfig, error) {
@@ -120,6 +139,9 @@ func applyFile(cfg *Config, values fileConfig) error {
 	if values.DatabasePath != nil {
 		cfg.DatabasePath = *values.DatabasePath
 	}
+	if values.CertificateDir != nil {
+		cfg.CertificateDir = *values.CertificateDir
+	}
 	if values.SessionTTL != nil {
 		duration, err := time.ParseDuration(*values.SessionTTL)
 		if err != nil {
@@ -158,6 +180,7 @@ func applyEnvironment(cfg *Config) error {
 
 	applyString("VONET_ADDR", &cfg.Address)
 	applyString("VONET_DATABASE_PATH", &cfg.DatabasePath)
+	applyString("VONET_CERTIFICATE_DIR", &cfg.CertificateDir)
 
 	if value, ok := os.LookupEnv("VONET_SESSION_TTL"); ok {
 		duration, err := time.ParseDuration(value)
@@ -218,6 +241,9 @@ func (cfg Config) Validate() error {
 	}
 	if strings.TrimSpace(cfg.DatabasePath) == "" {
 		return errors.New("database_path must not be empty")
+	}
+	if strings.TrimSpace(cfg.CertificateDir) == "" {
+		return errors.New("certificate_dir must not be empty")
 	}
 	if cfg.SessionTTL < 5*time.Minute || cfg.SessionTTL > 30*24*time.Hour {
 		return errors.New("session_ttl must be between 5m and 720h")

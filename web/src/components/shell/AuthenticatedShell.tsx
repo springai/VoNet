@@ -25,7 +25,6 @@ import { BrandLogo } from "./BrandLogo";
 import { VersionBadge } from "./VersionBadge";
 import { listPlugins, type InstalledPlugin } from "../../extensions";
 import { api } from "../../api";
-import type { SystemInfo } from "../../types";
 import { IncomingCallMonitor } from "../call/IncomingCallMonitor";
 
 type SidebarNavItem = {
@@ -102,23 +101,10 @@ export function AuthenticatedShell({
   const [isMobile, setIsMobile] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [plugins, setPlugins] = useState<InstalledPlugin[]>([]);
-  const [developer, setDeveloper] = useState(false);
   const { logout, user } = useAuth();
   const { t, lang } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
-
-  useEffect(() => {
-    let active = true;
-    const load = () => api<SystemInfo>("/system/info").then((info) => {
-      if (active) setDeveloper(!!info.developer);
-    }).catch(() => {
-      if (active) setDeveloper(false);
-    });
-    void load();
-    const timer = window.setInterval(load, 10_000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, []);
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 767px)");
@@ -187,14 +173,12 @@ export function AuthenticatedShell({
       items: [...group.items],
     }));
 
-    if (developer) {
-      const networkGroup = groups.find((group) => group.key === "network");
-      networkGroup?.items.splice(1, 0, {
-        to: "/export-proxy",
-        label: "导出代理",
-        icon: GlobeRegular,
-      });
-    }
+    const networkGroup = groups.find((group) => group.key === "network");
+    networkGroup?.items.splice(1, 0, {
+      to: "/export-proxy",
+      label: "导出代理",
+      icon: GlobeRegular,
+    });
 
     for (const extension of sidebarPlugins) {
       const itemKey = extension.contribution.after?.replace(/^\//, "") || "sms";

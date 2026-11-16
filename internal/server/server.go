@@ -49,7 +49,6 @@ type Options struct {
 	Extensions          *extensions.Manager
 	ExportProxy         *exportproxy.Manager
 	NodeAdapter         *nodeadapter.Service
-	DeveloperEnabled    bool
 	UpdateRepository    string
 	UpdateToken         string
 	HTTPS               *httpsmode.Manager
@@ -85,7 +84,6 @@ type Server struct {
 	extensions          *extensions.Manager
 	exportProxy         *exportproxy.Manager
 	nodeAdapter         *nodeadapter.Service
-	developerEnabled    bool
 	updateRepository    string
 	updateToken         string
 	updateCheck         func(context.Context, string, string, string) (update.CheckResult, error)
@@ -169,7 +167,6 @@ func New(options Options) (*Server, error) {
 		extensions:          options.Extensions,
 		exportProxy:         options.ExportProxy,
 		nodeAdapter:         options.NodeAdapter,
-		developerEnabled:    options.DeveloperEnabled,
 		updateRepository:    strings.TrimSpace(options.UpdateRepository),
 		updateToken:         strings.TrimSpace(options.UpdateToken),
 		https:               options.HTTPS,

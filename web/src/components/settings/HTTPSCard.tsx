@@ -1,24 +1,51 @@
-import { LockClosedRegular } from "@fluentui/react-icons";
+import { useState } from "react";
+import { ArrowDownloadRegular, ArrowUploadRegular, LockClosedRegular, ShieldCheckmarkRegular } from "@fluentui/react-icons";
+import { api, apiMessage } from "../../api";
 import type { HTTPSSettings } from "../../types";
 import { useI18n } from "../../lib/i18n";
-import { Button } from "../ui/Button";
-import { Switch } from "../ui/Switch";
+import { Button, Modal, Textarea, message } from "../ui";
 import { CardDecor, CardIcon, CardTitle } from "./Cards";
 
 export function HTTPSCard({
   value,
   loading,
-  saving,
-  onToggle,
+  onUploaded,
 }: {
   value: HTTPSSettings | null;
   loading: boolean;
-  saving: boolean;
-  onToggle: (enabled: boolean) => void;
+  onUploaded: (value: HTTPSSettings) => void;
 }) {
   const { lang } = useI18n();
   const zh = lang === "zh";
-  const enabled = !!value?.enabled;
+  const [open, setOpen] = useState(false);
+  const [certificate, setCertificate] = useState("");
+  const [privateKey, setPrivateKey] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function uploadCertificate() {
+    if (!certificate.trim() || !privateKey.trim() || saving) return;
+    setSaving(true);
+    try {
+      const updated = await api<HTTPSSettings>("/settings/https/certificate", {
+        method: "POST",
+        body: { certificate, privateKey },
+      });
+      onUploaded(updated);
+      setOpen(false);
+      setCertificate("");
+      setPrivateKey("");
+      message.success(
+        updated.restartPending
+          ? (zh ? "HTTPS 证书已保存，服务正在重启以启用新证书" : "HTTPS certificate saved; the service is restarting to activate it")
+          : (zh ? "HTTPS 证书已保存并启用" : "HTTPS certificate saved and enabled"),
+      );
+    } catch (error) {
+      message.error(apiMessage(error) || (zh ? "HTTPS 证书保存失败" : "Failed to save HTTPS certificate"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="ui-card group relative overflow-hidden p-8">
       <CardDecor />
@@ -28,33 +55,109 @@ export function HTTPSCard({
             <LockClosedRegular className="text-[24px]" />
           </CardIcon>
           <CardTitle
-            title={zh ? "本机自签 HTTPS" : "Local self-signed HTTPS"}
-            subtitle={zh ? "为安全连接提供 HTTPS" : "HTTPS for secure connections"}
+            title={zh ? "本机 HTTPS" : "Local HTTPS"}
+            subtitle={zh ? "HTTPS 已强制启用" : "HTTPS is always enforced"}
           />
         </div>
-        <Switch checked={enabled} disabled={loading || saving} loading={saving} onChange={onToggle} />
+        <div className="flex h-8 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300">
+          <ShieldCheckmarkRegular className="text-[17px]" />
+          {zh ? "已启用，不可关闭" : "Enabled, cannot be disabled"}
+        </div>
       </div>
       <div className="relative z-10 space-y-4 text-sm text-gray-600 dark:text-gray-300">
         <p>
-          {enabled
-            ? (zh ? "已强制 HTTPS；HTTP 请求会自动跳转。关闭后立即恢复 HTTP。" : "HTTPS is enforced and HTTP redirects automatically. Disable it to return to HTTP immediately.")
-            : (zh ? "当前使用 HTTP。启用后会生成并持久保存本机自签证书。" : "HTTP is active. Enabling generates and persists a local self-signed certificate.")}
-        </p>
-        {value?.fingerprint ? (
-          <div className="rounded-xl bg-gray-50 p-3 dark:bg-white/5">
-            <div className="mb-1 text-xs font-bold uppercase tracking-wider text-gray-500">SHA-256</div>
-            <div className="break-all font-mono text-xs">{value.fingerprint}</div>
-          </div>
-        ) : null}
-        <p className="text-xs text-amber-600 dark:text-amber-400">
           {zh
-            ? "自签证书需要在系统或浏览器中信任，否则浏览器可能继续提示连接不安全。"
-            : "Trust the self-signed certificate in the operating system or browser; otherwise the browser may keep warning that the connection is not secure."}
+            ? "HTTP 请求会自动跳转到 HTTPS。可上传 CA 签发的证书与匹配私钥；未上传时使用本机自签证书。"
+            : "HTTP requests redirect to HTTPS. Upload a CA-issued certificate and matching private key, or keep using the local self-signed certificate."}
         </p>
-        <Button onClick={() => window.open("/api/settings/https/certificate", "_blank")} disabled={loading}>
-          {zh ? "下载自签证书" : "Download certificate"}
-        </Button>
+        <div className="grid gap-2 rounded-xl bg-gray-50 p-3 dark:bg-white/5">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs font-bold uppercase tracking-wider text-gray-500">
+              {zh ? "证书来源" : "Certificate source"}
+            </span>
+            <span>{value?.certificateSource === "uploaded" ? (zh ? "已上传证书" : "Uploaded certificate") : (zh ? "本机自签证书" : "Self-signed certificate")}</span>
+          </div>
+          {value?.certificateSubject ? (
+            <div className="min-w-0 text-xs text-gray-500 dark:text-gray-400">
+              <span className="font-semibold">{zh ? "主体：" : "Subject: "}</span>
+              <span className="break-all">{value.certificateSubject}</span>
+            </div>
+          ) : null}
+          {value?.fingerprint ? (
+            <div className="min-w-0 text-xs text-gray-500 dark:text-gray-400">
+              <span className="font-semibold">SHA-256: </span>
+              <span className="break-all font-mono">{value.fingerprint}</span>
+            </div>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="primary"
+            loading={saving}
+            disabled={loading}
+            icon={<ArrowUploadRegular />}
+            onClick={() => setOpen(true)}
+          >
+            {zh ? "上传 CA 证书" : "Upload CA certificate"}
+          </Button>
+          <Button
+            disabled={loading}
+            icon={<ArrowDownloadRegular />}
+            onClick={() => window.open("/api/settings/https/certificate", "_blank")}
+          >
+            {zh ? "下载当前证书" : "Download current certificate"}
+          </Button>
+        </div>
       </div>
+      <Modal
+        open={open}
+        onClose={() => !saving && setOpen(false)}
+        title={zh ? "上传 CA 证书" : "Upload CA certificate"}
+        width="max-w-3xl"
+        closeOnOverlay={!saving}
+        showClose={!saving}
+        footer={
+          <>
+            <Button disabled={saving} onClick={() => setOpen(false)}>{zh ? "取消" : "Cancel"}</Button>
+            <Button
+              variant="primary"
+              loading={saving}
+              disabled={!certificate.trim() || !privateKey.trim()}
+              onClick={() => void uploadCertificate()}
+            >
+              {zh ? "保存证书" : "Save certificate"}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div>
+            <div className="mb-1.5 text-xs font-bold uppercase text-gray-500">{zh ? "证书内容（PEM）" : "Certificate (PEM)"}</div>
+            <Textarea
+              value={certificate}
+              onChange={(event) => setCertificate(event.target.value)}
+              rows={9}
+              className="font-mono text-xs"
+              placeholder={"-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"}
+            />
+          </div>
+          <div>
+            <div className="mb-1.5 text-xs font-bold uppercase text-gray-500">{zh ? "私钥内容（PEM）" : "Private key (PEM)"}</div>
+            <Textarea
+              value={privateKey}
+              onChange={(event) => setPrivateKey(event.target.value)}
+              rows={9}
+              className="font-mono text-xs"
+              placeholder={"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"}
+            />
+          </div>
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            {zh
+              ? "证书与私钥必须匹配。私钥仅保存到本机 data/etc/certs 目录，并使用仅所有者可读权限。"
+              : "The certificate and private key must match. The key is stored only in the local data/etc/certs directory with owner-only permissions."}
+          </p>
+        </div>
+      </Modal>
     </div>
   );
 }

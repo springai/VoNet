@@ -116,7 +116,7 @@ El instalador:
 Después de la instalación, abra:
 
 ```text
-http://<server-address>:7575
+http://<server-address>:17575
 ```
 
 ### Instalación manual del binario
@@ -178,7 +178,7 @@ docker run -d \
   ghcr.io/mengmengcode/vonet:latest
 ```
 
-Abra `http://<server-address>:7575` después de que se inicie el contenedor. La red del host es necesaria para que las interfaces de red QMI permanezcan visibles para VoNet, mientras que el acceso privilegiado a dispositivos es necesario para los puertos serie, los nodos de control QMI, las interfaces TUN, la configuración de red y los dispositivos añadidos después del inicio del contenedor. El montaje bind de `/dev` hace visibles los nuevos nodos `ttyUSB*`, `ttyACM*`, `cdc-wdm*` y MHI `wwan*` sin recrear el contenedor.
+Abra `http://<server-address>:17575` después de que se inicie el contenedor. La red del host es necesaria para que las interfaces de red QMI permanezcan visibles para VoNet, mientras que el acceso privilegiado a dispositivos es necesario para los puertos serie, los nodos de control QMI, las interfaces TUN, la configuración de red y los dispositivos añadidos después del inicio del contenedor. El montaje bind de `/dev` hace visibles los nuevos nodos `ttyUSB*`, `ttyACM*`, `cdc-wdm*` y MHI `wwan*` sin recrear el contenedor.
 
 Este modo otorga intencionadamente a VoNet un amplio acceso a los dispositivos y a la pila de red del host. Úselo solo en un host Linux de confianza. El descubrimiento automático identifica los módems USB Quectel compatibles (ID de fabricante USB `2c7c`) y los módems PCIe/MHI expuestos a través del subsistema Linux WWAN; no identifica disposiciones arbitrarias de módems. Mapear solo nodos individuales con `--device`, como `/dev/ttyUSB2`, `/dev/cdc-wdm0` o `/dev/wwan0qmi0`, limita el contenedor a esos nodos fijos y no permite un descubrimiento completo de múltiples dispositivos o de conexiones en caliente.
 
@@ -205,7 +205,7 @@ VoNet lee un archivo de configuración JSON opcional desde `VONET_CONFIG` y lueg
 
 | Variable de entorno | Predeterminado | Descripción |
 | --- | --- | --- |
-| `VONET_ADDR` | `0.0.0.0:7575` | Dirección de escucha HTTP. |
+| `VONET_ADDR` | `0.0.0.0:17575` | Dirección de escucha HTTP. |
 | `VONET_DATABASE_PATH` | `./data/vonet.db` | Ruta de la base de datos SQLite. |
 | `VONET_SESSION_TTL` | `24h` | Duración de la sesión de autenticación. |
 | `VONET_SECURE_COOKIES` | `false` | Anulación opcional que fuerza Secure en todas las entradas; sin ella, cada entrada HTTP/HTTPS selecciona su protección automáticamente. |

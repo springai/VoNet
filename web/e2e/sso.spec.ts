@@ -97,8 +97,8 @@ test("callback URL is available before creating the OIDC client and follows unsa
   expect(persisted.public_origin).toBe("");
 
   for (const [input, normalized] of [
-    ["http://[::ffff:192.168.1.20]:7575", "http://[::ffff:c0a8:114]:7575"],
-    ["http://[0:0:0:0:0:0:0:1]:7575", "http://[::1]:7575"],
+    ["http://[::ffff:192.168.1.20]:17575", "http://[::ffff:c0a8:114]:17575"],
+    ["http://[0:0:0:0:0:0:0:1]:17575", "http://[::1]:17575"],
   ]) {
     await origin.fill(input);
     await expect(card(page).getByText(normalized + "/api/auth/sso/callback", { exact: true })).toBeVisible();

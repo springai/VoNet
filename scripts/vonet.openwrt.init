@@ -43,6 +43,7 @@ start_service() {
 	procd_open_instance
 	procd_set_param command "$PROGRAM" serve
 	procd_set_param env VONET_DATABASE_PATH=/opt/vonet/data/vonet.db
+	procd_set_param env VONET_CERTIFICATE_DIR=/opt/vonet/data/etc/certs
 	if [ -r "$ENV_FILE" ]; then
 		while IFS='=' read -r name value; do
 			case "$name" in

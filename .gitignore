@@ -20,6 +20,7 @@ vc.jar
 .env
 .env.*
 !.env.example
+/data/etc/certs/
 
 # ---- Frontend build products ----
 web/dist/

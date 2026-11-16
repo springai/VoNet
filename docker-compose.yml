@@ -34,7 +34,7 @@ services:
     # needs the host network namespace visible inside the container, which
     # network_mode: host provides directly. Port publishing is therefore
     # meaningless (the container shares the host stack and vonet binds
-    # 0.0.0.0:7575 itself); proxy ports opened by the plugin are likewise
+    # 0.0.0.0:17575 itself); proxy ports opened by the plugin are likewise
     # reachable on the host IP without explicit mapping.
     network_mode: host
 

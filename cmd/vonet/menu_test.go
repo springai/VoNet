@@ -16,13 +16,13 @@ func TestWebAddressWithPort(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "IPv4", address: "0.0.0.0:7575", port: "8080", want: "0.0.0.0:8080"},
-		{name: "IPv6", address: "[::]:7575", port: "8443", want: "[::]:8443"},
-		{name: "minimum", address: "127.0.0.1:7575", port: "1", want: "127.0.0.1:1"},
-		{name: "maximum", address: "127.0.0.1:7575", port: "65535", want: "127.0.0.1:65535"},
-		{name: "zero", address: "0.0.0.0:7575", port: "0", wantErr: true},
-		{name: "too large", address: "0.0.0.0:7575", port: "65536", wantErr: true},
-		{name: "not numeric", address: "0.0.0.0:7575", port: "http", wantErr: true},
+		{name: "IPv4", address: "0.0.0.0:17575", port: "8080", want: "0.0.0.0:8080"},
+		{name: "IPv6", address: "[::]:17575", port: "8443", want: "[::]:8443"},
+		{name: "minimum", address: "127.0.0.1:17575", port: "1", want: "127.0.0.1:1"},
+		{name: "maximum", address: "127.0.0.1:17575", port: "65535", want: "127.0.0.1:65535"},
+		{name: "zero", address: "0.0.0.0:17575", port: "0", wantErr: true},
+		{name: "too large", address: "0.0.0.0:17575", port: "65536", wantErr: true},
+		{name: "not numeric", address: "0.0.0.0:17575", port: "http", wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -42,7 +42,7 @@ func TestWebAddressWithPort(t *testing.T) {
 
 func TestRewriteEnvValuePreservesOtherSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "env")
-	if err := os.WriteFile(path, []byte("VONET_ADMIN_PASSWORD=secret\nVONET_ADDR=0.0.0.0:7575\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("VONET_ADMIN_PASSWORD=secret\nVONET_ADDR=0.0.0.0:17575\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := rewriteEnvValue(path, "VONET_ADDR", "0.0.0.0:8080"); err != nil {
@@ -53,7 +53,7 @@ func TestRewriteEnvValuePreservesOtherSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(content)
-	if strings.Contains(got, "VONET_ADMIN_PASSWORD") || !strings.Contains(got, "VONET_ADDR=0.0.0.0:8080\n") || strings.Contains(got, ":7575") {
+	if strings.Contains(got, "VONET_ADMIN_PASSWORD") || !strings.Contains(got, "VONET_ADDR=0.0.0.0:8080\n") || strings.Contains(got, ":17575") {
 		t.Fatalf("rewritten env = %q", got)
 	}
 	if err := rewriteEnvValue(path, "VONET_ADDR", "0.0.0.0:9000\nVONET_ADMIN_PASSWORD=changed"); err == nil {

@@ -1895,3 +1895,67 @@ ike: IKE_AUTH EAP round 1: ike: responder reported fatal notification 10500
 - schema 34 恢复测试仍必须保持真实 34 边界，不应改成 `>= 34` 或只检查若干字段。
 - 后续若 `internal/store/store.go` 的 `schemaVersion` 再次提升，应同步更新 `scripts/ci/auth_restore_smoke.py` 的 `SCHEMA_VERSION`，否则 Docker smoke 会再次误报。
 - GitHub Actions 的 disabled 状态属于仓库运行配置，不会出现在代码 diff 中；同步工作流文件时不要误以为功能已经自动恢复。
+
+---
+
+### 64. 移除开发者模式、强制 HTTPS 证书管理与默认端口调整
+
+**主要修改内容**:
+
+1. **移除开发者模式**
+   - 删除隐藏的 `vonet develop on|off` 命令和启动期 `developer.enabled` 门禁。
+   - 插件、导出代理、漫游数据、公网 IP 检测、流量分析和高级自动任务直接初始化并开放。
+   - 系统设置不再按开发者状态隐藏设备配额、短信速率、HTTPS 和插件卡片。
+   - 设备配额等设置改用 `/api/settings/limits`；`/api/settings/developer` 仅作为兼容别名保留。
+
+2. **强制本机 HTTPS 与证书上传**
+   - HTTPS 在启动时强制启用，普通 HTTP 请求统一返回 308 并跳转 HTTPS；API 不允许关闭。
+   - 默认在项目 `data/etc/certs/` 创建目录并生成 `selfsigned.crt`、`selfsigned.key`。
+   - 系统设置新增“上传 CA 证书”输入对话框，可提交 PEM 证书和匹配私钥。
+   - 上传前使用 `tls.X509KeyPair` 和 X.509 解析验证证书/私钥配对、有效期；失败不会覆盖当前有效证书。
+   - 上传证书保存为 `custom.crt`、`custom.key`，私钥权限为 0600，并热切换当前 TLS 证书。
+   - 证书保存响应返回后自动重启 VoNet：systemd/OpenWrt 调用服务管理器，手动前台/后台进程则启动同一二进制的新进程并退出旧进程。
+   - 下载接口只返回当前证书，不返回私钥；`data/etc/certs/` 已加入 `.gitignore`。
+
+3. **端口和部署路径**
+   - 默认监听地址从 `0.0.0.0:7575` 改为 `0.0.0.0:17575`，Docker、Compose、开发代理、脚本和文档同步更新。
+   - 新增 `VONET_CERTIFICATE_DIR`；未显式配置时按数据库目录推导为 `<database directory>/etc/certs`，默认数据库对应 `./data/etc/certs`。
+   - systemd、安装脚本、Docker、Compose 和 OpenWrt 启动配置统一使用 `/opt/vonet/data/etc/certs`；该目录位于现有 `/opt/vonet/data` 持久卷内。
+
+**验证结果**:
+
+- `go test ./...`、`go vet ./...` 全部通过。
+- `CGO_ENABLED=1 go test -race ./internal/httpsmode ./internal/server` 通过。
+- `npm test` 83/83 通过，`npm run build` 通过。
+- `npm run test:e2e` 15/15 通过。
+- `docker compose config --quiet` 通过。
+- 本地真实启动验证通过：HTTPS health 返回 200，HTTP 返回 308 跳转 HTTPS，`admin/admin` 登录成功，自签证书自动写入 `data/etc/certs/`。
+- 在 `192.168.1.3` 上从 `/root` 使用 `VONET_DATABASE_PATH=/opt/vonet/data/vonet.db` 启动并上传证书验证通过；`selfsigned.crt/key` 与 `custom.crt/key` 均保存到 `/opt/vonet/data/etc/certs/`。
+- 服务器证书重启实测通过：上传后旧 PID 退出、新 PID 启动，运行中 TLS 指纹与新 `custom.crt` 指纹一致。
+
+**兼容与后续约束**:
+
+- 后续同步上游时不得重新引入开发者模式门禁、HTTP 关闭开关或默认端口 `7575`。
+- 用户上传的证书必须是完整 PEM 证书链和匹配的未加密 PEM 私钥；启动时无效或过期的自定义证书会回退到自签证书。
+- `data/etc/certs/` 中包含 TLS 私钥，必须继续被 Git 忽略，并纳入备份和权限保护范围。
+- systemd 和容器部署必须保留 `/opt/vonet/data` 的持久卷或可写路径，否则上传的证书会在重启后丢失。
+
+---
+
+### 65. 代理中心敏感信息隐藏
+
+**主要修改内容**:
+
+- 代理中心顶部新增统一的敏感信息显示/隐藏按钮，每次页面加载默认隐藏。
+- 上游代理列表默认隐藏 SOCKS5 地址；编辑对话框默认隐藏地址、用户名和密码，隐藏状态下输入框只读，避免误将掩码保存为配置。
+- 连通性检测默认隐藏 UDP 中继地址、DNS 测试地址和错误详情。
+- 卡片代理绑定列表及编辑弹窗默认使用部分掩码 ICCID，与 SIM 管理、仪表盘保持一致。
+- 卡片代理绑定改为只按 ICCID 管理：页面移除“当前设备”，新建请求不再提交或保存设备 ID，传入的旧设备字段也会被忽略。
+- 历史代理绑定发生 VoWiFi 重连时按 ICCID 动态查找当前实际绑定设备；卡片离线或更换设备不会改变代理绑定。
+- 点击“显示敏感信息”后，代理配置和诊断字段才完整显示；再次点击立即恢复隐藏。
+
+**验证结果**:
+
+- `npm test` 84/84 通过，包括代理秘密默认全隐藏的敏感信息测试。
+- `go test ./internal/server ./internal/store` 通过，包括传入设备 ID 时强制生成 ICCID-only 绑定的回归测试。
+- `npm run build` 与 TypeScript 检查通过。

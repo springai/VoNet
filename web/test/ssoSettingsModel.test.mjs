@@ -17,7 +17,7 @@ test("Pocket ID starts as an unsaved disabled draft with PKCE and automatic clie
 });
 
 test("callback URLs are available before saving credentials, including loopback development", () => {
-  for (const origin of ["http://localhost:5173", "http://127.0.0.1:8080", "http://192.168.111.27:7575", "http://10.0.0.2", "http://172.16.0.2", "http://[fd00::1]:7575", "http://[::1]:8080", "https://vonet.nas.test:8443"]) {
+  for (const origin of ["http://localhost:5173", "http://127.0.0.1:8080", "http://192.168.111.27:17575", "http://10.0.0.2", "http://172.16.0.2", "http://[fd00::1]:17575", "http://[::1]:8080", "https://vonet.nas.test:8443"]) {
     const draft = defaultSSOConfig(origin);
     assert.equal(draft.clientId, "");
     assert.equal(ssoCallbackPreview(draft.publicOrigin), `${origin}/api/auth/sso/callback`);
@@ -176,20 +176,20 @@ test("callback errors use a fixed whitelist, including prototype keys", () => {
 // Cover all accepted IPv4-mapped private ranges and adjacent rejected boundaries.
 test("mapped IPv6 callback previews agree with the backend private IPv4 policy", () => {
   for (const address of ["10.0.0.0", "10.255.255.255", "127.0.0.1", "172.16.0.0", "172.31.255.255", "192.168.0.0", "192.168.255.255", "a00:2", "ac10:2", "c0a8:114"]) {
-    const origin = `http://[::ffff:${address}]:7575`;
+    const origin = `http://[::ffff:${address}]:17575`;
     assert.equal(ssoCallbackPreview(origin), `${new URL(origin).origin}/api/auth/sso/callback`, address);
   }
   for (const address of ["9.255.255.255", "11.0.0.0", "126.255.255.255", "128.0.0.0", "172.15.255.255", "172.32.0.0", "192.167.255.255", "192.169.0.0", "169.254.169.254", "8.8.8.8", "808:808"]) {
-    const origin = `http://[::ffff:${address}]:7575`;
+    const origin = `http://[::ffff:${address}]:17575`;
     assert.equal(ssoCallbackPreview(origin), null, address);
   }
 });
 
 test("IPv6 previews use the Host spelling sent by browsers for callback registration", () => {
   for (const [input, expected] of [
-    ["http://[::ffff:192.168.1.20]:7575", "http://[::ffff:c0a8:114]:7575"],
-    ["http://[::ffff:10.0.0.2]:7575", "http://[::ffff:a00:2]:7575"],
-    ["http://[FD00:0000:0000:0000:0000:0000:0000:0001]:7575", "http://[fd00::1]:7575"],
+    ["http://[::ffff:192.168.1.20]:17575", "http://[::ffff:c0a8:114]:17575"],
+    ["http://[::ffff:10.0.0.2]:17575", "http://[::ffff:a00:2]:17575"],
+    ["http://[FD00:0000:0000:0000:0000:0000:0000:0001]:17575", "http://[fd00::1]:17575"],
     ["https://[2001:0DB8:0000:0000:0000:0000:0000:0001]:8443", "https://[2001:db8::1]:8443"],
     ["https://[2001:db8:0:0:0:0:0:1]:443/", "https://[2001:db8::1]"],
   ]) {

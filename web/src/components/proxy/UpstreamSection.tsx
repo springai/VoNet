@@ -4,6 +4,8 @@ import type { UpstreamProxy } from "../../types";
 import { Button, Pagination, Tag } from "../ui";
 import type { LoadError, UpstreamRow } from "./shared";
 import { useI18n } from "../../lib/i18n";
+import { useShowSensitive } from "../devices/shared";
+import { displaySecret } from "../../lib/sensitive";
 
 const PAGE_SIZE = 10;
 
@@ -21,6 +23,7 @@ export interface UpstreamSectionProps {
 
 export function UpstreamSection({ rows, loading, error, onRetry, onEdit, onDelete, onProbe, onToggle, toggleBusyId }: UpstreamSectionProps) {
   const { t } = useI18n();
+  const [showSensitive] = useShowSensitive();
   const [page, setPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
@@ -60,7 +63,7 @@ export function UpstreamSection({ rows, loading, error, onRetry, onEdit, onDelet
             {pageRows.map((row) => (
               <tr key={row.id} className="hover:bg-sky-50/40 dark:hover:bg-sky-500/[0.04]">
                 <td className="px-4 py-3 font-semibold">{row.name || row.id}</td>
-                <td className="px-4 py-3 font-mono text-xs">{row.addr}</td>
+                <td className="px-4 py-3 font-mono text-xs">{displaySecret(row.addr, showSensitive)}</td>
                 <td className="px-4 py-3"><Tag type={row.enabled ? "success" : "info"}>{row.enabled ? t("已启用") : t("已禁用")}</Tag></td>
                 <td className="px-4 py-3 text-xs text-gray-500">{t("点击“检测”获取结果")}</td>
                 <td className="px-4 py-3">

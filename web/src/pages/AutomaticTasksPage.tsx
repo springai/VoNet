@@ -7,7 +7,7 @@ import {
   SendClockRegular,
 } from "@fluentui/react-icons";
 import { api, apiMessage } from "../api";
-import type { DeviceListItem, DevicesResponse, SimCard, SystemInfo } from "../types";
+import type { DeviceListItem, DevicesResponse, SimCard } from "../types";
 import {
   Button,
   Input,
@@ -138,7 +138,7 @@ export default function AutomaticTasksPage() {
   const [runsPageSize, setRunsPageSize] = useState(20);
   const [devices, setDevices] = useState<DeviceListItem[]>([]);
   const [cards, setCards] = useState<SimCard[]>([]);
-	const [advancedTasksAvailable, setAdvancedTasksAvailable] = useState(false);
+	const advancedTasksAvailable = true;
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<TaskForm>(() => emptyForm());
@@ -152,16 +152,14 @@ export default function AutomaticTasksPage() {
   const load = useCallback(async (initial = false) => {
     if (initial) setLoading(true);
     try {
-      const [taskData, deviceData, cardData, systemInfo] = await Promise.all([
+      const [taskData, deviceData, cardData] = await Promise.all([
         api<{ tasks?: AutomaticTask[] }>("/automatic-tasks"),
         api<DevicesResponse>("/devices"),
         listCards(),
-		api<SystemInfo>("/system/info"),
       ]);
       setTasks(taskData.tasks || []);
       setDevices(deviceData.devices || []);
       setCards(cardData);
-		setAdvancedTasksAvailable(!!systemInfo.developer);
     } catch (error) {
       message.error(apiMessage(error));
     } finally {

@@ -11,6 +11,7 @@ var configEnvironment = []string{
 	"VONET_CONFIG",
 	"VONET_ADDR",
 	"VONET_DATABASE_PATH",
+	"VONET_CERTIFICATE_DIR",
 	"VONET_ADMIN_USERNAME",
 	"VONET_ADMIN_PASSWORD",
 	"VONET_ADMIN_PASSWORD_B64",
@@ -39,8 +40,11 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Address != "0.0.0.0:7575" {
+	if cfg.Address != "0.0.0.0:17575" {
 		t.Fatalf("Address = %q", cfg.Address)
+	}
+	if cfg.CertificateDir != filepath.Join("data", "etc", "certs") {
+		t.Fatalf("CertificateDir = %q", cfg.CertificateDir)
 	}
 	if cfg.MCPEnabled {
 		t.Fatal("MCP must be disabled by default")
@@ -78,6 +82,21 @@ func TestMCPAndUnknownUSBEnvironmentOverrides(t *testing.T) {
 	}
 }
 
+func TestCertificateDirFollowsDatabaseDirectory(t *testing.T) {
+	clearConfigEnvironment(t)
+	databaseDir := filepath.Join(t.TempDir(), "vonet-data")
+	t.Setenv("VONET_DATABASE_PATH", filepath.Join(databaseDir, "vonet.db"))
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	wanted := filepath.Join(databaseDir, "etc", "certs")
+	if cfg.CertificateDir != wanted {
+		t.Fatalf("CertificateDir = %q, want %q", cfg.CertificateDir, wanted)
+	}
+}
+
 func TestUnknownUSBProbingRequiresExplicitConfiguration(t *testing.T) {
 	clearConfigEnvironment(t)
 	path := filepath.Join(t.TempDir(), "vonet.json")
@@ -104,6 +123,7 @@ func TestLoadFileThenEnvironmentOverride(t *testing.T) {
 	content := []byte(`{
 		"address": "127.0.0.1:8000",
 		"database_path": "/tmp/from-file.db",
+		"certificate_dir": "/tmp/from-file-certs",
 		"session_ttl": "2h",
 		"secure_cookies": false,
 		"shutdown_timeout": "12s",
@@ -115,6 +135,7 @@ func TestLoadFileThenEnvironmentOverride(t *testing.T) {
 
 	t.Setenv("VONET_CONFIG", path)
 	t.Setenv("VONET_ADDR", "0.0.0.0:9000")
+	t.Setenv("VONET_CERTIFICATE_DIR", t.TempDir())
 	t.Setenv("VONET_SECURE_COOKIES", "true")
 
 	cfg, err := Load()
@@ -126,6 +147,9 @@ func TestLoadFileThenEnvironmentOverride(t *testing.T) {
 	}
 	if cfg.SessionTTL != 2*time.Hour {
 		t.Fatalf("file values not applied: %+v", cfg)
+	}
+	if cfg.CertificateDir == "/tmp/from-file-certs" || cfg.CertificateDir == filepath.Join("data", "etc", "certs") {
+		t.Fatalf("certificate directory environment override not applied: %+v", cfg)
 	}
 }
 

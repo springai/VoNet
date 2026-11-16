@@ -112,7 +112,7 @@ sudo bash install.sh --skip-vowifi-check
 安装完成后打开：
 
 ```text
-http://<server-address>:7575
+http://<server-address>:17575
 ```
 
 ### 手动二进制安装
@@ -170,7 +170,7 @@ docker run -d \
   ghcr.io/mengmengcode/vonet:latest
 ```
 
-容器启动后打开 `http://<server-address>:7575`。必须使用主机网络，才能让 QMI 网络接口保持对 VoNet 可见；串口、QMI 控制节点、TUN 接口、网络配置以及容器启动后新增的设备则需要特权设备访问。`/dev` 绑定挂载使新的 `ttyUSB*`、`ttyACM*`、`cdc-wdm*` 和 MHI `wwan*` 节点无需重建容器即可见。
+容器启动后打开 `http://<server-address>:17575`。必须使用主机网络，才能让 QMI 网络接口保持对 VoNet 可见；串口、QMI 控制节点、TUN 接口、网络配置以及容器启动后新增的设备则需要特权设备访问。`/dev` 绑定挂载使新的 `ttyUSB*`、`ttyACM*`、`cdc-wdm*` 和 MHI `wwan*` 节点无需重建容器即可见。
 
 该模式有意赋予 VoNet 对主机设备和网络栈的广泛访问权限，请仅在受信任的 Linux 主机上使用。自动发现会识别受支持的 Quectel USB 模组（USB 厂商 ID `2c7c`），以及通过 Linux WWAN 子系统暴露的 PCIe/MHI 模组；它不能识别任意模组布局。仅用 `--device` 映射单个节点，例如 `/dev/ttyUSB2`、`/dev/cdc-wdm0` 或 `/dev/wwan0qmi0`，会将容器限定在这些固定节点上，无法提供完整的多设备或热插拔发现。
 
@@ -227,7 +227,7 @@ VoNet 先从 `VONET_CONFIG` 读取可选的 JSON 配置文件，再应用 `VONET
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `VONET_ADDR` | `0.0.0.0:7575` | HTTP 监听地址。 |
+| `VONET_ADDR` | `0.0.0.0:17575` | HTTP 监听地址。 |
 | `VONET_DATABASE_PATH` | `./data/vonet.db` | SQLite 数据库路径。 |
 | `VONET_SESSION_TTL` | `24h` | 鉴权会话有效期。 |
 | `VONET_SECURE_COOKIES` | `false` | 可选的全局强制 Secure 覆盖；不启用时各 HTTP/HTTPS 入口自动选择 Cookie 保护。 |
@@ -254,7 +254,7 @@ Session，并继续受 Session 绑定 CSRF 保护。
 
 ```bash
 vonet token create --read-only --ttl 720h ci-runner  # Token 仅在此处显示一次
-curl -H "Authorization: Bearer vonet_..." http://127.0.0.1:7575/api/devices
+curl -H "Authorization: Bearer vonet_..." http://127.0.0.1:17575/api/devices
 ```
 
 使用 `vonet token list` 查看 Token 清单，使用 `vonet token revoke <name>`
@@ -267,7 +267,7 @@ Token；远程 Bearer 客户端还需要来源地址被访问策略允许，默�
 模式只服务私有网络。
 
 `VONET_MCP_ENABLED` 默认为 `false`。设为 `true`（或在配置文件中设置
-`mcp_enabled: true`）后，VoNet 会在 `http://<host>:7575/mcp` 通过 Streamable
+`mcp_enabled: true`）后，VoNet 会在 `http://<host>:17575/mcp` 通过 Streamable
 HTTP transport 暴露 MCP 端点，并要求 Bearer Token 鉴权。工具覆盖设备状态、
 短信会话和受保护的短信发送、eSIM Profile 列表与协调切换，以及 WiFi Calling
 状态和重连。eSIM 能力仅限列出已安装 Profile 和切换已安装 Profile：
@@ -288,7 +288,7 @@ Claude Code 客户端配置示例：
   "mcpServers": {
     "vonet": {
       "type": "http",
-      "url": "http://192.168.1.10:7575/mcp",
+      "url": "http://192.168.1.10:17575/mcp",
       "headers": { "Authorization": "Bearer vonet_..." }
     }
   }

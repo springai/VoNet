@@ -4,7 +4,7 @@
 #   docker compose -f docker-compose.sso-test.yml run --rm -T \
 #     --entrypoint /opt/vonet/bin/vonet vonet bootstrap-admin
 # Start: docker compose -f docker-compose.sso-test.yml up -d --wait
-# Visit http://127.0.0.1:7575 and use that same origin in SSO settings.
+# Visit http://127.0.0.1:17575 and use that same origin in SSO settings.
 # This loopback HTTP profile exercises private-network HTTP providers and IPv6
 # origin handling in tests without presenting the service as a TLS endpoint.
 # TLS termination is tested separately with trusted X-Forwarded-Proto and Host;
@@ -23,17 +23,17 @@ services:
     container_name: vonet-sso-test
     restart: unless-stopped
     ports:
-      - "127.0.0.1:7575:7575"
+      - "127.0.0.1:17575:17575"
     environment:
       VONET_CONTAINER: docker
-      VONET_ADDR: 0.0.0.0:7575
+      VONET_ADDR: 0.0.0.0:17575
       VONET_DATABASE_PATH: /opt/vonet/data/vonet.db
       VONET_SECURE_COOKIES: "false"
       TZ: Asia/Shanghai
     volumes:
       - vonet-sso-test-data:/opt/vonet/data
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7575/readyz"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:17575/readyz"]
       interval: 10s
       timeout: 3s
       start_period: 60s

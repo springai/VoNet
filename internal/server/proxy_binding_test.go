@@ -346,3 +346,31 @@ func TestProfileProxyBindingRejectsLegacyOfflinePrebind(t *testing.T) {
 		t.Fatalf("group offline prebind reconnects = %d, want 0", controller.reconnects)
 	}
 }
+
+func TestProxyBindingGroupCreateIgnoresDeviceID(t *testing.T) {
+	server, database, controller := newProfileBindingTestServer(t)
+	offlineICCID := "89104100000000000003"
+	if err := database.UpsertSimCard(context.Background(), store.SimCard{ICCID: offlineICCID}); err != nil {
+		t.Fatal(err)
+	}
+	response := proxyBindingGroupCreateRequest(t, server, `{
+		"device_id":"ec20",
+		"iccid":"89104100000000000003",
+		"profile_name":"ICCID-only binding",
+		"proxy_ids":["route-1"]
+	}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", response.Code, response.Body.String())
+	}
+	group, err := database.DeviceProxyBindingGroupByICCID(context.Background(), offlineICCID)
+	if err != nil || group.DeviceID != "" || len(group.Routes) != 1 {
+		t.Fatalf("ICCID-only binding = %+v, %v", group, err)
+	}
+	data := proxyBindingResponseData(t, response)
+	if data["device_id"] != "" {
+		t.Fatalf("response exposed device association: %#v", data)
+	}
+	if controller.reconnects != 0 {
+		t.Fatalf("offline ICCID-only binding reconnects = %d, want 0", controller.reconnects)
+	}
+}

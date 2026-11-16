@@ -320,16 +320,55 @@ func RestartService(logger *slog.Logger) error {
 		return nil
 	}
 	if _, err := exec.LookPath("systemctl"); err != nil {
-		return fmt.Errorf("neither /etc/init.d/vonet nor systemctl is available")
+		return restartCurrentProcess(logger)
 	}
-	unit := detectSystemdUnit(logger)
-	// Queue the restart and let systemctl exit before systemd stops this unit.
-	// A blocking restart command becomes part of vonet.service's own cgroup and
-	// waits for that same cgroup to terminate, creating a stop-timeout cycle.
-	cmd := exec.Command("systemctl", "restart", "--no-block", unit)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		logger.Warn("systemctl restart failed", "error", err, "output", string(out))
-		return fmt.Errorf("systemctl restart %s: %w", unit, err)
+	if strings.TrimSpace(os.Getenv("VONET_SYSTEMD_UNIT")) != "" ||
+		strings.TrimSpace(os.Getenv("INVOCATION_ID")) != "" {
+		unit := detectSystemdUnit(logger)
+		// Queue the restart and let systemctl exit before systemd stops this unit.
+		// A blocking restart command becomes part of vonet.service's own cgroup
+		// and waits for that same cgroup to terminate.
+		cmd := exec.Command("systemctl", "restart", "--no-block", unit)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			logger.Warn("systemctl restart failed", "error", err, "output", string(out))
+			return fmt.Errorf("systemctl restart %s: %w", unit, err)
+		}
+		return nil
+	}
+	return restartCurrentProcess(logger)
+}
+
+func restartCurrentProcess(logger *slog.Logger) error {
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("automatic process restart is not supported on Windows")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve running executable: %w", err)
+	}
+	// The replacement waits until the old process releases the listener, then
+	// starts in its own session where setsid is available.
+	script := `oldpid="$1"; executable="$2"; shift 2; i=0; while kill -0 "$oldpid" 2>/dev/null && [ "$i" -lt 150 ]; do sleep 0.2; i=$((i + 1)); done; if command -v setsid >/dev/null 2>&1; then exec setsid "$executable" "$@"; else exec "$executable" "$@"; fi`
+	commandArgs := append(
+		[]string{"-c", script, "vonet-restart", strconv.Itoa(os.Getpid()), executable},
+		os.Args[1:]...,
+	)
+	command := exec.Command("/bin/sh", commandArgs...)
+	command.Env = os.Environ()
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("start replacement process: %w", err)
+	}
+	current, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		return fmt.Errorf("resolve current process: %w", err)
+	}
+	if err := current.Signal(os.Interrupt); err != nil {
+		return fmt.Errorf("stop current process: %w", err)
+	}
+	if logger != nil {
+		logger.Info("manual process restart scheduled", "executable", executable)
 	}
 	return nil
 }

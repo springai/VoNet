@@ -116,7 +116,7 @@ Le programme d'installation :
 Après l'installation, ouvrez :
 
 ```text
-http://<server-address>:7575
+http://<server-address>:17575
 ```
 
 ### Installation manuelle du binaire
@@ -178,7 +178,7 @@ docker run -d \
   ghcr.io/mengmengcode/vonet:latest
 ```
 
-Ouvrez `http://<server-address>:7575` après le démarrage du conteneur. Le réseau de l'hôte est nécessaire pour que les interfaces réseau QMI restent visibles par VoNet, tandis que l'accès privilégié aux périphériques est nécessaire pour les ports série, les nœuds de contrôle QMI, les interfaces TUN, la configuration réseau et les périphériques ajoutés après le démarrage du conteneur. Le montage bind de `/dev` rend les nouveaux nœuds `ttyUSB*`, `ttyACM*`, `cdc-wdm*` et MHI `wwan*` visibles sans recréer le conteneur.
+Ouvrez `http://<server-address>:17575` après le démarrage du conteneur. Le réseau de l'hôte est nécessaire pour que les interfaces réseau QMI restent visibles par VoNet, tandis que l'accès privilégié aux périphériques est nécessaire pour les ports série, les nœuds de contrôle QMI, les interfaces TUN, la configuration réseau et les périphériques ajoutés après le démarrage du conteneur. Le montage bind de `/dev` rend les nouveaux nœuds `ttyUSB*`, `ttyACM*`, `cdc-wdm*` et MHI `wwan*` visibles sans recréer le conteneur.
 
 Ce mode donne intentionnellement à VoNet un large accès aux périphériques et à la pile réseau de l'hôte. Ne l'utilisez que sur un hôte Linux de confiance. La découverte automatique identifie les modems USB Quectel pris en charge (identifiant de fabricant USB `2c7c`) et les modems PCIe/MHI exposés par le sous-système Linux WWAN ; elle ne reconnaît pas toutes les configurations de modems. Le mappage de nœuds individuels uniquement avec `--device`, comme `/dev/ttyUSB2`, `/dev/cdc-wdm0` ou `/dev/wwan0qmi0`, limite le conteneur à ces nœuds fixes et ne permet pas une découverte complète de plusieurs périphériques ou des branchements à chaud.
 
@@ -205,7 +205,7 @@ VoNet lit un fichier de configuration JSON optionnel depuis `VONET_CONFIG`, puis
 
 | Variable d'environnement | Par défaut | Description |
 | --- | --- | --- |
-| `VONET_ADDR` | `0.0.0.0:7575` | Adresse d'écoute HTTP. |
+| `VONET_ADDR` | `0.0.0.0:17575` | Adresse d'écoute HTTP. |
 | `VONET_DATABASE_PATH` | `./data/vonet.db` | Chemin de la base de données SQLite. |
 | `VONET_SESSION_TTL` | `24h` | Durée de vie de la session d'authentification. |
 | `VONET_SECURE_COOKIES` | `false` | Substitution facultative imposant Secure sur toutes les entrées ; sinon, chaque entrée HTTP/HTTPS choisit automatiquement sa protection. |

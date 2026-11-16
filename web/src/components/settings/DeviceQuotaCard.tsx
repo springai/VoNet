@@ -1,5 +1,5 @@
 import { SettingsRegular } from "@fluentui/react-icons";
-import type { DeveloperSettings } from "../../types";
+import type { SystemLimitsSettings } from "../../types";
 import { useI18n } from "../../lib/i18n";
 import { Button } from "../ui/Button";
 import { Input } from "../ui/Input";
@@ -13,7 +13,7 @@ export function DeviceQuotaCard({
   onLimitChange,
   onSave,
 }: {
-  value: DeveloperSettings | null;
+  value: SystemLimitsSettings | null;
   limit: number;
   loading: boolean;
   saving: boolean;

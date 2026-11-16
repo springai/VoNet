@@ -179,7 +179,7 @@ export function CardOverviewTab({ card }: { card: SimCard }) {
   const isNative410 = device?.deviceType === "wifi_410";
   const vowifiInUse = isVoWiFiInUse(device, isReader);
   const canReconnectVoWiFi = !!device && (isReader || !!device.vowifiEnabled || vowifiInUse);
-  const showNetworkDetails = !!device?.developerEnabled && !isReader;
+  const showNetworkDetails = !isReader;
   const operatorDisplay = device ? simOperatorDisplay(device) : card.carrier || card.spn || "--";
 
   return (
@@ -209,7 +209,7 @@ export function CardOverviewTab({ card }: { card: SimCard }) {
               <Button loading={reconnecting} onClick={() => void handleReconnectVoWiFi()} icon={<ArrowSyncRegular />}>
                 {t("重连 VoWiFi")}
               </Button>
-            ) : device.developerEnabled && !isReader ? (
+            ) : !isReader ? (
               <div className="flex h-9 items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-gray-700 dark:border-white/10 dark:text-gray-200">
                 <span>{t("漫游数据")}</span>
                 <Switch
@@ -275,7 +275,7 @@ export function CardOverviewTab({ card }: { card: SimCard }) {
               />
             ) : null}
           </div>
-          {device.developerEnabled && device.networkEnabled && !isReader ? (
+          {device.networkEnabled && !isReader ? (
             <OverviewTrafficChart deviceId={device.id} />
           ) : null}
           {!isReader ? (

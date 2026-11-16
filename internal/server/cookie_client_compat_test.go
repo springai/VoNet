@@ -40,7 +40,7 @@ func newCookieCompatibilityFixture(t *testing.T, origin string) *ssoHTTPFixture 
 // Preserve an existing password+Cookie API client even when a disabled SSO
 // draft names HTTPS for the same authority. All network traffic is loopback.
 func TestPasswordCookieClientIgnoresSSODraft(t *testing.T) {
-	for _, entry := range []string{"http://192.168.111.27:7575", "http://vonet.example"} {
+	for _, entry := range []string{"http://192.168.111.27:17575", "http://vonet.example"} {
 		t.Run(entry, func(t *testing.T) {
 			f := newCookieCompatibilityFixture(t, "https"+entry[len("http"):])
 			upstream, _ := url.Parse(f.server.URL)
@@ -139,8 +139,8 @@ func TestBearerEntriesRemainIndependentOfSSO(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, entry := range []string{
-		"http://192.168.111.27:7575",
-		"http://127.0.0.1:7575",
+		"http://192.168.111.27:17575",
+		"http://127.0.0.1:17575",
 		"https://vonet.example",
 	} {
 		for _, tc := range []struct {

@@ -112,7 +112,7 @@ sudo bash install.sh --skip-vowifi-check
 安裝完成後開啟：
 
 ```text
-http://<server-address>:7575
+http://<server-address>:17575
 ```
 
 ### 手動二進位安裝
@@ -170,7 +170,7 @@ docker run -d \
   ghcr.io/mengmengcode/vonet:latest
 ```
 
-容器啟動後開啟 `http://<server-address>:7575`。必須使用主機網路，才能讓 QMI 網路介面持續對 VoNet 可見；序列埠、QMI 控制節點、TUN 介面、網路設定以及容器啟動後新增的裝置則需要特權裝置存取。`/dev` 繫結掛載使新的 `ttyUSB*`、`ttyACM*`、`cdc-wdm*` 和 MHI `wwan*` 節點無需重建容器即可見。
+容器啟動後開啟 `http://<server-address>:17575`。必須使用主機網路，才能讓 QMI 網路介面持續對 VoNet 可見；序列埠、QMI 控制節點、TUN 介面、網路設定以及容器啟動後新增的裝置則需要特權裝置存取。`/dev` 繫結掛載使新的 `ttyUSB*`、`ttyACM*`、`cdc-wdm*` 和 MHI `wwan*` 節點無需重建容器即可見。
 
 此模式刻意賦予 VoNet 對主機裝置和網路堆疊的廣泛存取權限，請僅在受信任的 Linux 主機上使用。自動探索會辨識受支援的 Quectel USB 模組（USB 廠商 ID `2c7c`），以及透過 Linux WWAN 子系統提供的 PCIe/MHI 模組；它無法辨識任意模組配置。僅以 `--device` 對應個別節點，例如 `/dev/ttyUSB2`、`/dev/cdc-wdm0` 或 `/dev/wwan0qmi0`，會將容器限制在這些固定節點上，無法提供完整的多裝置或熱插拔探索。
 
@@ -197,7 +197,7 @@ VoNet 先從 `VONET_CONFIG` 讀取可選的 JSON 配置檔，再套用 `VONET_*`
 
 | 環境變數 | 預設值 | 說明 |
 | --- | --- | --- |
-| `VONET_ADDR` | `0.0.0.0:7575` | HTTP 監聽位址。 |
+| `VONET_ADDR` | `0.0.0.0:17575` | HTTP 監聽位址。 |
 | `VONET_DATABASE_PATH` | `./data/vonet.db` | SQLite 資料庫路徑。 |
 | `VONET_SESSION_TTL` | `24h` | 驗證工作階段有效期。 |
 | `VONET_SECURE_COOKIES` | `false` | 可選的全域強制 Secure 覆寫；未啟用時，各 HTTP/HTTPS 入口會自動選擇 Cookie 保護。 |

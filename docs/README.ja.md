@@ -112,7 +112,7 @@ sudo bash install.sh --skip-vowifi-check
 インストール後、次を開きます:
 
 ```text
-http://<server-address>:7575
+http://<server-address>:17575
 ```
 
 ### 手動バイナリインストール
@@ -170,7 +170,7 @@ docker run -d \
   ghcr.io/mengmengcode/vonet:latest
 ```
 
-コンテナの起動後に `http://<server-address>:7575` を開きます。QMI ネットワークインターフェースを VoNet から引き続き認識できるようにするにはホストネットワークが必要です。また、シリアルポート、QMI 制御ノード、TUN インターフェース、ネットワーク設定、コンテナ起動後に追加されたデバイスへのアクセスには特権が必要です。`/dev` のバインドマウントにより、コンテナを再作成せずに新しい `ttyUSB*`、`ttyACM*`、`cdc-wdm*` および MHI の `wwan*` ノードを認識できます。
+コンテナの起動後に `http://<server-address>:17575` を開きます。QMI ネットワークインターフェースを VoNet から引き続き認識できるようにするにはホストネットワークが必要です。また、シリアルポート、QMI 制御ノード、TUN インターフェース、ネットワーク設定、コンテナ起動後に追加されたデバイスへのアクセスには特権が必要です。`/dev` のバインドマウントにより、コンテナを再作成せずに新しい `ttyUSB*`、`ttyACM*`、`cdc-wdm*` および MHI の `wwan*` ノードを認識できます。
 
 このモードは意図的に VoNet にホストのデバイスとネットワークスタックへの広範なアクセス権を与えます。信頼できる Linux ホストでのみ使用してください。自動検出は、サポート対象の Quectel USB モデム（USB ベンダー ID `2c7c`）と、Linux WWAN サブシステムを通じて公開される PCIe/MHI モデムを識別します。任意のモデム構成を識別するものではありません。`--device` で `/dev/ttyUSB2`、`/dev/cdc-wdm0`、`/dev/wwan0qmi0` などの個別ノードのみをマッピングすると、コンテナはそれらの固定ノードに限定され、複数デバイスやホットプラグを完全には検出できません。
 
@@ -197,7 +197,7 @@ VoNet は `VONET_CONFIG` からオプションの JSON 設定ファイルを読�
 
 | 環境変数 | デフォルト | 説明 |
 | --- | --- | --- |
-| `VONET_ADDR` | `0.0.0.0:7575` | HTTP リッスンアドレス。 |
+| `VONET_ADDR` | `0.0.0.0:17575` | HTTP リッスンアドレス。 |
 | `VONET_DATABASE_PATH` | `./data/vonet.db` | SQLite データベースパス。 |
 | `VONET_SESSION_TTL` | `24h` | 認証セッションの有効期間。 |
 | `VONET_SECURE_COOKIES` | `false` | 全エントリに Secure を強制する任意設定。無効時は HTTP/HTTPS の各エントリが保護方法を自動選択します。 |

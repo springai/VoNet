@@ -118,7 +118,7 @@ The installer:
 After installation, open:
 
 ```text
-http://<server-address>:7575
+http://<server-address>:17575
 ```
 
 ### Manual binary installation
@@ -194,7 +194,7 @@ docker run -d \
   ghcr.io/mengmengcode/vonet:latest
 ```
 
-Open `http://<server-address>:7575` after the container starts. Host networking
+Open `http://<server-address>:17575` after the container starts. Host networking
 is required so QMI network interfaces remain visible to VoNet, while privileged
 device access is required for serial ports, QMI control nodes, TUN interfaces,
 network configuration, and devices added after the container starts. The
@@ -281,7 +281,8 @@ VoNet reads an optional JSON configuration file from `VONET_CONFIG`, then applie
 
 | Environment variable | Default | Description |
 | --- | --- | --- |
-| `VONET_ADDR` | `0.0.0.0:7575` | HTTP listen address. |
+| `VONET_ADDR` | `0.0.0.0:17575` | HTTP redirect and HTTPS listen address. HTTPS is always enforced. |
+| `VONET_CERTIFICATE_DIR` | `<database directory>/etc/certs` | Certificate directory. It defaults to `./data/etc/certs` with the default database path; uploaded certificates and private keys are stored here. |
 | `VONET_DATABASE_PATH` | `./data/vonet.db` | SQLite database path. |
 | `VONET_SESSION_TTL` | `24h` | Authentication session lifetime. |
 | `VONET_SECURE_COOKIES` | `false` | Optional force-Secure override for all browser entries; HTTP/HTTPS cookies otherwise adapt automatically. |
@@ -309,7 +310,7 @@ bearer token instead of the browser's session cookie and CSRF flow:
 
 ```bash
 vonet token create --read-only --ttl 720h ci-runner   # prints the token once
-curl -H "Authorization: Bearer vonet_..." http://127.0.0.1:7575/api/devices
+curl -H "Authorization: Bearer vonet_..." http://127.0.0.1:17575/api/devices
 ```
 
 `vonet token list` and `vonet token revoke <name>` manage the inventory.
@@ -324,7 +325,7 @@ that admits their source address; the default `internal` mode only serves
 private networks.
 
 When `VONET_MCP_ENABLED=true`, the service exposes an MCP (Model Context
-Protocol) endpoint at `http://<host>:7575/mcp` using the Streamable HTTP
+Protocol) endpoint at `http://<host>:17575/mcp` using the Streamable HTTP
 transport and bearer-token authentication. Tools cover device status, SMS
 threads and guarded sending, eSIM profile listing and coordinated switching,
 and WiFi Calling status/reconnect. Sensitive operations such as raw AT, eSIM
@@ -343,7 +344,7 @@ Client configuration (Claude Code as the example):
   "mcpServers": {
     "vonet": {
       "type": "http",
-      "url": "http://192.168.1.10:7575/mcp",
+      "url": "http://192.168.1.10:17575/mcp",
       "headers": { "Authorization": "Bearer vonet_..." }
     }
   }
