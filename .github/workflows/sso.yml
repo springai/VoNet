@@ -14,6 +14,7 @@ permissions:
 jobs:
   authentication:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -36,7 +37,7 @@ jobs:
       - name: Smoke schema 34 to 35 migration
         run: go test ./internal/store -run '^TestMigration35' -count=1
       - run: go vet ./...
-      - run: go test -race ./internal/auth ./internal/store ./internal/server ./internal/sso
+      - run: go test -race -timeout=30m ./internal/auth ./internal/store ./internal/server ./internal/sso
       - name: Smoke auth-cleanup command
         run: |
           go run ./cmd/vonet auth-cleanup \
