@@ -95,23 +95,21 @@ function MetricBar({ value, kind }: { value?: number; kind: "rsrq" | "sinr" }) {
   const level = metricLevel(value, kind);
   const quality = qualityLabel(value, kind);
   return (
-    <div>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">{kind === "rsrq" ? "RSRQ" : "SINR"}</span>
-        <span className={cx("text-sm font-semibold", quality.color)}>{quality.label}</span>
+    <div className="overview-metric">
+      <div className="overview-metric-top">
+        <span>{kind === "rsrq" ? "RSRQ" : "SINR"}</span>
+        <strong className={quality.color}>{quality.label}</strong>
       </div>
-      <div className="mt-1 flex items-baseline gap-2">
-        <span className="text-2xl font-semibold tabular-nums text-gray-900 dark:text-white">
-          {typeof value === "number" ? value : "--"}
-        </span>
-        <span className="text-xs text-gray-400">dB</span>
+      <div className="overview-metric-reading">
+        <strong>{typeof value === "number" ? value : "--"}</strong>
+        <span>dB</span>
       </div>
-      <div className="mt-2 flex h-1.5 gap-1">
+      <div className="overview-metric-bars">
         {[0, 1, 2, 3].map((index) => (
           <div
             key={index}
             className={cx(
-              "flex-1 rounded-full transition-colors duration-500",
+              "overview-metric-bar",
               level > index / 4
                 ? kind === "rsrq"
                   ? index < 2 ? "bg-emerald-500" : "bg-emerald-300"
@@ -144,20 +142,20 @@ export function OverviewNetworkCard({
   const rsrp = modem?.signalRsrp ?? modem?.signalDbm;
 
   return (
-    <section className="ui-panel-muted min-w-0 overflow-hidden p-5">
-      <div className="mb-5 flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sky-50 text-sky-600 dark:bg-sky-500/10 dark:text-sky-300">
+    <section className="overview-network-card ui-panel-muted min-w-0 overflow-hidden">
+      <div className="overview-network-heading">
+        <div className="overview-network-title">
+          <div className="overview-network-icon">
             <CardUiRegular className="text-[23px]" />
           </div>
-          <div className="min-w-0">
-            <h2 className="truncate text-2xl font-bold text-gray-900 dark:text-white">{title}</h2>
-            <div className="truncate text-sm text-gray-500 dark:text-gray-400">
+          <div className="overview-network-copy">
+            <h2>{title}</h2>
+            <div className="overview-network-subtitle">
               {operator} · {backendLabel} · {device.interface || "--"}
             </div>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="overview-network-actions">
           {onOpenCellLock ? <CellLockButton compact onClick={onOpenCellLock} locked={cellLocked} statusKnown={cellLockStatusKnown} /> : null}
           {onOpenOperatorSelection ? (
             <button
@@ -172,23 +170,23 @@ export function OverviewNetworkCard({
         </div>
       </div>
 
-      <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-white/10 dark:bg-black/10">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2">
+      <div className="overview-network-surface">
+        <div className="overview-signal-summary">
+          <div className="min-w-0">
             <CountryFlag countryCode={modem?.operatorCountryCode} />
-            <span className="truncate text-base font-semibold text-gray-900 dark:text-white">{operator}</span>
+            <strong>{operator}</strong>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="inline-flex h-7 items-center rounded-full bg-sky-100 px-3 text-xs font-semibold text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">{networkMode}</span>
-            <span className={cx("inline-flex h-7 items-center rounded-full bg-gray-100 px-3 text-xs font-semibold dark:bg-white/10", quality.color)}>
+          <div>
+            <span className="overview-network-badge">{networkMode}</span>
+            <span className={cx("overview-quality-badge", quality.color)}>
               {quality.label}
             </span>
           </div>
         </div>
 
-        <div className="mt-3 grid grid-cols-1 items-center gap-5 sm:grid-cols-[minmax(210px,1fr)_minmax(180px,0.9fr)]">
-          <div className="relative mx-auto w-full max-w-[250px]">
-            <svg viewBox="0 0 240 155" className="h-auto w-full" role="img" aria-label={`RSRP ${rsrp ?? "--"} dBm`}>
+        <div className="overview-signal-layout">
+          <div className="overview-signal-gauge">
+            <svg viewBox="0 0 240 155" role="img" aria-label={`RSRP ${rsrp ?? "--"} dBm`}>
               <path d="M 32 128 A 88 88 0 0 1 208 128" fill="none" stroke="currentColor" strokeWidth="16" strokeLinecap="round" className="text-gray-200 dark:text-white/10" />
               <path
                 d="M 32 128 A 88 88 0 0 1 208 128"
@@ -204,15 +202,15 @@ export function OverviewNetworkCard({
               <text x="120" y="112" textAnchor="middle" className="fill-gray-900 text-[31px] font-semibold dark:fill-white">{typeof rsrp === "number" ? rsrp : "--"}</text>
               <text x="120" y="136" textAnchor="middle" className="fill-gray-400 text-[12px]">dBm · RSRP</text>
             </svg>
-            <div className="absolute bottom-1 left-0 right-0 flex justify-between text-[11px] text-gray-400"><span>-120</span><span>-60</span></div>
+            <div className="overview-gauge-scale"><span>-120</span><span>-60</span></div>
           </div>
-          <div className="space-y-5">
+          <div className="overview-signal-metrics">
             <MetricBar value={modem?.signalRsrq} kind="rsrq" />
             <MetricBar value={modem?.signalSinr} kind="sinr" />
           </div>
         </div>
 
-        <div className="mt-4 border-t border-gray-100 pt-3 text-sm font-medium text-gray-500 dark:border-white/10 dark:text-gray-400">
+        <div className="overview-signal-band">
           {bandFrequency(modem?.radioBand, modem?.radioChannel)}
         </div>
       </div>

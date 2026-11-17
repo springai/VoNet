@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
-import { ArrowSyncRegular, PowerRegular } from "@fluentui/react-icons";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { ArrowSyncRegular, DeleteRegular, MailRegular, PhoneRegular, PowerRegular, SettingsRegular } from "@fluentui/react-icons";
 import { api, apiMessage } from "../../api";
 import type { SimCard } from "../../types";
 import type { DeviceDetail } from "../devices/types";
-import { Button, EmptyState, ErrorState, ListSkeleton, Spinner, Switch, confirmDialog, message } from "../ui";
+import { Button, EmptyState, ErrorState, ListSkeleton, Spinner, Switch, Tabs, confirmDialog, message, type TabItem } from "../ui";
 import { OverviewNetworkCard } from "../devices/OverviewNetworkCard";
 import { OverviewVowifiCard } from "../devices/OverviewVowifiCard";
+import { OverviewRealtimeTrafficCard } from "../devices/OverviewRealtimeTrafficCard";
 import { OverviewSimPanel } from "../devices/OverviewSimPanel";
 import { OverviewNetworkPanel } from "../devices/OverviewNetworkPanel";
 import { OverviewTrafficChart } from "../devices/OverviewTrafficChart";
@@ -29,18 +30,30 @@ interface NetworkActionStatus {
   lastError?: string;
 }
 
-export function CardOverviewTab({ card }: { card: SimCard }) {
+interface Props {
+  card: SimCard;
+  tabs: TabItem[];
+  activeTab: string;
+  onTabChange: (key: string) => void;
+  onOpenSms: () => void;
+  onOpenCall: () => void;
+  onDelete: () => void;
+  deleting: boolean;
+  children?: ReactNode;
+}
+
+export function CardOverviewTab({ card, tabs, activeTab, onTabChange, onOpenSms, onOpenCall, onDelete, deleting, children }: Props) {
   const { t } = useI18n();
   const deviceId = card.binding?.deviceId?.trim() || "";
   const [device, setDevice] = useState<DeviceDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [operatorOpen, setOperatorOpen] = useState(false);
-  const [e911Open, setE911Open] = useState(false);
   const [networkToggling, setNetworkToggling] = useState(false);
   const [networkTarget, setNetworkTarget] = useState<boolean | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [rebooting, setRebooting] = useState(false);
+  const [e911Open, setE911Open] = useState(false);
   const hostReady = card.status === "active" && !!card.binding?.deviceId;
 
   const loadDevice = useCallback(async (showLoading = false) => {
@@ -178,11 +191,10 @@ export function CardOverviewTab({ card }: { card: SimCard }) {
   const isNative410 = device?.deviceType === "wifi_410";
   const vowifiInUse = isVoWiFiInUse(device, isReader);
   const canReconnectVoWiFi = !!device && (isReader || !!device.vowifiEnabled || vowifiInUse);
-  const showNetworkDetails = !isReader;
   const operatorDisplay = device ? simOperatorDisplay(device) : card.carrier || card.spn || "--";
 
   return (
-    <div className="space-y-4">
+    <div className="overview-tab-shell">
       {!hostReady ? (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <EmptyState
@@ -193,6 +205,7 @@ export function CardOverviewTab({ card }: { card: SimCard }) {
             card={card}
             simOperatorDisplay={operatorDisplay}
             customPhoneNumber={card.policy?.customPhoneNumber}
+            variant="summary"
             e911Starting={false}
             onSetupE911={() => setE911Open(true)}
           />
@@ -203,75 +216,156 @@ export function CardOverviewTab({ card }: { card: SimCard }) {
         <ErrorState title={t("卡片设备状态加载失败")} message={error} retryText={t("重试")} onRetry={() => void loadDevice(true)} />
       ) : device ? (
         <>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {canReconnectVoWiFi ? (
-              <Button loading={reconnecting} onClick={() => void handleReconnectVoWiFi()} icon={<ArrowSyncRegular />}>
-                {t("重连 VoWiFi")}
-              </Button>
-            ) : !isReader ? (
-              <div className="flex h-9 items-center gap-2 rounded-lg border border-gray-200 px-3 text-sm text-gray-700 dark:border-white/10 dark:text-gray-200">
-                <span>{t("漫游数据")}</span>
-                <Switch
-                  checked={!!device.networkEnabled}
-                  loading={networkToggling}
-                  disabled={networkToggling || !device.interface}
-                  onChange={(enabled) => void handleNetworkToggle(enabled)}
-                  size="small"
-                  ariaLabel={t("漫游数据")}
-                />
-                {networkToggling && networkTarget !== null ? (
-                  <span className="inline-flex items-center gap-1 text-xs text-gray-500">
-                    <Spinner className="h-3.5 w-3.5" />
-                    {networkTarget ? t("正在开启...") : t("正在关闭...")}
-                  </span>
-                ) : null}
+          <section className="overview-runtime-hero">
+            <div className="overview-runtime-header">
+              <div className="min-w-0">
+                <h2>{card.displayName || device.name || t("设备概览")}</h2>
+                <p>{vowifiInUse ? "VoWiFi" : "VoLTE"} · {operatorDisplay} · {device.backendMode || "--"} · {device.interface || "--"}</p>
               </div>
-            ) : null}
-            {!isReader && !isNative410 ? (
-              <Button loading={rebooting} onClick={() => void handleRebootModem()} icon={<PowerRegular />}>
-                {t("重启模组")}
-              </Button>
-            ) : null}
-            {device.e911SetupAvailable ? (
-              <Button variant="primary" onClick={() => setE911Open(true)}>
-                {t("E911地址")}
-              </Button>
-            ) : null}
-          </div>
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {vowifiInUse ? (
-              <OverviewVowifiCard device={device} card={card} operatorDisplay={operatorDisplay} />
-            ) : (
-              <OverviewNetworkCard
-                device={device}
-                card={card}
-                onOpenOperatorSelection={isReader ? undefined : () => setOperatorOpen(true)}
-                onOpenCellLock={supportsCellLock ? cellLock.openDialog : undefined}
-                cellLocked={!!cellLock.status?.target}
-                cellLockStatusKnown={cellLock.status !== null}
-              />
-            )}
-            <OverviewSimPanel
-              device={device}
-              card={card}
-              simOperatorDisplay={operatorDisplay}
-              customPhoneNumber={card.policy?.customPhoneNumber}
-              e911Starting={false}
-              onSetupE911={() => setE911Open(true)}
-            />
-          </div>
-          {showNetworkDetails ? (
-            <OverviewNetworkPanel
-              device={device}
-              trafficMinuteRx={device.traffic?.rx || ""}
-              trafficMinuteTx={device.traffic?.tx || ""}
-              trafficSpeedRx={device.traffic?.rate || ""}
-              trafficSpeedTx={device.traffic?.rateTx || ""}
-            />
-          ) : null}
-          {device.networkEnabled && !isReader ? (
-            <OverviewTrafficChart deviceId={device.id} />
-          ) : null}
+              <div className="overview-runtime-actions">
+                <Button icon={<MailRegular />} onClick={onOpenSms}>{t("短信")}</Button>
+                <Button icon={<PhoneRegular />} onClick={onOpenCall}>{t("通话")}</Button>
+              </div>
+            </div>
+            <div className="overview-runtime-grid">
+              {vowifiInUse ? (
+                <>
+                  <OverviewVowifiCard device={device} card={card} operatorDisplay={operatorDisplay} />
+                  <OverviewSimPanel
+                    device={device}
+                    card={card}
+                    simOperatorDisplay={operatorDisplay}
+                    customPhoneNumber={card.policy?.customPhoneNumber}
+                    variant="summary"
+                    e911Starting={false}
+                    onSetupE911={() => setE911Open(true)}
+                  />
+                </>
+              ) : (
+                <>
+                  <OverviewNetworkCard
+                    device={device}
+                    card={card}
+                    onOpenOperatorSelection={isReader ? undefined : () => setOperatorOpen(true)}
+                    onOpenCellLock={supportsCellLock ? cellLock.openDialog : undefined}
+                    cellLocked={!!cellLock.status?.target}
+                    cellLockStatusKnown={cellLock.status !== null}
+                  />
+                  <OverviewSimPanel
+                    device={device}
+                    card={card}
+                    simOperatorDisplay={operatorDisplay}
+                    customPhoneNumber={card.policy?.customPhoneNumber}
+                    variant="summary"
+                    e911Starting={false}
+                    onSetupE911={() => setE911Open(true)}
+                  />
+                </>
+              )}
+            </div>
+          </section>
+          <Tabs tabs={tabs} value={activeTab} onChange={onTabChange} />
+          {activeTab === "overview" ? (
+            <>
+              <div className="overview-lower-grid">
+                <OverviewNetworkPanel
+                  device={device}
+                  reader={isReader}
+                  trafficMinuteRx={device.traffic?.rx || ""}
+                  trafficMinuteTx={device.traffic?.tx || ""}
+                  trafficSpeedRx={device.traffic?.rate || ""}
+                  trafficSpeedTx={device.traffic?.rateTx || ""}
+                />
+                <OverviewSimPanel
+                  device={device}
+                  card={card}
+                  simOperatorDisplay={operatorDisplay}
+                  customPhoneNumber={card.policy?.customPhoneNumber}
+                  variant="details"
+                />
+              </div>
+              <div className="overview-support-grid">
+                {!vowifiInUse ? <OverviewRealtimeTrafficCard device={device} /> : null}
+              </div>
+              {device.networkEnabled && !isReader ? (
+                <OverviewTrafficChart deviceId={device.id} />
+              ) : null}
+              <section className="overview-quick-actions">
+                <div className="overview-quick-header">
+                  <div>
+                    <strong><SettingsRegular /> {t("快捷操作")}</strong>
+                    <span>{t("连接与通话")}</span>
+                  </div>
+                  <small>{t("常用设备操作")}</small>
+                </div>
+                <div className="overview-quick-grid">
+                  {!isReader ? (
+                    <div className="overview-action-card">
+                      <div>
+                        <strong>{t("数据漫游")}</strong>
+                        <span>{device.networkEnabled ? t("已开启") : t("已关闭")}</span>
+                      </div>
+                      <Switch
+                        checked={!!device.networkEnabled}
+                        loading={networkToggling}
+                        disabled={networkToggling || !device.interface}
+                        onChange={(enabled) => void handleNetworkToggle(enabled)}
+                        size="small"
+                        ariaLabel={t("数据漫游")}
+                      />
+                    </div>
+                  ) : null}
+                  {!isReader && !isNative410 ? (
+                    <div className="overview-action-card">
+                      <div>
+                        <strong>{t("重启模组")}</strong>
+                        <span>{t("断线后自动恢复连接")}</span>
+                      </div>
+                      <Button
+                        loading={rebooting}
+                        variant="danger"
+                        className="overview-danger-button"
+                        onClick={() => void handleRebootModem()}
+                        icon={<PowerRegular />}
+                      >
+                        {t("重启模组")}
+                      </Button>
+                    </div>
+                  ) : null}
+                  <div className="overview-action-card">
+                    <div>
+                      <strong>{t("重连 VoWiFi")}</strong>
+                      <span>{canReconnectVoWiFi ? t("重新建立 IMS 链路") : t("不适用")}</span>
+                    </div>
+                    <Button
+                      loading={reconnecting}
+                      disabled={!canReconnectVoWiFi}
+                      onClick={() => void handleReconnectVoWiFi()}
+                      icon={<ArrowSyncRegular />}
+                    >
+                      {t("重连 VoWiFi")}
+                    </Button>
+                  </div>
+                  <div className="overview-action-card overview-action-danger">
+                    <div>
+                      <strong>{t("删除卡片")}</strong>
+                      <span>{t("永久删除此 SIM 卡配置")}</span>
+                    </div>
+                    <Button
+                      loading={deleting}
+                      variant="danger"
+                      className="overview-danger-button"
+                      onClick={onDelete}
+                      icon={<DeleteRegular />}
+                    >
+                      {t("删除卡片")}
+                    </Button>
+                  </div>
+                </div>
+                <p>{t("快捷操作会按当前设备能力显示；执行危险操作前会弹出确认。")}</p>
+              </section>
+            </>
+          ) : children}
           {!isReader ? (
             <OperatorSelectionDialog
               open={operatorOpen}

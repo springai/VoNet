@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { DeviceListItem, SimCardCandidate } from "../../types";
 import { Input, Select, ListSkeleton, EmptyState } from "../ui";
 import { isDeviceOnline, isRegistered, isVoWiFiInUse, lifecycleLabel } from "./shared";
@@ -9,6 +10,9 @@ export type SortKey = "name" | "signal";
 export type SortDir = "asc" | "desc";
 
 export interface DeviceListPanelProps {
+  title?: ReactNode;
+  countLabel?: ReactNode;
+  headerActions?: ReactNode;
   loading: boolean;
   query: string;
   statusFilter: StatusFilter;
@@ -23,6 +27,7 @@ export interface DeviceListPanelProps {
   onSortDirChange: (v: SortDir) => void;
   onSelectDevice: (id: string) => void;
   embedded?: boolean;
+  footer?: ReactNode;
 }
 
 function primaryLine(d: DeviceListItem): string {
@@ -46,13 +51,35 @@ function statusLine(d: DeviceListItem): string {
 
 export function DeviceListPanel(props: DeviceListPanelProps) {
   const { t } = useI18n();
-  const { loading, query, statusFilter, sortKey, sortDir, selectedId, filteredDevices, embedded } = props;
+  const {
+    title,
+    countLabel,
+    headerActions,
+    loading,
+    query,
+    statusFilter,
+    sortKey,
+    sortDir,
+    selectedId,
+    filteredDevices,
+    embedded,
+    footer,
+  } = props;
   return (
-    <div className={embedded ? "min-w-0" : "ui-card p-5"}>
-      <div className="mb-4 flex items-center gap-3">
+    <div className={embedded ? "workspace-list-panel min-w-0" : "ui-card p-5"}>
+      {title ? (
+        <div className="workspace-list-header">
+          <div className="min-w-0">
+            <h2>{title}</h2>
+            {countLabel ? <span>{countLabel}</span> : null}
+          </div>
+          {headerActions ? <div className="workspace-list-actions">{headerActions}</div> : null}
+        </div>
+      ) : null}
+      <div className="workspace-list-search">
         <Input value={query} onChange={(e) => props.onQueryChange(e.target.value)} placeholder={t("搜索设备 / ICCID / IMEI / 网卡")} />
       </div>
-      <div className="mb-4 grid grid-cols-2 gap-2">
+      <div className="workspace-list-filters">
         <Select
           value={statusFilter}
           onChange={(v) => props.onStatusFilterChange(v as StatusFilter)}
@@ -87,7 +114,7 @@ export function DeviceListPanel(props: DeviceListPanelProps) {
       ) : filteredDevices.length === 0 ? (
         <EmptyState title={t("暂无设备")} subtitle={t("该 Agent 当前没有已配置设备")} />
       ) : (
-        <div className="device-list-scroll max-h-[65vh] overflow-y-auto pr-1">
+        <div className="device-list-scroll workspace-list-scroll">
           <div className="device-list-grid">
             {filteredDevices.map((d) => (
               <DeviceListItemCard
@@ -102,6 +129,7 @@ export function DeviceListPanel(props: DeviceListPanelProps) {
           </div>
         </div>
       )}
+      {footer ? <div className="workspace-list-footer">{footer}</div> : null}
     </div>
   );
 }

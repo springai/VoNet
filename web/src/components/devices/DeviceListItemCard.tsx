@@ -1,9 +1,8 @@
 import type { DeviceListItem, SimCardCandidate } from "../../types";
 import { cx } from "../../lib/utils";
-import { Button, Tag, StatusDot } from "../ui";
+import { Tag, StatusDot } from "../ui";
 import { deviceStatusMeta } from "./shared";
 import { deviceTypeImage } from "../../lib/deviceTypes";
-import { useNavigate } from "react-router-dom";
 import { useI18n } from "../../lib/i18n";
 
 export interface DeviceListItemCardProps {
@@ -16,7 +15,6 @@ export interface DeviceListItemCardProps {
 
 export function DeviceListItemCard({ device, selected, statusText, candidate, onSelect }: DeviceListItemCardProps) {
   const meta = deviceStatusMeta(device);
-  const navigate = useNavigate();
   const { t } = useI18n();
   const modemICCID = String(device.modem?.iccid || "").replace(/\s+/g, "");
   const runtimeICCID = String(device.vowifiRuntime?.iccid || "").replace(/\s+/g, "");
@@ -45,10 +43,10 @@ export function DeviceListItemCard({ device, selected, statusText, candidate, on
           : "info";
   return (
     <div className={cx(
-      "device-list-item rounded-xl border",
+      "device-list-item reference-list-item",
       selected
-        ? "border-indigo-200 bg-indigo-50/70 dark:border-indigo-500/30 dark:bg-indigo-500/10"
-        : "border-gray-100 dark:border-white/10",
+        ? "is-active"
+        : "",
     )}>
       <button
         type="button"
@@ -63,32 +61,18 @@ export function DeviceListItemCard({ device, selected, statusText, candidate, on
               {device.id} · {device.interface || "--"}
             </div>
             <div className="mt-1 truncate text-xs text-gray-400">{statusText}</div>
-            {currentICCID ? (
-              <div className="mt-1 flex min-w-0 items-center gap-2">
-                <span className="truncate font-mono text-[11px] text-amber-600 dark:text-amber-300">
-                  ICCID {currentICCID}
-                </span>
-                <Tag type={readStateTone}>{readStateLabel}</Tag>
-              </div>
-            ) : null}
           </div>
           <div className="flex items-center gap-2">
             <StatusDot tone={meta.tone} size="sm" animated={meta.animated} />
             <Tag type={meta.tag}>{meta.label}</Tag>
           </div>
         </div>
+        {currentICCID ? (
+          <div className="mt-2 flex justify-end">
+            <Tag type={readStateTone}>{readStateLabel}</Tag>
+          </div>
+        ) : null}
       </button>
-      {currentICCID ? (
-        <div className="flex justify-end border-t border-gray-100 px-2 pb-2 pt-1.5 dark:border-white/10">
-          <Button
-            size="small"
-            plain
-            onClick={() => navigate(`/cards?new=${encodeURIComponent(currentICCID)}&cardType=physical_sim&deviceId=${encodeURIComponent(device.id)}&hostType=${encodeURIComponent(candidate?.hostType || device.deviceType)}`)}
-          >
-            {t("保存/查看卡片")}
-          </Button>
-        </div>
-      ) : null}
     </div>
   );
 }

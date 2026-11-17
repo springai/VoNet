@@ -283,3 +283,43 @@ npm run build
 - 涉及文件：`web/src/pages/CardsPage.tsx`。
 - 验证：`npm test` 84 项通过，`npm run build` 通过，并已部署 VoNet。
 - 合并风险：同步上游时不要再加入 `CardsPage` 的固定 10 秒卡片列表轮询。
+
+### 2026-11-17 全局 UI 按 VoHive 风格重构
+
+- 现象：旧版标题、卡片、表格、表单和标签页风格偏硬，与参考站的柔和玻璃面板布局不一致。
+- 修复：仅调整 UI 层，统一浅蓝灰画布、半透明圆角面板、蓝色主操作、状态胶囊、分段标签页、表格、表单、弹窗和底部 Dock。将 `IMEI 池`、`代理中心`、`导出代理` 移入设置菜单，设备菜单保留 `SIM 管理` 和 `设备管理`。
+- 涉及文件：`web/src/reborn.css`、`web/src/components/shell/AuthenticatedShell.tsx`、`web/src/components/ui/`、`web/src/lib/i18n-en.ts`。
+- 验证：13 个桌面页面和 6 个手机页面无水平溢出；`npm test`、`npm run build` 通过。
+- 合并风险：不涉及 API、数据库、Agent proto 或业务逻辑；同步时保留 UI 设计变量和 Dock 分组。
+
+### 2026-11-17 SIM 与设备工作区改为参考站双栏布局
+
+- 现象：SIM 管理和设备管理的左列表信息过密，添加入口位于页面顶部，整体布局与参考站设备页不一致。
+- 修复：仅调整 UI。左列改为约 238px 的卡片/设备列表，条目使用柔和圆角和紧凑状态布局；右侧承载详情。`添加卡片`、`添加设备` 移到左侧列表最后一项下方。设备 Agent 管理压缩为工作区顶部轻量栏，原有选择、编辑、换密钥、删除和设备操作逻辑不变。
+- 涉及文件：`web/src/pages/CardsPage.tsx`、`web/src/pages/DevicesPage.tsx`、`web/src/components/devices/DeviceListPanel.tsx`、`web/src/components/devices/DeviceListItemCard.tsx`、`web/src/components/agents/AgentManager.tsx`、`web/src/reborn.css`。
+- 验证：桌面左列 238px、右侧详情自适应，两个添加按钮均位于左列尾部；手机390px 视口无水平溢出；`npm test`、`npm run build` 通过。
+- 合并风险：不修改卡片、设备、Agent 的状态机、API 或路由；同步时保留 `workspace-layout` 和 `workspace-list-*` 样式。
+
+### 2026-11-17 SIM 概览运行状态拆分到顶部
+
+- 分析结论：当前项目仅实现了 Quectel `+QCFG="ims"` 模组级开关和 `volteCapable` 能力标志，没有独立的蜂窝 VoLTE IMS 注册、SIP/RTP 会话或 VoLTE runtime。因此蜂窝模式不展示虚构的 VoLTE/IMS 注册动画。
+- 修复：仅调整 UI。新增顶部独立运行区域：VoWiFi 类型显示 VoWiFi 进度、语音/短信/USSD 状态和蜂窝摘要；USB 读卡器蜂窝区域显示“不适用”；其他设备显示飞行模式、信号、蜂窝数据和 SIM PLMN。蜂窝类型标记为 VoLTE，只展示信号仪表和每秒采样的 60 秒实时流量动画，不展示未实现的 IMS 动画。短信、通话按钮位于运行区右上角；数据漫游、重启模组、重连 VoWiFi 汇总到概览底部的快捷操作区。顶部动画、标签栏、SIM / 设备、流量和快捷操作保持独立间距。
+- 涉及文件：`web/src/components/cards/CardOverviewTab.tsx`、`web/src/components/devices/OverviewCellularStatusCard.tsx`、`web/src/components/devices/OverviewRealtimeTrafficCard.tsx`、`web/src/reborn.css`、`web/src/lib/i18n-en.ts`。
+- 验证：VoWiFi 读卡器实际页面顶部显示 VoWiFi 进度和“蜂窝：不适用”；`npm test` 84 项、`npm run build` 通过。
+- 合并风险：不修改 VoWiFi orchestrator、蜂窝通话通道、CellularIMS 配置或 Agent 逻辑；若未来实现独立 VoLTE IMS runtime，可在 `OverviewRealtimeTrafficCard` 同层增加 VoLTE 状态。
+
+### 2026-11-17 Aurora Glass 外壳与底部单击导航
+
+- 现象：页面背景、玻璃面板和导航交互不够统一，底部按钮存在二级弹出菜单，桌面侧栏与用户预期不符。
+- 修复：仅调整 UI。加入宽幅柔和 Aurora 渐变背景和细网格，统一 Light/Dark 玻璃面板、标题、表格、表单、分段标签和过渡动画。桌面与移动端统一使用底部居中的 5 项 Dock，按钮单击直达分区首页，不再出现二级菜单；子页面通过内容区标签栏切换。
+- 涉及文件：`web/src/components/shell/AuthenticatedShell.tsx`、`web/src/components/shell/WorkspaceSectionNav.tsx`、`web/src/components/ui/PageHeader.tsx`、`web/src/reborn.css`。
+- 验证：桌面和手机均显示底部 Dock，侧栏隐藏，单击设备到 `/cards`、单击设置到 `/settings`，无二级菜单；`npm test`、`npm run build` 通过。
+- 合并风险：不修改 API、数据库、Agent proto 或业务逻辑；同步时保留 `app-shell-frame`、`workspace-section-tabs` 和 `bottom-dock-*` 样式。
+
+### 2026-11-17 SIM 配置与 AT/USSD 页面优化
+
+- 现象：`卡片配置`、`设备配置` 缺少统一圆角内容容器；AT 和 USSD 被拆成两个标签，离线或不支持终端时仍以独立提示页代替输入区。
+- 修复：仅调整 UI。两个配置页分别使用统一玻璃圆角容器；`AT 终端`、`USSD` 合并为 `AT/USSD` 标签，内部按参考布局拆成 AT 终端交互和 USSD 会话两块。AT 根据设备在线状态、AT 端口和读卡器类型判断可用性，USSD 根据卡片可操作状态判断可用性；不可用时输入框保留但禁用，悬停显示禁止光标。旧 `tab=at`、`tab=ussd` 路由兼容跳转到合并标签。
+- 涉及文件：`web/src/pages/CardsPage.tsx`、`web/src/components/cards/CardAtUssdTab.tsx`、`web/src/components/devices/DeviceAtTab.tsx`、`web/src/components/devices/DeviceUssdTab.tsx`、`web/src/reborn.css`、`web/src/lib/i18n-en.ts`。
+- 验证：`npm test` 84 项通过，`npm run build` 通过；Linux amd64 二进制已部署，`vonet.service` 为 `active`，Agent 已重新连接。
+- 合并风险：不修改 AT/USSD API、会话状态机、设备能力判断来源或 Agent proto；同步时保留 `CardAtUssdTab`、`config-tab-surface`、`terminal-*` 和禁用输入状态。

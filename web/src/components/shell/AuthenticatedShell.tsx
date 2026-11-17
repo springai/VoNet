@@ -1,16 +1,19 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
-  BoardRegular, CardUiRegular, PhoneRegular,
+  AppsRegular,
+  ArrowDownloadRegular,
+  BoardRegular,
+  CardUiRegular,
   DocumentTextRegular,
   GlobeRegular,
   MailRegular,
-  SendClockRegular,
-  PanelLeftContractRegular,
-  PanelLeftExpandRegular,
-  RouterRegular,
+  PhoneRegular,
   PlugConnectedRegular,
-  PulseRegular, SettingsRegular,
+  PulseRegular,
+  RouterRegular,
+  SendClockRegular,
+  SettingsRegular,
   SignOutRegular,
 } from "@fluentui/react-icons";
 import { useAuth } from "../../store/auth";
@@ -18,77 +21,74 @@ import { useI18n } from "../../lib/i18n";
 import { confirmDialog } from "../ui/MessageBox";
 import { LanguageSwitch } from "../ui/LanguageSwitch";
 import { SwitchDark } from "../ui/SwitchDark";
-import { Drawer } from "../ui/Drawer";
 import { ErrorBoundary } from "../ui/ErrorBoundary";
 import { cx } from "../../lib/utils";
 import { BrandLogo } from "./BrandLogo";
 import { VersionBadge } from "./VersionBadge";
 import { listPlugins, type InstalledPlugin } from "../../extensions";
-import { api } from "../../api";
 import { IncomingCallMonitor } from "../call/IncomingCallMonitor";
 
-type SidebarNavItem = {
+type NavigationIcon = typeof GlobeRegular;
+
+type NavigationItem = {
   to: string;
   label: string;
-  icon: typeof GlobeRegular;
+  icon: NavigationIcon;
   end?: boolean;
   pluginLabelZH?: string;
 };
 
-type SidebarNavGroup = {
+type PluginNavigationItem = NavigationItem & { after: string };
+
+type DockSection = {
   key: string;
   label: string;
-  items: SidebarNavItem[];
+  icon: NavigationIcon;
+  to?: string;
+  end?: boolean;
+  items?: NavigationItem[];
 };
 
-const NAV_GROUPS: SidebarNavGroup[] = [
-  {
-    key: "monitoring",
-    label: "监控",
-    items: [
-      { to: "/", label: "仪表盘", icon: BoardRegular, end: true },
-      { to: "/diagnostics", label: "系统诊断", icon: PulseRegular },
-    ],
-  },
-  {
-    key: "cards",
-    label: "卡片",
-    items: [
-      { to: "/cards", label: "SIM 管理", icon: CardUiRegular },
-      { to: "/call", label: "通话", icon: PhoneRegular },
-      { to: "/sms", label: "短信", icon: MailRegular },
-    ],
-  },
-  {
-    key: "devices",
-    label: "设备",
-    items: [
-      { to: "/devices", label: "设备管理", icon: RouterRegular },
-      { to: "/imei-pool", label: "IMEI 池", icon: PulseRegular },
-    ],
-  },
-  {
-    key: "network",
-    label: "网络",
-    items: [
-      { to: "/proxy", label: "代理中心", icon: GlobeRegular },
-      { to: "/node-adapters", label: "节点转换", icon: PlugConnectedRegular },
-    ],
-  },
-  {
-    key: "operations",
-    label: "运维",
-    items: [
-      { to: "/automatic-tasks", label: "自动任务", icon: SendClockRegular },
-      { to: "/logs", label: "实时日志", icon: DocumentTextRegular },
-    ],
-  },
-  {
-    key: "system",
-    label: "系统",
-    items: [{ to: "/settings", label: "系统设置", icon: SettingsRegular }],
-  },
+const DEVICE_ITEMS: NavigationItem[] = [
+  { to: "/cards", label: "SIM 管理", icon: CardUiRegular },
+  { to: "/devices", label: "设备管理", icon: RouterRegular },
 ];
+
+const SETTINGS_ITEMS: NavigationItem[] = [
+  { to: "/settings", label: "系统设置", icon: SettingsRegular },
+  { to: "/diagnostics", label: "系统诊断", icon: PulseRegular },
+  { to: "/logs", label: "实时日志", icon: DocumentTextRegular },
+  { to: "/node-adapters", label: "节点转换", icon: PlugConnectedRegular },
+  { to: "/automatic-tasks", label: "自动化任务", icon: SendClockRegular },
+  { to: "/imei-pool", label: "IMEI 池", icon: PulseRegular },
+  { to: "/proxy", label: "代理中心", icon: GlobeRegular },
+  { to: "/export-proxy", label: "导出代理", icon: ArrowDownloadRegular },
+];
+
+const BASE_DOCK_SECTIONS: DockSection[] = [
+  { key: "monitoring", label: "监控", icon: BoardRegular, to: "/", end: true },
+  { key: "devices", label: "设备", icon: AppsRegular, items: DEVICE_ITEMS },
+  { key: "sms", label: "短信", icon: MailRegular, to: "/sms" },
+  { key: "call", label: "通话", icon: PhoneRegular, to: "/call" },
+  { key: "settings", label: "设置", icon: SettingsRegular, items: SETTINGS_ITEMS },
+];
+
+function isItemActive(item: NavigationItem, pathname: string) {
+  return item.end
+    ? pathname === item.to
+    : pathname === item.to || pathname.startsWith(`${item.to}/`);
+}
+
+function isSectionActive(section: DockSection, pathname: string) {
+  if (section.to) {
+    return isItemActive({ to: section.to, label: section.label, icon: section.icon, end: section.end }, pathname);
+  }
+  return section.items?.some((item) => isItemActive(item, pathname)) || false;
+}
+
+function sectionTarget(section: DockSection) {
+  return section.to || section.items?.[0]?.to || "/";
+}
 
 export function AuthenticatedShell({
   isDark,
@@ -97,25 +97,11 @@ export function AuthenticatedShell({
   isDark: boolean;
   onToggleTheme: () => void;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
   const [plugins, setPlugins] = useState<InstalledPlugin[]>([]);
   const { logout, user } = useAuth();
   const { t, lang } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
-
-  useEffect(() => {
-    const mq = window.matchMedia("(max-width: 767px)");
-    const update = () => {
-      setIsMobile(mq.matches);
-      if (!mq.matches) setMobileOpen(false);
-    };
-    update();
-    window.addEventListener("resize", update, { passive: true });
-    return () => window.removeEventListener("resize", update);
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -124,12 +110,11 @@ export function AuthenticatedShell({
     }).catch(() => undefined);
     void load();
     window.addEventListener("vonet:plugins-changed", load);
-    return () => { active = false; window.removeEventListener("vonet:plugins-changed", load); };
+    return () => {
+      active = false;
+      window.removeEventListener("vonet:plugins-changed", load);
+    };
   }, []);
-
-  useEffect(() => {
-    setMobileOpen(false);
-  }, [location.pathname]);
 
   async function onLogout() {
     const ok = await confirmDialog(t("确认退出登录？"), t("提示"), {
@@ -143,166 +128,65 @@ export function AuthenticatedShell({
     }
   }
 
-  function toggle() {
-    if (isMobile) setMobileOpen(true);
-    else setCollapsed((value) => !value);
+  const pluginItems: PluginNavigationItem[] = plugins
+    .filter((plugin) => plugin.enabled)
+    .flatMap((plugin) => plugin.contributions
+      .filter((contribution) => contribution.location === "sidebar")
+      .map((contribution) => ({
+        to: `/extensions/${encodeURIComponent(plugin.id)}/${encodeURIComponent(contribution.id)}`,
+        label: contribution.label,
+        pluginLabelZH: contribution.labelZh,
+        icon: GlobeRegular,
+        after: contribution.after || "",
+      })));
+
+  const deviceItems = [...DEVICE_ITEMS];
+  const settingsItems = [...SETTINGS_ITEMS];
+  const deviceTargets = new Set(DEVICE_ITEMS.map((item) => item.to));
+  for (const item of pluginItems) {
+    if (deviceTargets.has(item.after)) deviceItems.push(item);
+    else settingsItems.push(item);
   }
 
-  const currentNavItem = NAV_GROUPS
-    .flatMap((group) => group.items)
-    .slice()
+  const dockSections: DockSection[] = BASE_DOCK_SECTIONS.map((section) => {
+    if (section.key === "devices") return { ...section, items: deviceItems };
+    if (section.key === "settings") return { ...section, items: settingsItems };
+    return section;
+  });
+
+  const allItems: NavigationItem[] = dockSections.flatMap((section) => (
+    section.items || (section.to ? [{
+      to: section.to,
+      label: section.label,
+      icon: section.icon,
+      end: section.end,
+    }] : [])
+  ));
+  const currentNavItem = [...allItems]
     .sort((a, b) => b.to.length - a.to.length)
-    .find((item) =>
-      item.to === location.pathname ||
-      (!item.end && item.to !== "/" && location.pathname.startsWith(`${item.to}/`)),
-    );
+    .find((item) => isItemActive(item, location.pathname));
   const currentLabel = currentNavItem
-    ? t(currentNavItem.label)
+    ? (currentNavItem.pluginLabelZH && lang === "zh" ? currentNavItem.pluginLabelZH : t(currentNavItem.label))
     : location.pathname.startsWith("/extensions")
       ? t("扩展")
       : t("控制台");
 
-  function menuList(collapse: boolean) {
-    const sidebarPlugins = plugins
-      .filter((plugin) => plugin.enabled)
-      .flatMap((plugin) => plugin.contributions
-        .filter((contribution) => contribution.location === "sidebar")
-        .map((contribution) => ({ plugin, contribution })));
-    const groups = NAV_GROUPS.map((group) => ({
-      ...group,
-      items: [...group.items],
-    }));
-
-    const networkGroup = groups.find((group) => group.key === "network");
-    networkGroup?.items.splice(1, 0, {
-      to: "/export-proxy",
-      label: "导出代理",
-      icon: GlobeRegular,
-    });
-
-    for (const extension of sidebarPlugins) {
-      const itemKey = extension.contribution.after?.replace(/^\//, "") || "sms";
-      const targetGroup = groups.find((group) => group.items.some((item) => (item.to.replace(/^\//, "") || "dashboard") === itemKey));
-      if (!targetGroup) continue;
-      targetGroup.items.push({
-          to: `/extensions/${encodeURIComponent(extension.plugin.id)}/${encodeURIComponent(extension.contribution.id)}`,
-          label: extension.contribution.label,
-          pluginLabelZH: extension.contribution.labelZh,
-          icon: GlobeRegular,
-      });
-    }
-
-    return (
-      <nav className={cx("sidebar-menu mt-2", collapse && "is-collapsed")} aria-label={t("主导航")}>
-        {groups.map((group) => (
-          <section className={cx("sidebar-menu-group", collapse && "is-collapsed")} key={group.key}>
-            <div className="sidebar-menu-group-label" title={collapse ? t(group.label) : undefined}>
-              <span className="sidebar-menu-group-marker" aria-hidden="true" />
-              {!collapse && <span>{t(group.label)}</span>}
-            </div>
-            <div className="sidebar-menu-group-items">
-              {group.items.map((item) => {
-                const Icon = item.icon;
-                const label = item.pluginLabelZH
-                  ? (lang === "zh" ? item.pluginLabelZH : item.label)
-                  : t(item.label);
-                return (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={item.end}
-                    title={collapse ? label : undefined}
-                    className={({ isActive }) => cx("vonet-menu-item", isActive && "is-active")}
-                  >
-                    <span className="vonet-menu-icon">
-                      <Icon />
-                    </span>
-                    <span className="sidebar-menu-label">{label}</span>
-                  </NavLink>
-                );
-              })}
-            </div>
-          </section>
-        ))}
-      </nav>
-    );
-  }
-
-  function userCard() {
-    return (
-      <div className="reborn-user-card">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-300">
-          <SettingsRegular className="h-[18px] w-[18px]" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-bold">{user?.username || "Admin"}</div>
-          <div className="truncate text-xs text-gray-400">{user?.role || "Administrator"}</div>
-        </div>
-        <button
-          type="button"
-          onClick={onLogout}
-          aria-label={t("退出登录")}
-          className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-500/10"
-        >
-          <SignOutRegular className="h-[18px] w-[18px]" />
-        </button>
-      </div>
-    );
-  }
+  const userLabel = user?.username || "Admin";
 
   return (
-    <div className="flex h-full">
+    <div className="app-shell-frame">
       <IncomingCallMonitor />
-      {!isMobile && (
-        <aside
-          className={cx(
-            "reborn-sidebar relative h-full transition-[width] duration-200",
-            collapsed ? "w-[64px]" : "w-[260px]",
-          )}
-        >
-          <div className={cx("flex h-20 items-center gap-3 px-4", collapsed && "justify-center px-0")}>
-            <BrandLogo className={cx("sidebar-brand-logo", collapsed && "is-collapsed")} />
-            {!collapsed && (
-              <div className="min-w-0">
-                <div className="sidebar-brand-title">VoNet</div>
-                <div className="sidebar-brand-description">MODEM · PC/SC · PANEL</div>
-              </div>
-            )}
-          </div>
-          {menuList(collapsed)}
-          {!collapsed && <div className="absolute bottom-4 w-full px-3">{userCard()}</div>}
-        </aside>
-      )}
 
-      <Drawer open={isMobile && mobileOpen} onClose={() => setMobileOpen(false)} className="mobile-drawer">
-        <div className="reborn-sidebar reborn-mobile-sidebar relative h-full">
-          <div className="flex h-20 items-center gap-3 px-4">
-            <BrandLogo className="sidebar-brand-logo" />
-            <div className="min-w-0">
-              <div className="sidebar-brand-title">VoNet</div>
-              <div className="sidebar-brand-description">MODEM · PC/SC · PANEL</div>
-            </div>
-          </div>
-          {menuList(false)}
-          <div className="absolute bottom-4 w-full px-3">{userCard()}</div>
-        </div>
-      </Drawer>
-
-      <div className="flex h-full min-w-0 flex-1 flex-col">
+      <div className="app-shell-main">
         <header className="reborn-topbar">
           <div className="reborn-topbar-left">
-            <button
-              type="button"
-              onClick={toggle}
-              aria-label={collapsed ? t("展开侧栏") : t("收起侧栏")}
-              className="reborn-icon-button"
-            >
-              {!isMobile && !collapsed ? (
-                <PanelLeftContractRegular className="h-5 w-5" />
-              ) : (
-                <PanelLeftExpandRegular className="h-5 w-5" />
-              )}
-            </button>
+            <div className="topbar-mobile-brand">
+              <BrandLogo className="topbar-brand-logo" />
+              <div className="reborn-topbar-brand">
+                <strong>VoNet</strong>
+                <span>MODEM · PC/SC · PANEL</span>
+              </div>
+            </div>
             <div className="reborn-topbar-context">
               <span>WORKSPACE</span>
               <strong>{currentLabel}</strong>
@@ -312,8 +196,22 @@ export function AuthenticatedShell({
             <VersionBadge />
             <LanguageSwitch />
             <SwitchDark isDark={isDark} onToggle={onToggleTheme} />
+            <div className="reborn-user-chip" title={userLabel}>
+              <span className="reborn-user-avatar" aria-hidden="true">{userLabel.slice(0, 1).toUpperCase()}</span>
+              <span className="reborn-user-name">{userLabel}</span>
+              <button
+                type="button"
+                onClick={onLogout}
+                aria-label={t("退出登录")}
+                title={t("退出登录")}
+                className="reborn-user-action"
+              >
+                <SignOutRegular />
+              </button>
+            </div>
           </div>
         </header>
+
         <main className="reborn-main">
           <div className="reborn-content">
             <ErrorBoundary title={t("页面渲染失败")}>
@@ -321,6 +219,30 @@ export function AuthenticatedShell({
             </ErrorBoundary>
           </div>
         </main>
+      </div>
+
+      <div className="bottom-dock-layer">
+        <nav className="bottom-dock-shell" aria-label={t("主导航")}>
+          <div className="bottom-dock">
+            {dockSections.map((section) => {
+              const Icon = section.icon;
+              const active = isSectionActive(section, location.pathname);
+              return (
+                <button
+                  key={section.key}
+                  type="button"
+                  className={cx("bottom-dock-button", active && "is-active")}
+                  aria-current={active ? "page" : undefined}
+                  title={t(section.label)}
+                  onClick={() => navigate(sectionTarget(section))}
+                >
+                  <span className="bottom-dock-icon"><Icon /></span>
+                  <span className="bottom-dock-label">{t(section.label)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </nav>
       </div>
     </div>
   );

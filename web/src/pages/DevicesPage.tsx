@@ -5,9 +5,10 @@ import { api, apiMessage } from "../api";
 import type { DeviceConfig, DeviceListItem, DiscoveredDevice, SimCardCandidate } from "../types";
 import { usePolling } from "../lib/usePolling";
 import { useMediaQuery } from "../lib/useMediaQuery";
-import { Button, PageHeader, RefreshButton, ErrorState, ListSkeleton, Tabs, confirmDialog, message } from "../components/ui";
+import { Button, RefreshButton, ErrorState, ListSkeleton, Tabs, confirmDialog, message } from "../components/ui";
 import { DeviceListPanel, type StatusFilter, type SortDir, type SortKey } from "../components/devices/DeviceListPanel";
 import { AgentManager } from "../components/agents/AgentManager";
+import { WorkspaceSectionNav } from "../components/shell/WorkspaceSectionNav";
 import { DeviceDetailHeader } from "../components/devices/DeviceDetailHeader";
 import { DeviceEsimTab } from "../components/devices/DeviceEsimTab";
 import { DeviceConfigTab } from "../components/devices/DeviceConfigTab";
@@ -503,24 +504,10 @@ export default function DevicesPage() {
   ];
 
   return (
-    <div className="devices-page">
-      <PageHeader
-        title={t("设备管理")}
-        subtitle={t("管理设备硬件、eSIM Profile 和设备配置")}
-      />
+    <div className="devices-page workspace-page">
+      <WorkspaceSectionNav />
       <AgentManager selectedAgentId={selectedAgentId} onSelect={setSelectedAgentId}>
-        <div className="space-y-4">
-          {selectedAgentId ? (
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <RefreshButton loading={listLoading} onClick={refreshAll} />
-              <Button loading={rescanning} onClick={handleRescan} icon={<ArrowSyncRegular />}>
-                {t("重新扫描")}
-              </Button>
-              <Button variant="primary" onClick={openAddDialog} className="!border-0" icon={<AddRegular />}>
-                {t("添加设备")}
-              </Button>
-            </div>
-          ) : null}
+        <div className="workspace-agent-content">
           {selectedAgentId && listError ? (
             <ErrorState
               title={t("设备列表加载失败")}
@@ -532,10 +519,26 @@ export default function DevicesPage() {
             />
           ) : null}
           {selectedAgentId ? (
-            <div className="devices-layout">
+            <div className={`devices-layout workspace-layout ${isMobile ? "is-mobile" : ""}`}>
               {(!isMobile || !selectedId) && (
                 <DeviceListPanel
                   embedded
+                  title={t("设备管理")}
+                  countLabel={`${filteredDevices.length} / ${list.length}`}
+                  headerActions={
+                    <>
+                      <RefreshButton loading={listLoading} onClick={refreshAll} />
+                      <Button
+                        size="small"
+                        className="workspace-icon-button"
+                        loading={rescanning}
+                        onClick={handleRescan}
+                        icon={<ArrowSyncRegular />}
+                        title={t("重新扫描")}
+                        aria-label={t("重新扫描")}
+                      />
+                    </>
+                  }
                   loading={listLoading}
                   query={query}
                   statusFilter={statusFilter}
@@ -549,9 +552,14 @@ export default function DevicesPage() {
                   onSortKeyChange={setSortKey}
                   onSortDirChange={setSortDir}
                   onSelectDevice={(id) => selectDevice(id)}
+                  footer={
+                    <Button block variant="primary" onClick={openAddDialog} icon={<AddRegular />}>
+                      {t("添加设备")}
+                    </Button>
+                  }
                 />
               )}
-              <div className={`min-w-0 space-y-4 ${isMobile && selectedId ? "" : isMobile ? "hidden" : ""}`}>
+              <div className={`workspace-detail-panel min-w-0 space-y-4 ${isMobile && selectedId ? "" : isMobile ? "hidden" : ""}`}>
                 {isMobile && selectedId && selectedListItem ? (
                   <Button variant="text" onClick={handleBackToList} icon={<ChevronLeftRegular />}>
                     {t("返回")}
@@ -559,7 +567,11 @@ export default function DevicesPage() {
                 ) : null}
                 {selectedListItem ? (
                   <>
-                    <DeviceDetailHeader device={selectedListItem} onCopyText={handleCopyText} />
+                    <DeviceDetailHeader
+                      device={selectedListItem}
+                      candidate={candidateByICCID[String(selectedListItem.modem?.iccid || selectedListItem.vowifiRuntime?.iccid || "").replace(/\s+/g, "")]}
+                      onCopyText={handleCopyText}
+                    />
                     <div className="device-detail-tabs ui-card p-6">
                       <Tabs tabs={tabItems} value={activeTab} onChange={handleTabChange} />
                       <div className="mt-5">
@@ -584,7 +596,7 @@ export default function DevicesPage() {
                 ) : listLoading ? (
                   <ListSkeleton rows={8} />
                 ) : (
-                  <div className="ui-card p-10 text-center text-sm text-gray-400">
+                  <div className="workspace-detail-panel ui-card p-10 text-center text-sm text-gray-400">
                     {list.length === 0 ? t("该 Agent 当前没有已配置设备") : t("请选择设备查看详情")}
                   </div>
                 )}

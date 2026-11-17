@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState, type ReactNode } from "react";
-import { AddRegular, ArrowClockwiseRegular, DeleteRegular, EditRegular, KeyRegular, SaveRegular } from "@fluentui/react-icons";
+import { AddRegular, ArrowClockwiseRegular, DeleteRegular, EditRegular, KeyRegular, RouterRegular, SaveRegular } from "@fluentui/react-icons";
 import { api, apiMessage } from "../../api";
 import type { VoNetAgent } from "../../types";
 import { Button, Input, Modal, Tag, Textarea, confirmDialog, message } from "../ui";
@@ -149,63 +149,77 @@ export function AgentManager({ selectedAgentId, onSelect, children }: Props) {
   }
 
   return (
-    <section className="mb-6 overflow-hidden border-y border-gray-200 dark:border-white/10">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 dark:border-white/10">
-        <div>
-          <h2 className="text-base font-semibold">{t("VoNet-Agent")}</h2>
-          <p className="mt-1 text-xs text-gray-500">{t("选择远程硬件执行节点")}</p>
+    <section className="agent-workspace-bar mb-4 overflow-hidden">
+      <div className="agent-workspace-header flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">
+            <RouterRegular className="text-[21px]" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-base font-bold text-gray-900 dark:text-white">{t("VoNet-Agent")}</h2>
+            <p className="mt-1 text-xs text-gray-500">{t("选择远程硬件执行节点")}</p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <SensitiveInfoButton showLabel />
-          <Button icon={<AddRegular />} onClick={() => { setIssuedKey(""); setCreating(true); }}>{t("新建 Agent")}</Button>
+          <Button variant="primary" icon={<AddRegular />} onClick={() => { setIssuedKey(""); setCreating(true); }}>{t("新建 Agent")}</Button>
         </div>
       </div>
-      <div className="divide-y divide-gray-100 dark:divide-white/10">
-        {loading ? <div className="px-5 py-8 text-sm text-gray-500">{t("加载中...")}</div> : null}
+      <div className="space-y-3 px-4 pb-4">
+        {loading ? <div className="ui-panel-muted px-5 py-8 text-center text-sm text-gray-500">{t("加载中...")}</div> : null}
         {!loading && agents.length === 0 ? (
-          <div className="px-5 py-8 text-sm text-gray-500">{t("尚未配置 VoNet-Agent")}</div>
+          <div className="ui-panel-muted px-5 py-8 text-center text-sm text-gray-500">{t("尚未配置 VoNet-Agent")}</div>
         ) : null}
         {agents.map((agent) => {
           const selected = selectedAgentId === agent.id;
           return (
             <Fragment key={agent.id}>
-              <div className={`flex flex-wrap items-center gap-2 px-5 py-4 ${selected ? "bg-sky-50/60 dark:bg-sky-500/[0.08]" : ""}`}>
-                <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelect(agent.id)}>
+              <div className={`overflow-hidden rounded-2xl border transition-colors ${selected ? "border-blue-200 bg-blue-50/50 dark:border-blue-500/25 dark:bg-blue-500/10" : "border-transparent bg-white/70 dark:bg-white/[0.035]"}`}>
+                <div className="agent-workspace-row flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 text-left"
+                    aria-pressed={selected}
+                    onClick={() => onSelect(agent.id)}
+                  >
                   <div className="font-semibold text-gray-900 dark:text-white">
                     {showSensitive ? agent.name || agent.id : displaySecret(agent.name || agent.id, false)}
                   </div>
                   <div className="mt-1 text-xs text-gray-500">
                     {showSensitive ? agent.notes || t("无备注") : displaySecret(agent.notes, false)}
                   </div>
-                </button>
-                <Tag type={agent.status === "online" ? "success" : "warning"}>{t(agent.status)}</Tag>
-                <Button size="small" icon={<EditRegular />} onClick={() => openEditAgent(agent)}>{t("编辑")}</Button>
-                <Button
-                  size="small"
-                  icon={<ArrowClockwiseRegular />}
-                  loading={rotatingId === agent.id}
-                  disabled={!!rotatingId || !!deletingId}
-                  onClick={() => void confirmRotateKey(agent)}
-                >
-                  {t("换发密钥")}
-                </Button>
-                <Button
-                  size="small"
-                  variant="danger"
-                  icon={<DeleteRegular />}
-                  loading={deletingId === agent.id}
-                  disabled={!!rotatingId || !!deletingId}
-                  onClick={() => void confirmDeleteAgent(agent)}
-                >
-                  {t("删除")}
-                </Button>
+                  </button>
+                  <Tag type={agent.status === "online" ? "success" : "warning"}>{t(agent.status)}</Tag>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button size="small" icon={<EditRegular />} onClick={() => openEditAgent(agent)}>{t("编辑")}</Button>
+                    <Button
+                      size="small"
+                      icon={<ArrowClockwiseRegular />}
+                      loading={rotatingId === agent.id}
+                      disabled={!!rotatingId || !!deletingId}
+                      onClick={() => void confirmRotateKey(agent)}
+                    >
+                      {t("换发密钥")}
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="danger"
+                      icon={<DeleteRegular />}
+                      loading={deletingId === agent.id}
+                      disabled={!!rotatingId || !!deletingId}
+                      onClick={() => void confirmDeleteAgent(agent)}
+                    >
+                      {t("删除")}
+                    </Button>
+                  </div>
+                </div>
+                {selected ? <div className="agent-workspace-content border-t border-blue-100 bg-white/55 dark:border-white/10 dark:bg-white/[0.025]">{children}</div> : null}
               </div>
-              {selected ? <div className="border-t border-gray-200 bg-gray-50/40 px-5 py-5 dark:border-white/10 dark:bg-white/[0.02]">{children}</div> : null}
             </Fragment>
           );
         })}
         {!selectedAgentId && children ? (
-          <div className="px-5 py-6">{children}</div>
+          <div className="ui-panel-muted px-5 py-6">{children}</div>
         ) : null}
       </div>
       <Modal open={creating} onClose={() => { if (!submitting) setCreating(false); }} title={t("新建 VoNet-Agent")}>

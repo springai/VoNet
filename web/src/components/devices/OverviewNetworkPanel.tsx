@@ -6,6 +6,7 @@ import { useI18n } from "../../lib/i18n";
 import { api, apiMessage } from "../../api";
 import { Button, message } from "../ui";
 import { CountryFlag } from "../CountryFlag";
+import { WifiOffRegular } from "@fluentui/react-icons";
 
 export interface OverviewNetworkPanelProps {
   device: DeviceDetail;
@@ -13,9 +14,10 @@ export interface OverviewNetworkPanelProps {
   trafficMinuteTx: string;
   trafficSpeedRx: string;
   trafficSpeedTx: string;
+  reader?: boolean;
 }
 
-export function OverviewNetworkPanel({ device, trafficMinuteRx, trafficMinuteTx, trafficSpeedRx, trafficSpeedTx }: OverviewNetworkPanelProps) {
+export function OverviewNetworkPanel({ device, trafficMinuteRx, trafficMinuteTx, trafficSpeedRx, trafficSpeedTx, reader = false }: OverviewNetworkPanelProps) {
   const { t, lang } = useI18n();
   const [publicIP, setPublicIP] = useState<PublicIPInfo | null>(null);
   const [detectingIP, setDetectingIP] = useState(false);
@@ -108,9 +110,22 @@ export function OverviewNetworkPanel({ device, trafficMinuteRx, trafficMinuteTx,
     ? [countryName, publicIP.region, publicIP.city].filter((value, index, values) => value && values.indexOf(value) === index).join(" · ")
     : "";
 
+  if (reader) {
+    return (
+      <div className="ui-panel-muted p-4">
+        <div className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">{t("蜂窝网络")}</div>
+        <div className="overview-not-applicable">
+          <WifiOffRegular />
+          <strong>{t("不适用")}</strong>
+          <span>{t("读卡器通过 Wi-Fi Calling 提供语音和短信，不使用蜂窝网络。")}</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="ui-panel-muted p-4">
-      <div className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">{t("网络")}</div>
+      <div className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">{t("蜂窝网络")}</div>
       <div className="space-y-1.5 text-sm text-gray-700 dark:text-gray-200">
         <FieldRow label={t("数据会话")} value={displayedSessionState} valueTitle={sessionError || displayedSessionState} />
         <div className="flex w-full min-w-0 items-center justify-between gap-3">

@@ -1,9 +1,8 @@
 import { useState } from "react";
-import { CallRegular } from "@fluentui/react-icons";
+import { CallRegular, CopyRegular, SendRegular, WarningRegular } from "@fluentui/react-icons";
 import { api, ApiError } from "../../api";
-import { Button, Input } from "../ui";
+import { Button, Input, message } from "../ui";
 import { UssdLogEntry, type UssdLogItem } from "./UssdLogEntry";
-import { AtTypingBubble } from "./AtLogEntry";
 import { tf, useI18n } from "../../lib/i18n";
 
 interface UssdResult {
@@ -35,6 +34,14 @@ export function DeviceUssdTab({
   const inSession = !!sessionId;
   const canOperate = operable && !!deviceId;
   const placeholder = inSession ? t("输入菜单选项数字") : t("例如 *100# 或菜单回复数字");
+  const channelLabel = channel === "vowifi" ? "VoWiFi" : "CS";
+  const responseText = log.length
+    ? log.map((item) => {
+        if (item.type === "req") return `> ${item.content}`;
+        if (item.type === "sys") return `* ${item.content}`;
+        return item.content;
+      }).join("\n\n")
+    : t("尚未执行 USSD 命令。输入短码开始会话。");
 
   function clearSession() {
     setSessionId("");
@@ -111,83 +118,120 @@ export function DeviceUssdTab({
     }
   }
 
+  async function copyResponse() {
+    try {
+      await navigator.clipboard.writeText(responseText);
+      message.success(t("USSD 响应已复制"));
+    } catch {
+      message.error(t("复制 USSD 响应失败"));
+    }
+  }
+
   return (
-    <div>
-      <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400">
-          <CallRegular className="text-[22px]" />
+    <section className="terminal-module terminal-module-ussd">
+      <div className="terminal-panel-header">
+        <div className="terminal-panel-title">
+          <CallRegular />
+          <strong>{t("USSD 会话")}</strong>
         </div>
-        <div className="flex-1">
-          <div className="text-lg font-bold text-gray-900 dark:text-white">{t("USSD 交互终端")}</div>
-          <div className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">{t("发送 USSD 代码 (如 *100#) 并等待网络菜单响应")}</div>
+        <div className="terminal-panel-meta">
+          {inSession ? (
+            <>
+              <span className="terminal-session-live"><i />{t("多轮会话中")}</span>
+              <Button variant="warning" size="small" plain onClick={cancelSession} disabled={loading}>
+                {t("取消会话")}
+              </Button>
+            </>
+          ) : (
+            <span>{canOperate ? `${t("设备在线")} · ${channelLabel}` : `${t("设备离线")} · ${channelLabel}`}</span>
+          )}
         </div>
-        {inSession ? (
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
-              {t("多轮会话中")}
-            </span>
-            <Button variant="warning" size="small" plain onClick={cancelSession} disabled={loading}>
-              {t("取消会话")}
-            </Button>
-          </div>
-        ) : null}
       </div>
-      <div className="ui-panel-muted relative mt-4 flex h-[320px] flex-col gap-3 overflow-auto rounded-xl border border-gray-100 p-4 dark:border-white/10">
-        {log.length === 0 && !loading ? (
-          <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-400">{t("暂无 USSD 会话记录")}</div>
-        ) : null}
-        {log.map((item, i) => (
-          <UssdLogEntry key={i} item={item} />
-        ))}
-        {loading ? <AtTypingBubble label={t("等待网络响应...")} /> : null}
+
+      <p className="terminal-description">
+        {t("单次等待最长 {seconds} 秒；菜单空闲 180 秒后自动结束").replace("{seconds}", String(Math.max(1, Math.round(timeoutMs / 1000))))}
+      </p>
+
+      <div className="terminal-response">
+        <div className="terminal-response-head">
+          <span>{t("USSD 响应预览")}</span>
+          <Button
+            size="small"
+            plain
+            disabled={!log.length}
+            onClick={() => void copyResponse()}
+            icon={<CopyRegular />}
+          >
+            {t("复制")}
+          </Button>
+        </div>
+        <div className="terminal-response-body">
+          {log.length ? (
+            log.map((item, i) => <UssdLogEntry key={`${item.ts}-${i}`} item={item} />)
+          ) : (
+            <pre>{t("尚未执行 USSD 命令。输入短码开始会话。")}</pre>
+          )}
+          {loading ? <div className="terminal-waiting">{t("等待网络响应...")}</div> : null}
+        </div>
       </div>
+
       {!canOperate ? (
-        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
-          {t("当前卡片离线或设备不可用，USSD 仅可查看，不能发送或继续会话。")}
+        <div className="terminal-disabled-note">
+          <WarningRegular />
+          <span><strong>{t("USSD 不可用")}</strong> · {t("当前卡片离线或设备不可用，不能发送或继续会话。")}</span>
         </div>
       ) : null}
-      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_110px_auto]">
-        <div className="space-y-1">
-          <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">{inSession ? t("菜单回复") : t("命令 / 回复")}</div>
-          <Input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={placeholder}
-            disabled={loading || !canOperate}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") send();
-            }}
-          />
-        </div>
-        <div className="space-y-1">
-          <div className="text-[11px] font-bold uppercase tracking-wider text-gray-500">{t("超时(ms)")}</div>
-          <Input
-            type="number"
-            inputMode="numeric"
-            value={String(timeoutMs)}
-            onChange={(e) => setTimeoutMs(Number(e.target.value))}
-            placeholder="45000"
-          />
-        </div>
-        <div className="space-y-1 self-end">
-          <div className="select-none text-[11px] font-bold uppercase tracking-wider opacity-0">{t("操作")}</div>
-          <div className="flex items-center justify-end gap-2">
-            <Button
-              disabled={loading || !canOperate}
-              onClick={() => {
-                setLog([]);
-                clearSession();
-              }}
-            >
-              {t("清空")}
-            </Button>
-            <Button variant="primary" loading={loading} disabled={!input || !canOperate} onClick={send} className="!border-0">
-              {inSession ? t("回复") : t("发送")}
-            </Button>
-          </div>
-        </div>
+
+      <label className="terminal-field-label">{inSession ? t("菜单回复") : t("USSD 短码")}</label>
+      <div className="terminal-input-row">
+        <Input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder={placeholder}
+          disabled={loading || !canOperate}
+          className={!canOperate ? "terminal-input-blocked" : ""}
+          title={!canOperate ? t("当前设备或卡片不可用，USSD 无法输入") : t("输入 USSD 短码或菜单回复")}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void send();
+          }}
+        />
+        <Button
+          variant="primary"
+          loading={loading}
+          disabled={!input.trim() || !canOperate}
+          onClick={() => void send()}
+          icon={<SendRegular />}
+        >
+          {inSession ? t("回复") : t("发送")}
+        </Button>
       </div>
-    </div>
+
+      <details className="terminal-advanced">
+        <summary>{t("高级选项")}</summary>
+        <div className="terminal-advanced-grid">
+          <label>
+            <span>{t("超时(ms)")}</span>
+            <Input
+              type="number"
+              inputMode="numeric"
+              value={String(timeoutMs)}
+              disabled={!canOperate}
+              className={!canOperate ? "terminal-input-blocked" : ""}
+              onChange={(e) => setTimeoutMs(Number(e.target.value))}
+              placeholder="45000"
+            />
+          </label>
+          <Button
+            disabled={!log.length && !inSession}
+            onClick={() => {
+              setLog([]);
+              clearSession();
+            }}
+          >
+            {t("清空记录")}
+          </Button>
+        </div>
+      </details>
+    </section>
   );
 }

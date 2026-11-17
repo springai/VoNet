@@ -104,7 +104,7 @@ function AppRoot() {
   if (!ready) return <LoadingScreen />;
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-gray-50 font-sans text-gray-900 transition-colors duration-300 selection:bg-indigo-500 selection:text-white dark:bg-[#101014] dark:text-gray-100">
+    <div className="h-screen w-screen overflow-hidden bg-transparent font-sans text-gray-900 transition-colors duration-300 selection:bg-sky-500 selection:text-white dark:bg-transparent dark:text-gray-100">
       <Routes>
         <Route path="/login" element={<LoginLayout isDark={isDark} onToggleTheme={toggle} />}>
           <Route index element={<LoginPage />} />
