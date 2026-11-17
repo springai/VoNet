@@ -22,6 +22,7 @@ export interface DeviceListPanelProps {
   onSortKeyChange: (v: SortKey) => void;
   onSortDirChange: (v: SortDir) => void;
   onSelectDevice: (id: string) => void;
+  embedded?: boolean;
 }
 
 function primaryLine(d: DeviceListItem): string {
@@ -45,9 +46,9 @@ function statusLine(d: DeviceListItem): string {
 
 export function DeviceListPanel(props: DeviceListPanelProps) {
   const { t } = useI18n();
-  const { loading, query, statusFilter, sortKey, sortDir, selectedId, filteredDevices } = props;
+  const { loading, query, statusFilter, sortKey, sortDir, selectedId, filteredDevices, embedded } = props;
   return (
-    <div className="ui-card p-5">
+    <div className={embedded ? "min-w-0" : "ui-card p-5"}>
       <div className="mb-4 flex items-center gap-3">
         <Input value={query} onChange={(e) => props.onQueryChange(e.target.value)} placeholder={t("搜索设备 / ICCID / IMEI / 网卡")} />
       </div>
@@ -84,7 +85,7 @@ export function DeviceListPanel(props: DeviceListPanelProps) {
       {loading && filteredDevices.length === 0 ? (
         <ListSkeleton rows={8} />
       ) : filteredDevices.length === 0 ? (
-        <EmptyState title={t("暂无设备")} subtitle={t("点击右上角“添加设备”开始接管")} />
+        <EmptyState title={t("暂无设备")} subtitle={t("该 Agent 当前没有已配置设备")} />
       ) : (
         <div className="device-list-scroll max-h-[65vh] overflow-y-auto pr-1">
           <div className="device-list-grid">

@@ -52,7 +52,7 @@ func (s *Store) UpsertDevice(ctx context.Context, value Device) error {
 		return fmt.Errorf("begin device upsert: %w", err)
 	}
 	defer tx.Rollback()
-	if err := upsertDeviceWithPCSCIMEILease(ctx, tx, value); err != nil {
+	if err := s.upsertDeviceWithPCSCIMEILease(ctx, tx, value); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -75,7 +75,7 @@ func (s *Store) SaveDeviceState(
 	}
 	defer tx.Rollback()
 
-	if err := upsertDevice(ctx, tx, value); err != nil {
+	if err := upsertDevice(ctx, tx, value, s.ensureSensitive()); err != nil {
 		return err
 	}
 	if err := ensureDevicePCSCIMEILease(ctx, tx, value); err != nil {
@@ -89,7 +89,7 @@ func (s *Store) SaveDeviceState(
 		if snapshot.DeviceID != value.ID {
 			return errors.New("device runtime belongs to a different device")
 		}
-		if err := upsertDeviceRuntime(ctx, tx, snapshot); err != nil {
+		if err := upsertDeviceRuntime(ctx, tx, snapshot, s.ensureSensitive()); err != nil {
 			return err
 		}
 	}
@@ -101,7 +101,7 @@ func (s *Store) SaveDeviceState(
 		if snapshot.DeviceID != value.ID {
 			return errors.New("VoWiFi runtime belongs to a different device")
 		}
-		if err := upsertVoWiFiRuntime(ctx, tx, snapshot); err != nil {
+		if err := upsertVoWiFiRuntime(ctx, tx, snapshot, s.ensureSensitive()); err != nil {
 			return err
 		}
 	}
@@ -111,12 +111,12 @@ func (s *Store) SaveDeviceState(
 	return nil
 }
 
-func upsertDeviceWithPCSCIMEILease(
+func (s *Store) upsertDeviceWithPCSCIMEILease(
 	ctx context.Context,
 	executor contextQueryExecer,
 	value Device,
 ) error {
-	if err := upsertDevice(ctx, executor, value); err != nil {
+	if err := upsertDevice(ctx, executor, value, s.ensureSensitive()); err != nil {
 		return err
 	}
 	return ensureDevicePCSCIMEILease(ctx, executor, value)
@@ -134,7 +134,7 @@ func ensureDevicePCSCIMEILease(
 	return err
 }
 
-func upsertDevice(ctx context.Context, executor contextExecer, value Device) error {
+func upsertDevice(ctx context.Context, executor contextExecer, value Device, sensitive *fieldCipher) error {
 	value.ID = strings.TrimSpace(value.ID)
 	value.Name = strings.TrimSpace(value.Name)
 	if value.ID == "" {
@@ -212,6 +212,13 @@ func upsertDevice(ctx context.Context, executor contextExecer, value Device) err
 	if err != nil {
 		return fmt.Errorf("normalize device extra data: %w", err)
 	}
+	sealedExtra, err := sensitive.seal("devices.extra_json", string(extra))
+	if err != nil {
+		return fmt.Errorf("encrypt device extra data: %w", err)
+	}
+	value.AgentID = strings.TrimSpace(value.AgentID)
+	value.RemoteDeviceID = strings.TrimSpace(value.RemoteDeviceID)
+	value.RemoteHardwareGeneration = strings.TrimSpace(value.RemoteHardwareGeneration)
 	now := time.Now().UTC()
 	createdAt := value.CreatedAt
 	if createdAt.IsZero() {
@@ -224,14 +231,18 @@ func upsertDevice(ctx context.Context, executor contextExecer, value Device) err
 
 	_, err = executor.ExecContext(ctx, `
 		INSERT INTO devices (
-			id, name, device_type, interface, control_device, at_port, usb_path,
-			audio_device, modem_imei, sim_pin, apn, proxy_port, baud_rate,
+			id, agent_id, remote_device_id, remote_hardware_generation,
+			name, device_type, interface, control_device, at_port, usb_path,
+			audio_device, modem_imei, apn, proxy_port, baud_rate,
 			data_bits, stop_bits, parity, device_backend, esim_transport,
 			qmi_use_proxy, qmi_proxy_path, qmi_proxy_executable,
 			network_enabled, sms_enabled, vowifi_enabled, extra_json,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
+			agent_id = excluded.agent_id,
+			remote_device_id = excluded.remote_device_id,
+			remote_hardware_generation = excluded.remote_hardware_generation,
 			name = excluded.name,
 			device_type = excluded.device_type,
 			interface = excluded.interface,
@@ -240,7 +251,6 @@ func upsertDevice(ctx context.Context, executor contextExecer, value Device) err
 			usb_path = excluded.usb_path,
 			audio_device = excluded.audio_device,
 			modem_imei = excluded.modem_imei,
-			sim_pin = excluded.sim_pin,
 			apn = excluded.apn,
 			proxy_port = excluded.proxy_port,
 			baud_rate = excluded.baud_rate,
@@ -258,23 +268,81 @@ func upsertDevice(ctx context.Context, executor contextExecer, value Device) err
 			extra_json = excluded.extra_json,
 			updated_at = excluded.updated_at
 	`,
-		value.ID, value.Name, value.DeviceType, value.Interface, value.ControlDevice, value.ATPort,
-		value.USBPath, value.AudioDevice, value.ModemIMEI, value.SIMPIN, value.APN,
+		value.ID, value.AgentID, value.RemoteDeviceID, value.RemoteHardwareGeneration,
+		value.Name, value.DeviceType, value.Interface, value.ControlDevice, value.ATPort,
+		value.USBPath, value.AudioDevice, value.ModemIMEI, value.APN,
 		value.ProxyPort, value.BaudRate, value.DataBits, value.StopBits,
 		value.Parity, value.DeviceBackend, value.ESIMTransport,
 		boolInt(value.QMIUseProxy), value.QMIProxyPath, value.QMIProxyExecutable,
 		boolInt(value.NetworkEnabled), boolInt(value.SMSEnabled),
-		boolInt(value.VoWiFiEnabled), string(extra), createdAt.Unix(),
+		boolInt(value.VoWiFiEnabled), sealedExtra, createdAt.Unix(),
 		updatedAt.Unix(),
 	)
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no column named agent_id") {
+			return upsertLegacyDevice(ctx, executor, value, string(extra), createdAt, updatedAt)
+		}
 		return fmt.Errorf("upsert device %q: %w", value.ID, err)
 	}
 	return nil
 }
 
+func upsertLegacyDevice(
+	ctx context.Context,
+	executor contextExecer,
+	value Device,
+	extra string,
+	createdAt, updatedAt time.Time,
+) error {
+	_, err := executor.ExecContext(ctx, `
+		INSERT INTO devices (
+			id, name, device_type, interface, control_device, at_port, usb_path,
+			audio_device, modem_imei, sim_pin, apn, proxy_port, baud_rate,
+			data_bits, stop_bits, parity, device_backend, esim_transport,
+			qmi_use_proxy, qmi_proxy_path, qmi_proxy_executable,
+			network_enabled, sms_enabled, vowifi_enabled, extra_json,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name = excluded.name, device_type = excluded.device_type,
+			interface = excluded.interface, control_device = excluded.control_device,
+			at_port = excluded.at_port, usb_path = excluded.usb_path,
+			audio_device = excluded.audio_device, modem_imei = excluded.modem_imei,
+			apn = excluded.apn, proxy_port = excluded.proxy_port,
+			baud_rate = excluded.baud_rate, data_bits = excluded.data_bits,
+			stop_bits = excluded.stop_bits, parity = excluded.parity,
+			device_backend = excluded.device_backend,
+			esim_transport = excluded.esim_transport,
+			qmi_use_proxy = excluded.qmi_use_proxy,
+			qmi_proxy_path = excluded.qmi_proxy_path,
+			qmi_proxy_executable = excluded.qmi_proxy_executable,
+			network_enabled = excluded.network_enabled,
+			sms_enabled = excluded.sms_enabled,
+			vowifi_enabled = excluded.vowifi_enabled,
+			extra_json = excluded.extra_json, updated_at = excluded.updated_at
+	`, value.ID, value.Name, value.DeviceType, value.Interface, value.ControlDevice,
+		value.ATPort, value.USBPath, value.AudioDevice, value.ModemIMEI, value.APN,
+		value.ProxyPort, value.BaudRate, value.DataBits, value.StopBits, value.Parity,
+		value.DeviceBackend, value.ESIMTransport, boolInt(value.QMIUseProxy),
+		value.QMIProxyPath, value.QMIProxyExecutable, boolInt(value.NetworkEnabled),
+		boolInt(value.SMSEnabled), boolInt(value.VoWiFiEnabled), extra,
+		createdAt.Unix(), updatedAt.Unix(),
+	)
+	return err
+}
+
 func (s *Store) Device(ctx context.Context, id string) (Device, error) {
-	return scanDevice(s.db.QueryRowContext(ctx, deviceSelect+` WHERE id = ?`, id))
+	return s.scanDevice(s.db.QueryRowContext(ctx, deviceSelect+` WHERE id = ?`, id))
+}
+
+func (s *Store) DeviceByRemoteBinding(ctx context.Context, agentID, remoteDeviceID string) (Device, error) {
+	agentID = strings.TrimSpace(agentID)
+	remoteDeviceID = strings.TrimSpace(remoteDeviceID)
+	if agentID == "" || remoteDeviceID == "" {
+		return Device{}, ErrNotFound
+	}
+	return s.scanDevice(s.db.QueryRowContext(ctx,
+		deviceSelect+` WHERE agent_id = ? AND remote_device_id = ?`, agentID, remoteDeviceID))
 }
 
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
@@ -286,7 +354,7 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 
 	values := make([]Device, 0)
 	for rows.Next() {
-		value, err := scanDevice(rows)
+		value, err := s.scanDevice(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scan device: %w", err)
 		}
@@ -368,21 +436,23 @@ func (s *Store) DeleteDevice(ctx context.Context, id string) error {
 }
 
 const deviceSelect = `
-	SELECT id, name, device_type, interface, control_device, at_port, usb_path,
-		audio_device, modem_imei, sim_pin, apn, proxy_port, baud_rate, data_bits,
+	SELECT id, agent_id, remote_device_id, remote_hardware_generation,
+		name, device_type, interface, control_device, at_port, usb_path,
+		audio_device, modem_imei, apn, proxy_port, baud_rate, data_bits,
 		stop_bits, parity, device_backend, esim_transport, qmi_use_proxy,
 		qmi_proxy_path, qmi_proxy_executable, network_enabled, sms_enabled,
 		vowifi_enabled, extra_json, created_at, updated_at
 	FROM devices`
 
-func scanDevice(row rowScanner) (Device, error) {
+func (s *Store) scanDevice(row rowScanner) (Device, error) {
 	var value Device
 	var qmiUseProxy, networkEnabled, smsEnabled, vowifiEnabled int
 	var extra string
 	var createdAt, updatedAt int64
 	err := row.Scan(
-		&value.ID, &value.Name, &value.DeviceType, &value.Interface, &value.ControlDevice,
-		&value.ATPort, &value.USBPath, &value.AudioDevice, &value.ModemIMEI, &value.SIMPIN,
+		&value.ID, &value.AgentID, &value.RemoteDeviceID, &value.RemoteHardwareGeneration,
+		&value.Name, &value.DeviceType, &value.Interface, &value.ControlDevice,
+		&value.ATPort, &value.USBPath, &value.AudioDevice, &value.ModemIMEI,
 		&value.APN, &value.ProxyPort, &value.BaudRate, &value.DataBits,
 		&value.StopBits, &value.Parity, &value.DeviceBackend,
 		&value.ESIMTransport, &qmiUseProxy, &value.QMIProxyPath,
@@ -400,20 +470,25 @@ func scanDevice(row rowScanner) (Device, error) {
 	value.SMSEnabled = smsEnabled != 0
 	value.VoWiFiEnabled = vowifiEnabled != 0
 	value.DeviceType = NormalizeDeviceType(value.DeviceType)
-	value.Extra = []byte(extra)
+	openExtra, err := s.openField("devices.extra_json", extra)
+	if err != nil {
+		return Device{}, fmt.Errorf("decrypt device extra data: %w", err)
+	}
+	value.Extra = []byte(openExtra)
 	value.CreatedAt = time.Unix(createdAt, 0).UTC()
 	value.UpdatedAt = time.Unix(updatedAt, 0).UTC()
 	return value, nil
 }
 
 func (s *Store) UpsertDeviceRuntime(ctx context.Context, value DeviceRuntime) error {
-	return upsertDeviceRuntime(ctx, s.db, value)
+	return upsertDeviceRuntime(ctx, s.db, value, s.ensureSensitive())
 }
 
 func upsertDeviceRuntime(
 	ctx context.Context,
 	executor contextExecer,
 	value DeviceRuntime,
+	sensitive *fieldCipher,
 ) error {
 	if strings.TrimSpace(value.DeviceID) == "" {
 		return errors.New("device runtime device id is required")
@@ -425,6 +500,22 @@ func upsertDeviceRuntime(
 	extra, err := normalizeJSONObject(value.Extra)
 	if err != nil {
 		return fmt.Errorf("normalize device runtime extra data: %w", err)
+	}
+	sealedIMSI, err := sensitive.seal("device_runtime.imsi", value.IMSI)
+	if err != nil {
+		return err
+	}
+	sealedPhone, err := sensitive.seal("device_runtime.phone_number", value.PhoneNumber)
+	if err != nil {
+		return err
+	}
+	sealedTraffic, err := sensitive.seal("device_runtime.traffic_json", string(traffic))
+	if err != nil {
+		return err
+	}
+	sealedExtra, err := sensitive.seal("device_runtime.extra_json", string(extra))
+	if err != nil {
+		return err
 	}
 	updatedAt := value.UpdatedAt
 	if updatedAt.IsZero() {
@@ -491,11 +582,11 @@ func upsertDeviceRuntime(
 		value.NativeMNC, value.NativeSPN, value.NetworkMode,
 		value.NetworkDuplex, value.RadioBand, value.RadioChannel,
 		value.SignalDBM, nullableInt(value.SignalRSRP), nullableInt(value.SignalRSRQ),
-		nullableInt(value.SignalSINR), value.IMEI, value.ICCID, value.IMSI,
+		nullableInt(value.SignalSINR), value.IMEI, value.ICCID, sealedIMSI,
 		value.Firmware, value.RegStatus, value.RegStatusText,
 		nullableBool(value.PSAttached), nullableBool(value.SIMInserted),
-		nullableInt(value.OperatingMode), value.PhoneNumber,
-		value.PhoneNumberSource, string(traffic), string(extra), updatedAt.Unix(),
+		nullableInt(value.OperatingMode), sealedPhone,
+		value.PhoneNumberSource, sealedTraffic, sealedExtra, updatedAt.Unix(),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert runtime for device %q: %w", value.DeviceID, err)
@@ -504,7 +595,7 @@ func upsertDeviceRuntime(
 }
 
 func (s *Store) DeviceRuntime(ctx context.Context, deviceID string) (DeviceRuntime, error) {
-	return scanDeviceRuntime(s.db.QueryRowContext(ctx, deviceRuntimeSelect+` WHERE device_id = ?`, deviceID))
+	return s.scanDeviceRuntime(s.db.QueryRowContext(ctx, deviceRuntimeSelect+` WHERE device_id = ?`, deviceID))
 }
 
 const deviceRuntimeSelect = `
@@ -518,7 +609,7 @@ const deviceRuntimeSelect = `
 		phone_number, phone_number_source, traffic_json, extra_json, updated_at
 	FROM device_runtime`
 
-func scanDeviceRuntime(row rowScanner) (DeviceRuntime, error) {
+func (s *Store) scanDeviceRuntime(row rowScanner) (DeviceRuntime, error) {
 	var value DeviceRuntime
 	var running, healthy, controlOnline, physicalPresent int
 	var workerRunning, dataConnected, radioRegistered, networkConnected int
@@ -560,8 +651,24 @@ func scanDeviceRuntime(row rowScanner) (DeviceRuntime, error) {
 	value.PSAttached = nullBoolPointer(psAttached)
 	value.SIMInserted = nullBoolPointer(simInserted)
 	value.OperatingMode = nullIntPointer(operatingMode)
-	value.Traffic = []byte(traffic)
-	value.Extra = []byte(extra)
+	value.IMSI, err = s.openField("device_runtime.imsi", value.IMSI)
+	if err != nil {
+		return DeviceRuntime{}, err
+	}
+	value.PhoneNumber, err = s.openField("device_runtime.phone_number", value.PhoneNumber)
+	if err != nil {
+		return DeviceRuntime{}, err
+	}
+	openTraffic, err := s.openField("device_runtime.traffic_json", traffic)
+	if err != nil {
+		return DeviceRuntime{}, err
+	}
+	openExtra, err := s.openField("device_runtime.extra_json", extra)
+	if err != nil {
+		return DeviceRuntime{}, err
+	}
+	value.Traffic = []byte(openTraffic)
+	value.Extra = []byte(openExtra)
 	value.UpdatedAt = time.Unix(updatedAt, 0).UTC()
 	return value, nil
 }
@@ -575,13 +682,14 @@ func (s *Store) DeleteDeviceRuntime(ctx context.Context, deviceID string) error 
 }
 
 func (s *Store) UpsertVoWiFiRuntime(ctx context.Context, value VoWiFiRuntime) error {
-	return upsertVoWiFiRuntime(ctx, s.db, value)
+	return upsertVoWiFiRuntime(ctx, s.db, value, s.ensureSensitive())
 }
 
 func upsertVoWiFiRuntime(
 	ctx context.Context,
 	executor contextExecer,
 	value VoWiFiRuntime,
+	sensitive *fieldCipher,
 ) error {
 	if strings.TrimSpace(value.DeviceID) == "" {
 		return errors.New("VoWiFi runtime device id is required")
@@ -601,6 +709,30 @@ func upsertVoWiFiRuntime(
 	extra, err := normalizeJSONObject(value.Extra)
 	if err != nil {
 		return fmt.Errorf("normalize VoWiFi extra state: %w", err)
+	}
+	sealedIMSI, err := sensitive.seal("vowifi_runtime.imsi", value.IMSI)
+	if err != nil {
+		return err
+	}
+	sealedPhone, err := sensitive.seal("vowifi_runtime.local_phone", value.LocalPhone)
+	if err != nil {
+		return err
+	}
+	sealedTunnel, err := sensitive.seal("vowifi_runtime.tunnel_json", string(tunnel))
+	if err != nil {
+		return err
+	}
+	sealedIMSCore, err := sensitive.seal("vowifi_runtime.imscore_json", string(imscore))
+	if err != nil {
+		return err
+	}
+	sealedSMSIP, err := sensitive.seal("vowifi_runtime.smsip_json", string(smsip))
+	if err != nil {
+		return err
+	}
+	sealedExtra, err := sensitive.seal("vowifi_runtime.extra_json", string(extra))
+	if err != nil {
+		return err
 	}
 	updatedAt := value.UpdatedAt
 	if updatedAt.IsZero() {
@@ -639,12 +771,12 @@ func upsertVoWiFiRuntime(
 			updated_at = excluded.updated_at
 	`,
 		value.DeviceID, value.Phase, value.DataplaneMode, value.ICCID,
-		value.IMSI, boolInt(value.SIMReady), boolInt(value.AccessReady),
+		sealedIMSI, boolInt(value.SIMReady), boolInt(value.AccessReady),
 		boolInt(value.TunnelReady), boolInt(value.IMSReady),
 		boolInt(value.SMSReady), value.RegStatus, value.RegStatusText,
-		value.NetworkMode, value.LocalPhone, value.PhoneNumberSource,
+		value.NetworkMode, sealedPhone, value.PhoneNumberSource,
 		value.LastErrorClass, value.LastError, value.LastReason,
-		string(tunnel), string(imscore), string(smsip), string(extra),
+		sealedTunnel, sealedIMSCore, sealedSMSIP, sealedExtra,
 		updatedAt.Unix(),
 	)
 	if err != nil {
@@ -654,7 +786,7 @@ func upsertVoWiFiRuntime(
 }
 
 func (s *Store) VoWiFiRuntime(ctx context.Context, deviceID string) (VoWiFiRuntime, error) {
-	return scanVoWiFiRuntime(s.db.QueryRowContext(ctx, vowifiRuntimeSelect+` WHERE device_id = ?`, deviceID))
+	return s.scanVoWiFiRuntime(s.db.QueryRowContext(ctx, vowifiRuntimeSelect+` WHERE device_id = ?`, deviceID))
 }
 
 const vowifiRuntimeSelect = `
@@ -665,7 +797,7 @@ const vowifiRuntimeSelect = `
 		smsip_json, extra_json, updated_at
 	FROM vowifi_runtime`
 
-func scanVoWiFiRuntime(row rowScanner) (VoWiFiRuntime, error) {
+func (s *Store) scanVoWiFiRuntime(row rowScanner) (VoWiFiRuntime, error) {
 	var value VoWiFiRuntime
 	var simReady, accessReady, tunnelReady, imsReady, smsReady int
 	var tunnel, imscore, smsip, extra string
@@ -689,10 +821,34 @@ func scanVoWiFiRuntime(row rowScanner) (VoWiFiRuntime, error) {
 	value.TunnelReady = tunnelReady != 0
 	value.IMSReady = imsReady != 0
 	value.SMSReady = smsReady != 0
-	value.Tunnel = []byte(tunnel)
-	value.IMSCore = []byte(imscore)
-	value.SMSIP = []byte(smsip)
-	value.Extra = []byte(extra)
+	value.IMSI, err = s.openField("vowifi_runtime.imsi", value.IMSI)
+	if err != nil {
+		return VoWiFiRuntime{}, err
+	}
+	value.LocalPhone, err = s.openField("vowifi_runtime.local_phone", value.LocalPhone)
+	if err != nil {
+		return VoWiFiRuntime{}, err
+	}
+	openTunnel, err := s.openField("vowifi_runtime.tunnel_json", tunnel)
+	if err != nil {
+		return VoWiFiRuntime{}, err
+	}
+	openIMSCore, err := s.openField("vowifi_runtime.imscore_json", imscore)
+	if err != nil {
+		return VoWiFiRuntime{}, err
+	}
+	openSMSIP, err := s.openField("vowifi_runtime.smsip_json", smsip)
+	if err != nil {
+		return VoWiFiRuntime{}, err
+	}
+	openExtra, err := s.openField("vowifi_runtime.extra_json", extra)
+	if err != nil {
+		return VoWiFiRuntime{}, err
+	}
+	value.Tunnel = []byte(openTunnel)
+	value.IMSCore = []byte(openIMSCore)
+	value.SMSIP = []byte(openSMSIP)
+	value.Extra = []byte(openExtra)
 	value.UpdatedAt = time.Unix(updatedAt, 0).UTC()
 	return value, nil
 }

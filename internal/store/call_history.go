@@ -28,11 +28,33 @@ func (s *Store) InsertCallRecord(record CallRecord) error {
 	if record.StartedAt == 0 {
 		record.StartedAt = time.Now().Unix()
 	}
-	_, err := s.db.Exec(`
+	storedNumber, err := s.sealField("call_history.number", record.Number)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`
 		INSERT INTO call_history (device_id, iccid, number, direction, status, transport, duration_seconds, started_at, ended_at, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, record.DeviceID, record.ICCID, record.Number, record.Direction, record.Status, record.Transport, record.DurationSeconds, record.StartedAt, record.EndedAt, record.CreatedAt)
+	`, record.DeviceID, record.ICCID, storedNumber, record.Direction, record.Status, record.Transport, record.DurationSeconds, record.StartedAt, record.EndedAt, record.CreatedAt)
 	return err
+}
+
+func (s *Store) scanCallRecord(row rowScanner) (CallRecord, error) {
+	var record CallRecord
+	var storedNumber string
+	if err := row.Scan(
+		&record.ID, &record.DeviceID, &record.ICCID, &storedNumber,
+		&record.Direction, &record.Status, &record.Transport,
+		&record.DurationSeconds, &record.StartedAt, &record.EndedAt, &record.CreatedAt,
+	); err != nil {
+		return CallRecord{}, err
+	}
+	number, err := s.openField("call_history.number", storedNumber)
+	if err != nil {
+		return CallRecord{}, err
+	}
+	record.Number = number
+	return record, nil
 }
 
 func (s *Store) ListCallHistory(deviceID string, limit int, offset int) ([]CallRecord, int, error) {
@@ -55,7 +77,8 @@ func (s *Store) ListCallHistory(deviceID string, limit int, offset int) ([]CallR
 	var records []CallRecord
 	for rows.Next() {
 		var r CallRecord
-		if err := rows.Scan(&r.ID, &r.DeviceID, &r.ICCID, &r.Number, &r.Direction, &r.Status, &r.Transport, &r.DurationSeconds, &r.StartedAt, &r.EndedAt, &r.CreatedAt); err != nil {
+		r, err := s.scanCallRecord(rows)
+		if err != nil {
 			return nil, 0, err
 		}
 		records = append(records, r)
@@ -69,19 +92,24 @@ func (s *Store) SearchCallHistory(deviceID, query string, limit int) ([]CallReco
 	}
 	rows, err := s.db.Query(`
 		SELECT id, device_id, iccid, number, direction, status, transport, duration_seconds, started_at, ended_at, created_at
-		FROM call_history WHERE device_id = ? AND number LIKE ? ORDER BY started_at DESC LIMIT ?
-	`, deviceID, "%"+query+"%", limit)
+		FROM call_history WHERE device_id = ? ORDER BY started_at DESC
+	`, deviceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var records []CallRecord
 	for rows.Next() {
-		var r CallRecord
-		if err := rows.Scan(&r.ID, &r.DeviceID, &r.ICCID, &r.Number, &r.Direction, &r.Status, &r.Transport, &r.DurationSeconds, &r.StartedAt, &r.EndedAt, &r.CreatedAt); err != nil {
+		r, err := s.scanCallRecord(rows)
+		if err != nil {
 			return nil, err
 		}
-		records = append(records, r)
+		if strings.Contains(strings.ToLower(r.Number), strings.ToLower(strings.TrimSpace(query))) {
+			records = append(records, r)
+			if len(records) >= limit {
+				break
+			}
+		}
 	}
 	return records, rows.Err()
 }
@@ -115,11 +143,8 @@ func (s *Store) ListCallHistoryForCard(deviceID, iccid string, limit int, offset
 	var records []CallRecord
 	for rows.Next() {
 		var record CallRecord
-		if err := rows.Scan(
-			&record.ID, &record.DeviceID, &record.ICCID, &record.Number,
-			&record.Direction, &record.Status, &record.Transport,
-			&record.DurationSeconds, &record.StartedAt, &record.EndedAt, &record.CreatedAt,
-		); err != nil {
+		record, err := s.scanCallRecord(rows)
+		if err != nil {
 			return nil, 0, err
 		}
 		records = append(records, record)
@@ -138,24 +163,25 @@ func (s *Store) SearchCallHistoryForCard(deviceID, iccid, query string, limit in
 	}
 	rows, err := s.db.Query(`
 		SELECT id, device_id, iccid, number, direction, status, transport, duration_seconds, started_at, ended_at, created_at
-		FROM call_history WHERE device_id = ? AND iccid = ? AND number LIKE ?
-		ORDER BY started_at DESC LIMIT ?
-	`, deviceID, iccid, "%"+query+"%", limit)
+		FROM call_history WHERE device_id = ? AND iccid = ?
+		ORDER BY started_at DESC
+	`, deviceID, iccid)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var records []CallRecord
 	for rows.Next() {
-		var record CallRecord
-		if err := rows.Scan(
-			&record.ID, &record.DeviceID, &record.ICCID, &record.Number,
-			&record.Direction, &record.Status, &record.Transport,
-			&record.DurationSeconds, &record.StartedAt, &record.EndedAt, &record.CreatedAt,
-		); err != nil {
+		record, err := s.scanCallRecord(rows)
+		if err != nil {
 			return nil, err
 		}
-		records = append(records, record)
+		if strings.Contains(strings.ToLower(record.Number), strings.ToLower(strings.TrimSpace(query))) {
+			records = append(records, record)
+			if len(records) >= limit {
+				break
+			}
+		}
 	}
 	return records, rows.Err()
 }

@@ -17,6 +17,9 @@ import (
 	"sync"
 	"time"
 
+	"vonet/internal/agentgrpc"
+	"vonet/internal/agentproto"
+	"vonet/internal/agentregistry"
 	"vonet/internal/auth"
 	"vonet/internal/device"
 	"vonet/internal/exportproxy"
@@ -52,11 +55,31 @@ type Options struct {
 	UpdateRepository    string
 	UpdateToken         string
 	HTTPS               *httpsmode.Manager
+	Agents              *agentregistry.Registry
+	AgentGRPC           AgentGRPCService
 	// MCP, when set, mounts the MCP Streamable HTTP endpoint at /mcp behind
 	// bearer-token authentication. nil keeps the endpoint off.
 	MCP *MCPHandlers
 	// SSO optionally injects a flow service for protocol and browser tests.
 	SSO *sso.Service
+}
+
+type AgentGRPCService interface {
+	http.Handler
+	Devices(agentID string) []json.RawMessage
+	Execute(context.Context, string, *agentproto.AgentCommand) (*agentproto.AgentEvent, error)
+}
+
+type AgentGRPCStatusService interface {
+	Status(string) (agentgrpc.Status, bool)
+}
+
+type AgentGRPCDisconnector interface {
+	DisconnectAgent(string)
+}
+
+type AgentGRPCProgressService interface {
+	ExecuteWithProgress(context.Context, string, *agentproto.AgentCommand, func(*agentproto.AgentEvent)) (*agentproto.AgentEvent, error)
 }
 
 // Server is the single HTTP handler for the JSON API and embedded SPA.
@@ -92,6 +115,8 @@ type Server struct {
 	updateMu            sync.Mutex
 	updateApplying      bool
 	https               *httpsmode.Manager
+	agents              *agentregistry.Registry
+	agentGRPC           AgentGRPCService
 	mcp                 *MCPHandlers
 	netTraffic          *liveNetTracker
 	// usbPathConflicts tracks devices that have USBPath conflicts.
@@ -170,6 +195,8 @@ func New(options Options) (*Server, error) {
 		updateRepository:    strings.TrimSpace(options.UpdateRepository),
 		updateToken:         strings.TrimSpace(options.UpdateToken),
 		https:               options.HTTPS,
+		agents:              options.Agents,
+		agentGRPC:           options.AgentGRPC,
 		mcp:                 options.MCP,
 		netTraffic:          newLiveNetTracker(),
 		hostStats:           newHostStatsSampler(),
@@ -181,6 +208,7 @@ func New(options Options) (*Server, error) {
 		updateRestart:       update.RestartService,
 		usbPathConflicts:    make(map[string]bool),
 	}
+	server.devices = newDeviceRouter(options.Store, options.Devices, options.AgentGRPC)
 	if server.sso == nil {
 		server.sso = sso.New(options.Store, sso.Options{Logger: options.Logger})
 	}
@@ -207,6 +235,8 @@ func New(options Options) (*Server, error) {
 	mux.HandleFunc("/api/auth/sso/binding", server.handleSSOUnbind)
 	mux.HandleFunc("/api/settings/sso", server.handleSSOSettings)
 	mux.HandleFunc("/api/settings/sso/check", server.handleSSOCheck)
+	mux.HandleFunc("/agent/enroll", server.handleAgentEnroll)
+	mux.HandleFunc("/agent/renew", server.handleAgentRenew)
 	mux.HandleFunc("/mcp", server.handleMCP)
 	mux.HandleFunc("/api", server.handleAPI)
 	mux.HandleFunc("/api/", server.handleAPI)
@@ -255,6 +285,10 @@ type VoWiFiDeviceRemover interface {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
+}
+
+func (s *Server) DeviceController() DeviceController {
+	return s.devices
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -488,6 +522,9 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+	}
+	if s.routeAgentAPI(w, r, strings.Trim(strings.TrimPrefix(r.URL.Path, "/api"), "/")) {
+		return
 	}
 	if s.routeDeviceAPI(w, r) {
 		return
@@ -737,6 +774,11 @@ func (s *Server) logUserOperation(next http.Handler) http.Handler {
 			"operation", loghub.RedactString(strings.TrimPrefix(r.URL.Path, "/api/")),
 			"outcome", outcome,
 			"status", status,
+		)
+		s.recordAuditSilent(
+			r.Context(), s.actorForRequest(r), "api."+strings.ToLower(r.Method),
+			"http", loghub.RedactString(strings.TrimPrefix(r.URL.Path, "/api/")),
+			outcome, requestRemoteHost(r),
 		)
 	})
 }

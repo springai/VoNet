@@ -69,12 +69,13 @@ type OperatorSelection struct {
 }
 
 type Device struct {
-	ID          string          `json:"id"`
-	Candidate   modem.Candidate `json:"candidate"`
-	Snapshot    *Snapshot       `json:"snapshot,omitempty"`
-	LastError   string          `json:"lastError,omitempty"`
-	Discovered  bool            `json:"discovered"`
-	LastUpdated time.Time       `json:"lastUpdated,omitempty"`
+	ID                       string          `json:"id"`
+	Candidate                modem.Candidate `json:"candidate"`
+	Snapshot                 *Snapshot       `json:"snapshot,omitempty"`
+	LastError                string          `json:"lastError,omitempty"`
+	Discovered               bool            `json:"discovered"`
+	LastUpdated              time.Time       `json:"lastUpdated,omitempty"`
+	RemoteHardwareGeneration string          `json:"remoteHardwareGeneration,omitempty"`
 }
 
 type PhoneNumber struct {

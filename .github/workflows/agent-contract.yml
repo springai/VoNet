@@ -1,0 +1,25 @@
+name: Agent contract
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: VoNet
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/VoNet-Agent
+          path: VoNet-Agent
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+      - shell: pwsh
+        run: ./VoNet/scripts/check-agent-contract.ps1

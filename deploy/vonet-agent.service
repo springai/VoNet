@@ -1,0 +1,22 @@
+[Unit]
+Description=VoNet-Agent hardware bridge
+After=network-online.target pcscd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vonet-agent
+Environment=VONET_AGENT_DATA_DIR=/opt/vonet-agent/data
+Environment=VONET_AGENT_ADDR=0.0.0.0:17576
+Environment=VONET_SERVER_CERT_SHA256=f6c8dc89142533d713fdd934ec2ef84a02dd211014990c222a45db775742e1a5
+ExecStart=/opt/vonet-agent/bin/vonet-agent
+Restart=on-failure
+RestartPreventExitStatus=SIGTERM SIGKILL
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

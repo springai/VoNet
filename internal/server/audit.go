@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"vonet/internal/loghub"
 	"vonet/internal/store"
 )
 
@@ -39,6 +40,8 @@ func (s *Server) recordAudit(
 	if s.store == nil {
 		return
 	}
+	entityID = loghub.RedactString(entityID)
+	remoteAddr = normalizeAuditRemoteAddr(remoteAddr)
 	_, err := s.store.AppendAuditEvent(ctx, store.AuditEvent{
 		Actor:      actor,
 		Action:     action,
@@ -51,6 +54,44 @@ func (s *Server) recordAudit(
 	if err != nil {
 		s.logger.Warn("write audit event failed", "category", "system", "action", action, "raw_error", err)
 	}
+}
+
+func (s *Server) recordAuditSilent(
+	ctx context.Context,
+	actor string,
+	action string,
+	entityType string,
+	entityID string,
+	outcome string,
+	remoteAddr string,
+) {
+	if s.store == nil {
+		return
+	}
+	entityID = loghub.RedactString(entityID)
+	_, err := s.store.AppendAuditEvent(ctx, store.AuditEvent{
+		Actor:      actor,
+		Action:     action,
+		EntityType: entityType,
+		EntityID:   entityID,
+		Outcome:    outcome,
+		RemoteAddr: normalizeAuditRemoteAddr(remoteAddr),
+		CreatedAt:  time.Now().UTC(),
+	})
+	if err != nil && s.logger != nil {
+		s.logger.Warn("write audit event failed", "category", "system", "action", action, "raw_error", err)
+	}
+}
+
+func normalizeAuditRemoteAddr(value string) string {
+	value = strings.TrimSpace(value)
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		return host
+	}
+	if net.ParseIP(value) != nil {
+		return value
+	}
+	return ""
 }
 
 func auditLogCategory(action string) string {
@@ -74,17 +115,22 @@ func auditLogCategory(action string) string {
 // actor from the bearer token or session and the source address from the raw
 // connection (proxy headers are deliberately not trusted for the audit trail).
 func (s *Server) audit(r *http.Request, action string, entityType string, entityID string, outcome string) {
-	actor := ""
+	actor := s.actorForRequest(r)
+	s.recordAudit(r.Context(), actor, action, entityType, entityID, outcome, requestRemoteHost(r))
+}
+
+func (s *Server) actorForRequest(r *http.Request) string {
 	if principal, ok := bearerPrincipalFromRequest(r); ok {
-		actor = "token:" + principal.Name
-	} else if s.auth != nil {
+		return "token:" + principal.Name
+	}
+	if s.auth != nil {
 		if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
 			if session, authErr := s.auth.Authenticate(r.Context(), cookie.Value); authErr == nil {
-				actor = session.Principal.Username
+				return session.Principal.Username
 			}
 		}
 	}
-	s.recordAudit(r.Context(), actor, action, entityType, entityID, outcome, requestRemoteHost(r))
+	return ""
 }
 
 // auditAuth records an authentication event where no session exists yet (the

@@ -951,7 +951,11 @@ func (manager *Manager) SetSIMPin(id, pin string) error {
 	if state == nil || !state.discovered {
 		return ErrNotFound
 	}
-	state.simPIN = strings.TrimSpace(pin)
+	pin = strings.TrimSpace(pin)
+	if pin != "" && (len(pin) < 4 || len(pin) > 8 || strings.Trim(pin, "0123456789") != "") {
+		return errors.New("SIM PIN must contain 4 to 8 digits")
+	}
+	state.simPIN = pin
 	return nil
 }
 

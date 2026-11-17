@@ -1962,6 +1962,8 @@ ike: IKE_AUTH EAP round 1: ike: responder reported fatal notification 10500
 
 ---
 
+---
+
 ### 66. 移除设备数量限制
 
 **主要修改内容**:
@@ -1977,3 +1979,34 @@ ike: IKE_AUTH EAP round 1: ike: responder reported fatal notification 10500
 - 新增回归测试：数据库已有 5 台设备时可成功创建第 6 台，且设备响应不包含 `device_limit`。
 - `go test ./internal/developer ./internal/server ./internal/pcsc` 通过。
 - `npm test` 84/84 通过，`npm run build` 与 TypeScript 检查通过。
+
+---
+
+### 67. VoNet / VoNet-Agent 拆分基础
+
+**主要修改内容**:
+
+- 新建独立仓库 `D:\goProject\wificalling\VoNet-Agent`，提供 `vonet-agent` 服务、本地登录面板和硬件执行层。
+- Agent 面板固定用户名 `admin`，默认密码 `admin`，支持 Argon2id 修改密码、CSRF、登录限速和强制 HTTPS。
+- Agent 只配置 VoNet 基础地址和 256 位通信密钥，自动追加 `/agent/enroll`，支持换发通信密钥后离线等待重新入网。
+- Agent 配置使用 AES-256-GCM 加密保存，主密钥独立于配置文件；通信密钥入网后不再保存明文。
+- 新增 `agent.v1` gRPC over mTLS 契约，覆盖硬件快照、AT/QMI/PCSC 命令、SIM 会话、AKA 和 SMSC RPC。
+- 迁移现有 `device/modem/pcsc/qmi` 硬件栈到 VoNet-Agent，Agent 提供远程硬件数据和执行能力。
+- VoNet 新增 Agent 注册、通信密钥换发、`/agent/enroll`、Agent gRPC mTLS 端口和远端设备快照读取。
+- VoNet 设备管理页面新增 Agent 创建、选择、状态和通信密钥换发入口；Agent 通信密钥只显示一次。
+
+**验证结果**:
+
+- VoNet-Agent `go test ./...`、`go vet ./...` 通过。
+- VoNet `go test ./...`、`go vet ./...` 通过。
+- `npm run build` 通过。
+- 本地真实启动验证通过：Agent 默认 `admin/admin` 登录、HTTPS 面板、AES 配置文件和 TLS 文件创建正常。
+- Agent 入网客户端测试通过，自动请求 `/agent/enroll` 并保存证书、CA 和 gRPC 目标。
+- Agent gRPC 事件日志只记录事件类型，不记录 AKA `RES/CK/IK/AUTS`。
+
+**后续边界**:
+
+- 当前设备管理页面已支持选择 Agent 并读取远端硬件快照，但现有设备命令仍需继续切换到 Agent gRPC 执行接口。
+- VoWiFi 代理绑定、IKE、IPSec、IMS 和 SIP/RTP 由 VoNet 发起；Agent 仅提供 SIM 身份和 AKA 数据。
+- 基站网络、短信、通话和 USSD 由 Agent 执行并回传 VoNet。
+- PC/SC 读卡器强制走 PCSC、强制 VoWiFi；其他设备默认飞行模式和 VoWiFi，后续策略由用户修改。

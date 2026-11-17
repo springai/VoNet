@@ -249,6 +249,13 @@ func uniqueNonemptyStrings(groups ...[]string) []string {
 }
 
 func (s *Store) UpsertAppSetting(ctx context.Context, value AppSetting) error {
+	if value.Sensitive && !maskedJSONValue(value.Value) && !sealedJSONValue(value.Value) {
+		sealed, err := s.SealJSON("app_setting."+strings.TrimSpace(value.Key), value.Value)
+		if err != nil {
+			return err
+		}
+		value.Value = sealed
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin app setting update: %w", err)
@@ -310,11 +317,21 @@ func upsertAppSetting(
 }
 
 func (s *Store) AppSetting(ctx context.Context, key string) (AppSetting, error) {
-	return appSetting(s.db.QueryRowContext(
+	value, err := appSetting(s.db.QueryRowContext(
 		ctx,
 		appSettingSelect+` WHERE key = ?`,
 		strings.TrimSpace(key),
 	))
+	if err != nil {
+		return AppSetting{}, err
+	}
+	if value.Sensitive {
+		value.Value, err = s.OpenJSON("app_setting."+strings.TrimSpace(value.Key), value.Value)
+		if err != nil {
+			return AppSetting{}, err
+		}
+	}
+	return value, nil
 }
 
 func (s *Store) ListAppSettings(ctx context.Context) ([]AppSetting, error) {
@@ -328,6 +345,12 @@ func (s *Store) ListAppSettings(ctx context.Context) ([]AppSetting, error) {
 		value, err := appSetting(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scan app setting: %w", err)
+		}
+		if value.Sensitive {
+			value.Value, err = s.OpenJSON("app_setting."+strings.TrimSpace(value.Key), value.Value)
+			if err != nil {
+				return nil, err
+			}
 		}
 		values = append(values, value)
 	}
@@ -580,8 +603,20 @@ func (s *Store) UpsertCardAPNProfile(ctx context.Context, value CardAPNProfile) 
 	value.MCC = strings.TrimSpace(value.MCC)
 	value.MNC = strings.TrimSpace(value.MNC)
 	now := time.Now().UTC().Unix()
+	sealedUsername, err := s.sealField("card_apn_profiles.username", value.Username)
+	if err != nil {
+		return CardAPNProfile{}, err
+	}
+	sealedPassword, err := s.sealField("card_apn_profiles.password", value.Password)
+	if err != nil {
+		return CardAPNProfile{}, err
+	}
+	sealedProxy, err := s.sealField("card_apn_profiles.proxy", value.Proxy)
+	if err != nil {
+		return CardAPNProfile{}, err
+	}
 	var createdAt, updatedAt int64
-	err := s.db.QueryRowContext(ctx, `
+	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO card_apn_profiles (
 			iccid, apn, username, password, proxy, mcc, mnc,
 			ip_version, roaming_ip_version, auth_type, created_at, updated_at
@@ -593,7 +628,7 @@ func (s *Store) UpsertCardAPNProfile(ctx context.Context, value CardAPNProfile) 
 			auth_type = excluded.auth_type, updated_at = excluded.updated_at
 		RETURNING id, iccid, apn, username, password, proxy, mcc, mnc,
 			ip_version, roaming_ip_version, auth_type, created_at, updated_at
-	`, value.ICCID, value.APN, value.Username, value.Password, value.Proxy, value.MCC, value.MNC,
+	`, value.ICCID, value.APN, sealedUsername, sealedPassword, sealedProxy, value.MCC, value.MNC,
 		value.IPVersion, value.RoamingIPVersion, value.AuthType, now, now).Scan(
 		&value.ID, &value.ICCID, &value.APN, &value.Username, &value.Password,
 		&value.Proxy, &value.MCC, &value.MNC, &value.IPVersion,
@@ -601,6 +636,9 @@ func (s *Store) UpsertCardAPNProfile(ctx context.Context, value CardAPNProfile) 
 	)
 	if err != nil {
 		return CardAPNProfile{}, fmt.Errorf("upsert card APN profile: %w", err)
+	}
+	if err := s.openCardAPNFields(&value); err != nil {
+		return CardAPNProfile{}, err
 	}
 	value.CreatedAt = time.Unix(createdAt, 0).UTC()
 	value.UpdatedAt = time.Unix(updatedAt, 0).UTC()
@@ -628,6 +666,9 @@ func (s *Store) ListCardAPNProfiles(ctx context.Context, iccid string) ([]CardAP
 		}
 		value.CreatedAt = time.Unix(createdAt, 0).UTC()
 		value.UpdatedAt = time.Unix(updatedAt, 0).UTC()
+		if err := s.openCardAPNFields(&value); err != nil {
+			return nil, err
+		}
 		values = append(values, value)
 	}
 	if err := rows.Err(); err != nil {
@@ -664,15 +705,27 @@ func (s *Store) UpdateCardAPNProfile(ctx context.Context, value CardAPNProfile) 
 		return CardAPNProfile{}, errors.New("card APN profile ID, ICCID, and APN are required")
 	}
 	now := time.Now().UTC().Unix()
+	sealedUsername, err := s.sealField("card_apn_profiles.username", value.Username)
+	if err != nil {
+		return CardAPNProfile{}, err
+	}
+	sealedPassword, err := s.sealField("card_apn_profiles.password", value.Password)
+	if err != nil {
+		return CardAPNProfile{}, err
+	}
+	sealedProxy, err := s.sealField("card_apn_profiles.proxy", value.Proxy)
+	if err != nil {
+		return CardAPNProfile{}, err
+	}
 	var createdAt, updatedAt int64
-	err := s.db.QueryRowContext(ctx, `
+	err = s.db.QueryRowContext(ctx, `
 		UPDATE card_apn_profiles SET
 			apn = ?, username = ?, password = ?, proxy = ?, mcc = ?, mnc = ?,
 			ip_version = ?, roaming_ip_version = ?, auth_type = ?, updated_at = ?
 		WHERE id = ? AND iccid = ?
 		RETURNING id, iccid, apn, username, password, proxy, mcc, mnc,
 			ip_version, roaming_ip_version, auth_type, created_at, updated_at
-	`, value.APN, value.Username, value.Password, value.Proxy, value.MCC, value.MNC,
+	`, value.APN, sealedUsername, sealedPassword, sealedProxy, value.MCC, value.MNC,
 		value.IPVersion, value.RoamingIPVersion, value.AuthType, now, value.ID, value.ICCID).Scan(
 		&value.ID, &value.ICCID, &value.APN, &value.Username, &value.Password,
 		&value.Proxy, &value.MCC, &value.MNC, &value.IPVersion,
@@ -684,9 +737,26 @@ func (s *Store) UpdateCardAPNProfile(ctx context.Context, value CardAPNProfile) 
 	if err != nil {
 		return CardAPNProfile{}, fmt.Errorf("update card APN profile: %w", err)
 	}
+	if err := s.openCardAPNFields(&value); err != nil {
+		return CardAPNProfile{}, err
+	}
 	value.CreatedAt = time.Unix(createdAt, 0).UTC()
 	value.UpdatedAt = time.Unix(updatedAt, 0).UTC()
 	return value, nil
+}
+
+func (s *Store) openCardAPNFields(value *CardAPNProfile) error {
+	var err error
+	value.Username, err = s.openField("card_apn_profiles.username", value.Username)
+	if err != nil {
+		return err
+	}
+	value.Password, err = s.openField("card_apn_profiles.password", value.Password)
+	if err != nil {
+		return err
+	}
+	value.Proxy, err = s.openField("card_apn_profiles.proxy", value.Proxy)
+	return err
 }
 
 func (s *Store) DeleteCardAPNProfile(ctx context.Context, iccid string, id int64) error {

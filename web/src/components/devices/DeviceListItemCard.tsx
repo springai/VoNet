@@ -24,6 +24,25 @@ export function DeviceListItemCard({ device, selected, statusText, candidate, on
   const readConflict =
     (!!modemICCID && !!runtimeICCID && modemICCID !== runtimeICCID) ||
     candidate?.conflict === true;
+  const readStable = candidate?.state === "stable" || (!candidate && meta.tone === "success");
+  const readStateLabel = readConflict
+    ? t("ICCID 冲突")
+    : readStable
+      ? t("稳定读取")
+      : candidate?.state === "offline"
+        ? t("离线")
+        : candidate?.state === "pending"
+          ? t("待稳定确认")
+          : t("ICCID 已识别");
+  const readStateTone = readConflict
+    ? "danger"
+    : readStable
+      ? "success"
+      : candidate?.state === "offline"
+        ? "info"
+        : candidate?.state === "pending"
+          ? "warning"
+          : "info";
   return (
     <div className={cx(
       "device-list-item rounded-xl border",
@@ -49,15 +68,7 @@ export function DeviceListItemCard({ device, selected, statusText, candidate, on
                 <span className="truncate font-mono text-[11px] text-amber-600 dark:text-amber-300">
                   ICCID {currentICCID}
                 </span>
-                <Tag type={readConflict ? "danger" : candidate?.state === "stable" ? "success" : candidate?.state === "offline" ? "info" : "warning"}>
-                  {readConflict
-                    ? t("ICCID 冲突")
-                    : candidate?.state === "stable"
-                      ? t("稳定读取")
-                      : candidate?.state === "offline"
-                        ? t("离线")
-                        : t("待稳定确认")}
-                </Tag>
+                <Tag type={readStateTone}>{readStateLabel}</Tag>
               </div>
             ) : null}
           </div>

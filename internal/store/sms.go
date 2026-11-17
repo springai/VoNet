@@ -46,7 +46,7 @@ func (s *Store) SaveSMSMessageWithResult(ctx context.Context, value SMSMessage) 
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM sms_messages`).Scan(&previousMaxID); err != nil {
 		return SMSMessageSaveResult{}, fmt.Errorf("read SMS insertion cursor: %w", err)
 	}
-	saved, err := saveSMSMessage(ctx, tx, value)
+	saved, err := saveSMSMessage(ctx, tx, value, s.ensureSensitive())
 	if err != nil {
 		return SMSMessageSaveResult{}, err
 	}
@@ -90,6 +90,7 @@ func saveSMSMessage(
 	ctx context.Context,
 	executor contextQueryExecer,
 	value SMSMessage,
+	sensitive *fieldCipher,
 ) (SMSMessage, error) {
 	value.DeviceID = strings.TrimSpace(value.DeviceID)
 	value.ModemIMEI = strings.TrimSpace(value.ModemIMEI)
@@ -128,24 +129,24 @@ func saveSMSMessage(
 	// message that fills in as the remaining segments arrive.
 	if isConcatSMSMessageID(value.MessageID) {
 		hardwareKey := smsHardwareKey(value.ModemIMEI, value.DeviceID)
-		existing, existingErr := scanSMSMessage(executor.QueryRowContext(
+		existing, existingErr := scanSMSMessageWithCipher(executor.QueryRowContext(
 			ctx,
 			smsMessageSelect+` WHERE
 				COALESCE(NULLIF(modem_imei, ''), 'device:' || device_id) = ?
 				AND message_id = ?`,
 			hardwareKey,
 			value.MessageID,
-		))
+		), sensitive)
 		if errors.Is(existingErr, ErrNotFound) {
 			// A legacy row may predate stable modem IMEI persistence. Its original
 			// device/message unique key can still conflict after the modem gains an
 			// IMEI, so resolve that identity before entering the upsert as well.
-			existing, existingErr = scanSMSMessage(executor.QueryRowContext(
+			existing, existingErr = scanSMSMessageWithCipher(executor.QueryRowContext(
 				ctx,
 				smsMessageSelect+` WHERE device_id = ? AND message_id = ?`,
 				value.DeviceID,
 				value.MessageID,
-			))
+			), sensitive)
 		}
 		if existingErr != nil && !errors.Is(existingErr, ErrNotFound) {
 			return SMSMessage{}, fmt.Errorf("read existing concatenated SMS: %w", existingErr)
@@ -214,21 +215,21 @@ func saveSMSMessage(
 	}
 	if value.MessageID != "" {
 		hardwareKey := smsHardwareKey(value.ModemIMEI, value.DeviceID)
-		existing, existingErr := scanSMSMessage(executor.QueryRowContext(
+		existing, existingErr := scanSMSMessageWithCipher(executor.QueryRowContext(
 			ctx,
 			smsMessageSelect+` WHERE
 				COALESCE(NULLIF(modem_imei, ''), 'device:' || device_id) = ?
 				AND message_id = ?`,
 			hardwareKey,
 			value.MessageID,
-		))
+		), sensitive)
 		if errors.Is(existingErr, ErrNotFound) {
-			existing, existingErr = scanSMSMessage(executor.QueryRowContext(
+			existing, existingErr = scanSMSMessageWithCipher(executor.QueryRowContext(
 				ctx,
 				smsMessageSelect+` WHERE device_id = ? AND message_id = ?`,
 				value.DeviceID,
 				value.MessageID,
-			))
+			), sensitive)
 		}
 		if existingErr != nil && !errors.Is(existingErr, ErrNotFound) {
 			return SMSMessage{}, fmt.Errorf("read existing SMS identity: %w", existingErr)
@@ -243,6 +244,26 @@ func saveSMSMessage(
 				value.Timestamp = existing.Timestamp
 			}
 		}
+	}
+	storedIMSI, err := sensitive.sealLookup("sms_messages.imsi", value.IMSI)
+	if err != nil {
+		return SMSMessage{}, err
+	}
+	storedLocalPhone, err := sensitive.seal("sms_messages.local_phone", value.LocalPhone)
+	if err != nil {
+		return SMSMessage{}, err
+	}
+	storedPeer, err := sensitive.sealLookup("sms_messages.peer", value.Peer)
+	if err != nil {
+		return SMSMessage{}, err
+	}
+	storedBody, err := sensitive.seal("sms_messages.body", value.Body)
+	if err != nil {
+		return SMSMessage{}, err
+	}
+	storedExtra, err := sensitive.seal("sms_messages.extra_json", string(extra))
+	if err != nil {
+		return SMSMessage{}, err
 	}
 	if value.Timestamp.IsZero() {
 		value.Timestamp = now
@@ -268,10 +289,10 @@ func saveSMSMessage(
 			WHERE id = ?
 		`,
 			value.MessageID, value.DeviceID, value.ModemIMEI,
-			value.ICCID, value.IMSI, value.LocalPhone, value.Peer,
-			value.Direction, value.Body, value.Timestamp.Unix(), value.Status,
+			value.ICCID, storedIMSI, storedLocalPhone, storedPeer,
+			value.Direction, storedBody, value.Timestamp.Unix(), value.Status,
 			value.Source, value.PartsTotal, value.DeliveryState,
-			boolInt(value.Read), string(extra), value.UpdatedAt.Unix(), value.ID,
+			boolInt(value.Read), storedExtra, value.UpdatedAt.Unix(), value.ID,
 		)
 		if err != nil {
 			return SMSMessage{}, fmt.Errorf("update SMS %d: %w", value.ID, err)
@@ -279,7 +300,7 @@ func saveSMSMessage(
 		if err := requireAffected(result); err != nil {
 			return SMSMessage{}, err
 		}
-		return scanSMSMessage(executor.QueryRowContext(ctx, smsMessageSelect+` WHERE id = ?`, value.ID))
+		return scanSMSMessageWithCipher(executor.QueryRowContext(ctx, smsMessageSelect+` WHERE id = ?`, value.ID), sensitive)
 	}
 
 	result, err := executor.ExecContext(ctx, `
@@ -323,10 +344,10 @@ func saveSMSMessage(
 			updated_at = excluded.updated_at
 	`,
 		value.MessageID, value.DeviceID, value.ModemIMEI,
-		value.ICCID, value.IMSI, value.LocalPhone, value.Peer,
-		value.Direction, value.Body, value.Timestamp.Unix(), value.Status,
+		value.ICCID, storedIMSI, storedLocalPhone, storedPeer,
+		value.Direction, storedBody, value.Timestamp.Unix(), value.Status,
 		value.Source, value.PartsTotal, value.DeliveryState,
-		boolInt(value.Read), string(extra), value.CreatedAt.Unix(),
+		boolInt(value.Read), storedExtra, value.CreatedAt.Unix(),
 		value.UpdatedAt.Unix(),
 	)
 	if err != nil {
@@ -334,20 +355,20 @@ func saveSMSMessage(
 	}
 	if value.MessageID != "" {
 		hardwareKey := smsHardwareKey(value.ModemIMEI, value.DeviceID)
-		return scanSMSMessage(executor.QueryRowContext(
+		return scanSMSMessageWithCipher(executor.QueryRowContext(
 			ctx,
 			smsMessageSelect+` WHERE
 				COALESCE(NULLIF(modem_imei, ''), 'device:' || device_id) = ?
 				AND message_id = ?`,
 			hardwareKey,
 			value.MessageID,
-		))
+		), sensitive)
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
 		return SMSMessage{}, fmt.Errorf("read inserted SMS id: %w", err)
 	}
-	return scanSMSMessage(executor.QueryRowContext(ctx, smsMessageSelect+` WHERE id = ?`, id))
+	return scanSMSMessageWithCipher(executor.QueryRowContext(ctx, smsMessageSelect+` WHERE id = ?`, id), sensitive)
 }
 
 func (s *Store) SaveSMSMessages(ctx context.Context, values []SMSMessage) error {
@@ -357,7 +378,7 @@ func (s *Store) SaveSMSMessages(ctx context.Context, values []SMSMessage) error 
 	}
 	defer tx.Rollback()
 	for index, value := range values {
-		if _, err := saveSMSMessage(ctx, tx, value); err != nil {
+		if _, err := saveSMSMessage(ctx, tx, value, s.ensureSensitive()); err != nil {
 			return fmt.Errorf("save SMS batch item %d: %w", index, err)
 		}
 	}
@@ -368,7 +389,7 @@ func (s *Store) SaveSMSMessages(ctx context.Context, values []SMSMessage) error 
 }
 
 func (s *Store) SMSMessage(ctx context.Context, id int64) (SMSMessage, error) {
-	return scanSMSMessage(s.db.QueryRowContext(ctx, smsMessageSelect+` WHERE id = ?`, id))
+	return s.scanSMSMessage(s.db.QueryRowContext(ctx, smsMessageSelect+` WHERE id = ?`, id))
 }
 
 // LatestSMSMessageID returns the current durable cursor used by notification
@@ -400,7 +421,7 @@ func (s *Store) ListInboundSMSAfterID(ctx context.Context, afterID int64, limit 
 	defer rows.Close()
 	values := make([]SMSMessage, 0)
 	for rows.Next() {
-		value, scanErr := scanSMSMessage(rows)
+		value, scanErr := s.scanSMSMessage(rows)
 		if scanErr != nil {
 			return nil, fmt.Errorf("scan new inbound SMS message: %w", scanErr)
 		}
@@ -429,6 +450,20 @@ func (s *Store) ApplySMSDeliveryReport(ctx context.Context, report SMSDeliveryRe
 		return SMSMessage{}, fmt.Errorf("begin SMS delivery report: %w", err)
 	}
 	defer tx.Rollback()
+	storedIMSI := ""
+	if strings.TrimSpace(report.IMSI) != "" {
+		storedIMSI, err = s.ensureSensitive().sealLookup("sms_messages.imsi", strings.TrimSpace(report.IMSI))
+		if err != nil {
+			return SMSMessage{}, err
+		}
+	}
+	storedPeer := ""
+	if strings.TrimSpace(report.Peer) != "" {
+		storedPeer, err = s.ensureSensitive().sealLookup("sms_messages.peer", strings.TrimSpace(report.Peer))
+		if err != nil {
+			return SMSMessage{}, err
+		}
+	}
 	// Prefer the report's live IMEI when it identifies a stored submission, but
 	// fall back to the stable device id because IMS session and device snapshots
 	// can legitimately expose different IMEI values during a reconnect.
@@ -445,8 +480,8 @@ func (s *Store) ApplySMSDeliveryReport(ctx context.Context, report SMSDeliveryRe
 		ctx,
 		query,
 		report.ModemIMEI, report.ModemIMEI, report.DeviceID, report.DeviceID,
-		report.IMSI, report.IMSI,
-		report.Peer, report.Peer,
+		report.IMSI, storedIMSI,
+		report.Peer, storedPeer,
 		report.Source, report.Source,
 		report.ModemIMEI, report.ModemIMEI,
 	)
@@ -456,7 +491,7 @@ func (s *Store) ApplySMSDeliveryReport(ctx context.Context, report SMSDeliveryRe
 	var target SMSMessage
 	var targetExtra map[string]any
 	for rows.Next() {
-		candidate, scanErr := scanSMSMessage(rows)
+		candidate, scanErr := s.scanSMSMessage(rows)
 		if scanErr != nil {
 			_ = rows.Close()
 			return SMSMessage{}, scanErr
@@ -500,7 +535,7 @@ func (s *Store) ApplySMSDeliveryReport(ctx context.Context, report SMSDeliveryRe
 		return SMSMessage{}, fmt.Errorf("encode SMS delivery reports: %w", err)
 	}
 	target.UpdatedAt = time.Now().UTC()
-	saved, err := saveSMSMessage(ctx, tx, target)
+	saved, err := saveSMSMessage(ctx, tx, target, s.ensureSensitive())
 	if err != nil {
 		return SMSMessage{}, err
 	}
@@ -587,7 +622,7 @@ func numberAsInt(value any) int {
 }
 
 func (s *Store) ListSMSMessages(ctx context.Context, filter SMSFilter) ([]SMSMessage, error) {
-	where, args := smsWhere(filter, "")
+	where, args := s.smsWhere(filter, "")
 	query := smsMessageSelect + where + ` ORDER BY message_time DESC, id DESC LIMIT ?`
 	args = append(args, normalizedLimit(filter.Limit))
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -598,7 +633,7 @@ func (s *Store) ListSMSMessages(ctx context.Context, filter SMSFilter) ([]SMSMes
 
 	values := make([]SMSMessage, 0)
 	for rows.Next() {
-		value, err := scanSMSMessage(rows)
+		value, err := s.scanSMSMessage(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scan SMS message: %w", err)
 		}
@@ -624,10 +659,18 @@ func (s *Store) DeleteSMSThread(
 	imsi string,
 	peer string,
 ) (int64, error) {
+	storedIMSI, err := s.ensureSensitive().sealLookup("sms_messages.imsi", strings.TrimSpace(imsi))
+	if err != nil {
+		return 0, err
+	}
+	storedPeer, err := s.ensureSensitive().sealLookup("sms_messages.peer", strings.TrimSpace(peer))
+	if err != nil {
+		return 0, err
+	}
 	result, err := s.db.ExecContext(ctx, `
 		DELETE FROM sms_messages
 		WHERE device_id = ? AND imsi = ? AND peer = ?
-	`, deviceID, imsi, peer)
+	`, deviceID, storedIMSI, storedPeer)
 	if err != nil {
 		return 0, fmt.Errorf("delete SMS thread: %w", err)
 	}
@@ -647,12 +690,20 @@ func (s *Store) MarkSMSThreadRead(
 	imsi string,
 	peer string,
 ) (int64, error) {
+	storedIMSI, err := s.ensureSensitive().sealLookup("sms_messages.imsi", strings.TrimSpace(imsi))
+	if err != nil {
+		return 0, err
+	}
+	storedPeer, err := s.ensureSensitive().sealLookup("sms_messages.peer", strings.TrimSpace(peer))
+	if err != nil {
+		return 0, err
+	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE sms_messages
 		SET is_read = 1, updated_at = ?
 		WHERE device_id = ? AND imsi = ? AND peer = ?
 			AND direction IN ('inbound', 'received') AND is_read = 0
-	`, time.Now().UTC().Unix(), deviceID, imsi, peer)
+	`, time.Now().UTC().Unix(), deviceID, storedIMSI, storedPeer)
 	if err != nil {
 		return 0, fmt.Errorf("mark SMS thread read: %w", err)
 	}
@@ -685,7 +736,7 @@ func (s *Store) MarkSMSMessagesRead(ctx context.Context, ids []int64) error {
 // ListSMSContacts derives contacts and thread counters from messages. No
 // duplicated contact/thread table can drift out of sync with message history.
 func (s *Store) ListSMSContacts(ctx context.Context, filter SMSFilter) ([]SMSContact, error) {
-	where, args := smsWhere(filter, "m.")
+	where, args := s.smsWhere(filter, "m.")
 	query := `
 		WITH resolved AS (
 			SELECT
@@ -761,6 +812,26 @@ func (s *Store) ListSMSContacts(ctx context.Context, filter SMSFilter) ([]SMSCon
 		); err != nil {
 			return nil, fmt.Errorf("scan SMS contact: %w", err)
 		}
+		value.IMSI, err = s.openField("sms_messages.imsi", value.IMSI)
+		if err != nil {
+			return nil, err
+		}
+		value.LocalPhone, err = s.openField("sms_messages.local_phone", value.LocalPhone)
+		if err != nil {
+			return nil, err
+		}
+		value.Peer, err = s.openField("sms_messages.peer", value.Peer)
+		if err != nil {
+			return nil, err
+		}
+		value.DisplayName, err = s.openField("sms_messages.peer", value.DisplayName)
+		if err != nil {
+			return nil, err
+		}
+		value.LastMessage, err = s.openField("sms_messages.body", value.LastMessage)
+		if err != nil {
+			return nil, err
+		}
 		value.LastTimestamp = time.Unix(timestamp, 0).UTC()
 		values = append(values, value)
 	}
@@ -777,17 +848,21 @@ const smsMessageSelect = `
 		extra_json, created_at, updated_at
 	FROM sms_messages`
 
-func scanSMSMessage(row rowScanner) (SMSMessage, error) {
+func (s *Store) scanSMSMessage(row rowScanner) (SMSMessage, error) {
+	return scanSMSMessageWithCipher(row, s.ensureSensitive())
+}
+
+func scanSMSMessageWithCipher(row rowScanner, sensitive *fieldCipher) (SMSMessage, error) {
 	var value SMSMessage
 	var messageTime, createdAt, updatedAt int64
 	var read int
-	var extra string
+	var storedIMSI, storedLocalPhone, storedPeer, storedBody, storedExtra string
 	err := row.Scan(
 		&value.ID, &value.MessageID, &value.DeviceID, &value.ModemIMEI,
-		&value.ICCID, &value.IMSI, &value.LocalPhone,
-		&value.Peer, &value.Direction, &value.Body, &messageTime,
+		&value.ICCID, &storedIMSI, &storedLocalPhone,
+		&storedPeer, &value.Direction, &storedBody, &messageTime,
 		&value.Status, &value.Source, &value.PartsTotal,
-		&value.DeliveryState, &read, &extra, &createdAt, &updatedAt,
+		&value.DeliveryState, &read, &storedExtra, &createdAt, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SMSMessage{}, ErrNotFound
@@ -795,15 +870,35 @@ func scanSMSMessage(row rowScanner) (SMSMessage, error) {
 	if err != nil {
 		return SMSMessage{}, err
 	}
+	value.IMSI, err = sensitive.open("sms_messages.imsi", storedIMSI)
+	if err != nil {
+		return SMSMessage{}, err
+	}
+	value.LocalPhone, err = sensitive.open("sms_messages.local_phone", storedLocalPhone)
+	if err != nil {
+		return SMSMessage{}, err
+	}
+	value.Peer, err = sensitive.open("sms_messages.peer", storedPeer)
+	if err != nil {
+		return SMSMessage{}, err
+	}
+	value.Body, err = sensitive.open("sms_messages.body", storedBody)
+	if err != nil {
+		return SMSMessage{}, err
+	}
+	openExtra, err := sensitive.open("sms_messages.extra_json", storedExtra)
+	if err != nil {
+		return SMSMessage{}, err
+	}
 	value.Read = read != 0
-	value.Extra = []byte(extra)
+	value.Extra = []byte(openExtra)
 	value.Timestamp = time.Unix(messageTime, 0).UTC()
 	value.CreatedAt = time.Unix(createdAt, 0).UTC()
 	value.UpdatedAt = time.Unix(updatedAt, 0).UTC()
 	return value, nil
 }
 
-func smsWhere(filter SMSFilter, prefix string) (string, []any) {
+func (s *Store) smsWhere(filter SMSFilter, prefix string) (string, []any) {
 	clauses := make([]string, 0, 7)
 	args := make([]any, 0, 7)
 	if filter.MatchDeviceOrIMEI && filter.DeviceID != "" && filter.ModemIMEI != "" {
@@ -824,12 +919,22 @@ func smsWhere(filter SMSFilter, prefix string) (string, []any) {
 		args = append(args, filter.ICCID)
 	}
 	if filter.IMSI != "" {
-		clauses = append(clauses, prefix+`imsi = ?`)
-		args = append(args, filter.IMSI)
+		storedIMSI, err := s.ensureSensitive().sealLookup("sms_messages.imsi", strings.TrimSpace(filter.IMSI))
+		if err == nil {
+			clauses = append(clauses, prefix+`imsi = ?`)
+			args = append(args, storedIMSI)
+		} else {
+			clauses = append(clauses, "1 = 0")
+		}
 	}
 	if filter.Peer != "" {
-		clauses = append(clauses, prefix+`peer = ?`)
-		args = append(args, filter.Peer)
+		storedPeer, err := s.ensureSensitive().sealLookup("sms_messages.peer", strings.TrimSpace(filter.Peer))
+		if err == nil {
+			clauses = append(clauses, prefix+`peer = ?`)
+			args = append(args, storedPeer)
+		} else {
+			clauses = append(clauses, "1 = 0")
+		}
 	}
 	if !filter.Since.IsZero() {
 		clauses = append(clauses, prefix+`message_time >= ?`)

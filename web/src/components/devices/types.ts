@@ -34,6 +34,9 @@ export interface DeviceDetail extends Omit<DeviceOverview, "modem" | "traffic"> 
 // Add-device form (subset of DeviceConfig posted as `config`).
 export interface AddDeviceForm {
   id: string;
+  agentId: string;
+  remoteDeviceId: string;
+  remoteHardwareGeneration: string;
   name: string;
   deviceType: DeviceType | "";
   interface: string;

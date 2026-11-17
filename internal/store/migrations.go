@@ -862,6 +862,20 @@ func migrationStatements(version int) []string {
 			`CREATE INDEX IF NOT EXISTS sim_card_candidates_device_idx
 				ON sim_card_candidates(device_id, last_seen_at DESC)`,
 		}
+	case 40:
+		return []string{
+			`ALTER TABLE devices ADD COLUMN agent_id TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE devices ADD COLUMN remote_device_id TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE devices ADD COLUMN remote_hardware_generation TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE sim_cards ADD COLUMN gid1 TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE sim_cards ADD COLUMN gid2 TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE sim_cards ADD COLUMN smsc TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE sim_cards ADD COLUMN derived_json TEXT NOT NULL DEFAULT '{}'`,
+			`CREATE INDEX IF NOT EXISTS devices_agent_idx ON devices(agent_id, remote_device_id)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS devices_remote_binding_idx
+				ON devices(agent_id, remote_device_id)
+				WHERE agent_id <> '' AND remote_device_id <> ''`,
+		}
 	default:
 		return nil
 	}

@@ -1,6 +1,8 @@
 # ---- Binaries / build outputs ----
 /vonet
 /vonet.exe
+/vonet-linux-amd64
+/vonet-linux-*
 /build/
 /release.py
 /build/vonet
@@ -54,6 +56,7 @@ build/*.py
 !README.md
 !UPDATE.md
 !VONET_SYNC_LOG.md
+!DEVLOG.md
 !docs/**/*.md
 *.txt
 build/lists/

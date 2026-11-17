@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +14,65 @@ import (
 	"vonet/internal/store"
 	"vonet/internal/vowifi"
 )
+
+func TestAgentDevicesUseSavedConfigurationName(t *testing.T) {
+	database, err := store.Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.UpsertDevice(context.Background(), store.Device{
+		ID: "Reader-1", Name: "Renamed Reader", DeviceType: store.DeviceTypeUSBSIMReader,
+		AgentID: "agent-1", RemoteDeviceID: "Reader-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	entry := device.Device{
+		ID: "Reader-1", Discovered: true,
+		Candidate: modem.Candidate{ID: "Reader-1", HardwareKind: "pcsc", Product: "ESTKme-DOT"},
+	}
+	server := &Server{
+		store: database, logger: regionTestLogger(), devices: fakeDeviceController{entry: entry},
+		agentGRPC: discoveryAgentStub{entries: []device.Device{entry}},
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/agents/agent-1/devices", nil)
+	server.handleAgentDevices(recorder, request, "agent-1")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Devices []map[string]any `json:"devices"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data.Devices) != 1 || body.Data.Devices[0]["name"] != "Renamed Reader" {
+		t.Fatalf("agent devices=%#v", body.Data.Devices)
+	}
+}
+
+func TestResponsiveDeviceIgnoresStaleOperationError(t *testing.T) {
+	entry := device.Device{
+		ID: "reader", Discovered: true,
+		Snapshot:  &device.Snapshot{Responsive: true},
+		LastError: "temporary operation failed",
+	}
+	if got := lifecyclePhase(entry); got != "ready" {
+		t.Fatalf("lifecycle=%q, want ready", got)
+	}
+	summary := deviceSummary(entry)
+	if summary["healthy"] != true || summary["control_online"] != true {
+		t.Fatalf("summary=%#v", summary)
+	}
+
+	entry.Snapshot.Responsive = false
+	if got := lifecyclePhase(entry); got != "degraded" {
+		t.Fatalf("unresponsive lifecycle=%q, want degraded", got)
+	}
+}
 
 func TestFillConfigFromPhysicalClassifiesDJI4G(t *testing.T) {
 	config := store.Device{DeviceType: store.DeviceTypePCIeEC20EC25}

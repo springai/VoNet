@@ -1,40 +1,22 @@
 [Unit]
-Description=vonet cellular and VoWiFi control service
-After=network-online.target
+Description=VoNet modem and WiFi Calling service
+After=network-online.target pcscd.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
-Group=root
 WorkingDirectory=/opt/vonet
-ExecStart=/opt/vonet/bin/vonet
-Restart=on-failure
-RestartSec=3s
-TimeoutStartSec=30s
-TimeoutStopSec=20s
 Environment=VONET_DATABASE_PATH=/opt/vonet/data/vonet.db
-Environment=VONET_CERTIFICATE_DIR=/opt/vonet/data/etc/certs
-EnvironmentFile=/etc/vonet/vonet.env
-
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
-NoNewPrivileges=true
-PrivateTmp=true
-PrivateDevices=false
-ProtectSystem=strict
-ProtectHome=true
-ProtectKernelLogs=true
-ProtectKernelModules=true
-ProtectKernelTunables=true
-ProtectControlGroups=true
-ReadWritePaths=/opt/vonet/data
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
-RestrictRealtime=true
-LockPersonality=true
-MemoryDenyWriteExecute=true
-UMask=0077
+Environment=VONET_ADDR=0.0.0.0:17575
+Environment=VONET_AGENT_GRPC_ADDR=0.0.0.0:17577
+ExecStart=/opt/vonet/bin/vonet serve
+Restart=on-failure
+RestartPreventExitStatus=SIGTERM SIGKILL
+RestartSec=5
+TimeoutStopSec=30
 LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

@@ -42,7 +42,7 @@ func (s *Store) SSOSnapshot(ctx context.Context) (SSOSnapshot, error) {
 		return SSOSnapshot{}, fmt.Errorf("begin sso snapshot: %w", err)
 	}
 	defer tx.Rollback()
-	snapshot, err := readSSOSnapshot(ctx, tx)
+	snapshot, err := s.readSSOSnapshot(ctx, tx)
 	if err != nil {
 		return SSOSnapshot{}, err
 	}
@@ -53,7 +53,7 @@ func (s *Store) SSOSnapshot(ctx context.Context) (SSOSnapshot, error) {
 }
 
 // readSSOSnapshot loads configuration, secret, and a matching binding through one database executor.
-func readSSOSnapshot(ctx context.Context, executor contextQueryExecer) (SSOSnapshot, error) {
+func (s *Store) readSSOSnapshot(ctx context.Context, executor contextQueryExecer) (SSOSnapshot, error) {
 	var result SSOSnapshot
 	setting, err := appSetting(executor.QueryRowContext(ctx, appSettingSelect+` WHERE key = ?`, SSOConfigKey))
 	if err == nil {
@@ -66,7 +66,14 @@ func readSSOSnapshot(ctx context.Context, executor contextQueryExecer) (SSOSnaps
 	}
 	setting, err = appSetting(executor.QueryRowContext(ctx, appSettingSelect+` WHERE key = ?`, SSOClientSecretKey))
 	if err == nil {
-		if err := json.Unmarshal(setting.Value, &result.ClientSecret); err != nil {
+		secretValue := setting.Value
+		if setting.Sensitive {
+			secretValue, err = s.OpenJSON("app_setting."+SSOClientSecretKey, secretValue)
+			if err != nil {
+				return SSOSnapshot{}, fmt.Errorf("decrypt sso credential: %w", err)
+			}
+		}
+		if err := json.Unmarshal(secretValue, &result.ClientSecret); err != nil {
 			return SSOSnapshot{}, fmt.Errorf("decode sso credential: %w", err)
 		}
 	} else if !errors.Is(err, ErrNotFound) {
@@ -101,7 +108,7 @@ func (s *Store) SaveSSOConfiguration(ctx context.Context, request SSOSaveRequest
 		return SSOSnapshot{}, false, fmt.Errorf("begin sso configuration update: %w", err)
 	}
 	defer tx.Rollback()
-	previous, err := readSSOSnapshot(ctx, tx)
+	previous, err := s.readSSOSnapshot(ctx, tx)
 	if err != nil {
 		return SSOSnapshot{}, false, err
 	}
@@ -172,11 +179,15 @@ func (s *Store) SaveSSOConfiguration(ctx context.Context, request SSOSaveRequest
 		}
 	} else {
 		value, _ := json.Marshal(secret)
-		if err := upsertAppSetting(ctx, tx, AppSetting{Key: SSOClientSecretKey, Value: value, Sensitive: true}); err != nil {
+		sealed, err := s.SealJSON("app_setting."+SSOClientSecretKey, value)
+		if err != nil {
+			return SSOSnapshot{}, false, err
+		}
+		if err := upsertAppSetting(ctx, tx, AppSetting{Key: SSOClientSecretKey, Value: sealed, Sensitive: true}); err != nil {
 			return SSOSnapshot{}, false, err
 		}
 	}
-	result, err := readSSOSnapshot(ctx, tx)
+	result, err := s.readSSOSnapshot(ctx, tx)
 	if err != nil {
 		return SSOSnapshot{}, false, err
 	}
@@ -228,7 +239,7 @@ func (s *Store) CreateSSOFlow(ctx context.Context, flow SSOFlow, browserFlowIDs 
 		return fmt.Errorf("begin sso flow: %w", err)
 	}
 	defer tx.Rollback()
-	snapshot, err := readSSOSnapshot(ctx, tx)
+	snapshot, err := s.readSSOSnapshot(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -356,7 +367,7 @@ func (s *Store) ClaimSSOFlow(ctx context.Context, stateHash, browserHash []byte)
 		return SSOFlow{}, ErrSSOInvalidFlow
 	}
 	now := time.Now().UTC()
-	snapshot, err := readSSOSnapshot(ctx, tx)
+	snapshot, err := s.readSSOSnapshot(ctx, tx)
 	if err != nil {
 		return SSOFlow{}, err
 	}
@@ -475,7 +486,7 @@ func (s *Store) FinalizeSSOBinding(ctx context.Context, flow SSOFlow, identity S
 		return SSOSnapshot{}, fmt.Errorf("begin sso binding: %w", err)
 	}
 	defer tx.Rollback()
-	snapshot, err := readSSOSnapshot(ctx, tx)
+	snapshot, err := s.readSSOSnapshot(ctx, tx)
 	if err != nil {
 		return SSOSnapshot{}, err
 	}
@@ -516,7 +527,7 @@ func (s *Store) FinalizeSSOBinding(ctx context.Context, flow SSOFlow, identity S
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sso_flows`); err != nil {
 		return SSOSnapshot{}, fmt.Errorf("cancel flows after sso binding: %w", err)
 	}
-	result, err := readSSOSnapshot(ctx, tx)
+	result, err := s.readSSOSnapshot(ctx, tx)
 	if err != nil {
 		return SSOSnapshot{}, err
 	}
@@ -537,7 +548,7 @@ func (s *Store) FinalizeSSOLogin(ctx context.Context, flow SSOFlow, identity SSO
 		return Admin{}, fmt.Errorf("begin sso login: %w", err)
 	}
 	defer tx.Rollback()
-	snapshot, err := readSSOSnapshot(ctx, tx)
+	snapshot, err := s.readSSOSnapshot(ctx, tx)
 	if err != nil {
 		return Admin{}, err
 	}
@@ -592,7 +603,7 @@ func (s *Store) UnbindSSO(ctx context.Context, expectedRevision int64, currentSe
 		return SSOSnapshot{}, false, fmt.Errorf("begin sso unbinding: %w", err)
 	}
 	defer tx.Rollback()
-	snapshot, err := readSSOSnapshot(ctx, tx)
+	snapshot, err := s.readSSOSnapshot(ctx, tx)
 	if err != nil {
 		return SSOSnapshot{}, false, err
 	}

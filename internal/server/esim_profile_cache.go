@@ -81,8 +81,13 @@ func (s *Server) loadEsimProfileCache(
 	if err != nil {
 		return esimProfileCacheDocument{}, false
 	}
+	raw, err := s.store.OpenJSON("device.esim_profile_cache", setting.Value)
+	if err != nil {
+		s.discardInvalidEsimProfileCache(ctx, configuredID)
+		return esimProfileCacheDocument{}, false
+	}
 	var value esimProfileCacheDocument
-	if err := json.Unmarshal(setting.Value, &value); err != nil ||
+	if err := json.Unmarshal(raw, &value); err != nil ||
 		value.Version != esimProfileCacheVersion ||
 		value.CachedAt <= 0 ||
 		value.Profiles == nil {
@@ -159,9 +164,14 @@ func (s *Server) writeEsimProfileCache(
 	if err != nil {
 		return fmt.Errorf("encode eSIM profile cache: %w", err)
 	}
+	cacheKey := esimProfileCacheKey(configuredID)
+	sealed, err := s.store.SealJSON("app_setting."+cacheKey, raw)
+	if err != nil {
+		return fmt.Errorf("encrypt eSIM profile cache: %w", err)
+	}
 	return s.store.UpsertAppSetting(ctx, store.AppSetting{
-		Key:       esimProfileCacheKey(configuredID),
-		Value:     raw,
+		Key:       cacheKey,
+		Value:     sealed,
 		Sensitive: true,
 	})
 }

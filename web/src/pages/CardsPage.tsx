@@ -158,6 +158,7 @@ export default function CardsPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [addSaving, setAddSaving] = useState(false);
   const [addForm, setAddForm] = useState<SimCardInput>(EMPTY_CARD_FORM);
+  const [addICCIDLocked, setAddICCIDLocked] = useState(false);
   const [candidates, setCandidates] = useState<SimCardCandidate[]>([]);
   const [deleting, setDeleting] = useState(false);
   const [importingCards, setImportingCards] = useState(false);
@@ -212,6 +213,7 @@ export default function CardsPage() {
       deviceId: searchParams.get("deviceId") || candidate?.deviceId || "",
       hostType: (searchParams.get("hostType") || candidate?.hostType || "") as SimCardInput["hostType"],
     });
+    setAddICCIDLocked(true);
     handledNewICCIDRef.current = pendingNewICCID;
     setAddOpen(true);
   }, [candidates, cards, loading, pendingNewICCID, searchParams]);
@@ -333,6 +335,7 @@ export default function CardsPage() {
   const openAdd = useCallback(() => {
     handledNewICCIDRef.current = "";
     setAddForm(EMPTY_CARD_FORM);
+    setAddICCIDLocked(false);
     setAddOpen(true);
   }, []);
 
@@ -354,6 +357,7 @@ export default function CardsPage() {
       deviceId: candidate.deviceId || "",
       hostType: candidate.hostType,
     });
+    setAddICCIDLocked(true);
     setAddOpen(true);
   }, []);
 
@@ -398,6 +402,7 @@ export default function CardsPage() {
       setAddForm(EMPTY_CARD_FORM);
       await loadCards();
       selectCard(created.iccid, "card_config");
+      setAddICCIDLocked(false);
       message.success(t("卡片已保存"));
     } catch (e) {
       message.error(apiMessage(e) || t("保存卡片失败"));
@@ -688,10 +693,15 @@ export default function CardsPage() {
           <div>
             <div className="mb-1 text-xs font-bold uppercase text-gray-500">ICCID</div>
             <Input
-              value={addForm.iccid}
+              value={addICCIDLocked ? displayICCID(addForm.iccid, showSensitive) : addForm.iccid}
               onChange={(event) => setAddForm((form) => ({ ...form, iccid: event.target.value }))}
               inputMode="numeric"
-              placeholder={t("输入 18 到 22 位 ICCID")}
+              disabled={addICCIDLocked}
+              readOnly={addICCIDLocked}
+              aria-readonly={addICCIDLocked}
+              title={addICCIDLocked ? t("ICCID 由设备自动读取，不可修改") : undefined}
+              className={addICCIDLocked ? "opacity-70" : undefined}
+              placeholder={addICCIDLocked ? t("设备自动读取") : t("输入 18 到 22 位 ICCID")}
             />
           </div>
           <div>

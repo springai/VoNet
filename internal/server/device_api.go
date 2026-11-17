@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"vonet/internal/agentproto"
 	"vonet/internal/device"
 	"vonet/internal/i18n"
 	"vonet/internal/modem"
@@ -78,32 +82,35 @@ type cellularDeviceLifecycleController interface {
 }
 
 type deviceConfigPayload struct {
-	ID                 string `json:"id"`
-	Name               string `json:"name"`
-	DeviceType         string `json:"device_type"`
-	Interface          string `json:"interface"`
-	ControlDevice      string `json:"control_device"`
-	ATPort             string `json:"at_port"`
-	USBPath            string `json:"usb_path"`
-	AudioDevice        string `json:"audio_device"`
-	ModemIMEI          string `json:"modem_imei"`
-	SIMPIN             string `json:"sim_pin"`
-	APN                string `json:"apn"`
-	ProxyPort          int    `json:"proxy_port"`
-	BaudRate           int    `json:"baud_rate"`
-	DataBits           int    `json:"data_bits"`
-	StopBits           int    `json:"stop_bits"`
-	Parity             string `json:"parity"`
-	DeviceBackend      string `json:"device_backend"`
-	ESIMTransport      string `json:"esim_transport"`
-	QMIUseProxy        bool   `json:"qmi_use_proxy"`
-	QMIProxyPath       string `json:"qmi_proxy_path"`
-	QMIProxyExecutable string `json:"qmi_proxy_executable"`
-	NetworkEnabled     bool   `json:"network_enabled"`
-	SMSEnabled         bool   `json:"sms_enabled"`
-	VoWiFiEnabled      bool   `json:"vowifi_enabled"`
-	PCSCIMEIMode       string `json:"pcsc_imei_mode"`
-	PCSCIMEI           string `json:"pcsc_imei"`
+	ID                       string `json:"id"`
+	AgentID                  string `json:"agent_id"`
+	RemoteDeviceID           string `json:"remote_device_id"`
+	RemoteHardwareGeneration string `json:"remote_hardware_generation"`
+	Name                     string `json:"name"`
+	DeviceType               string `json:"device_type"`
+	Interface                string `json:"interface"`
+	ControlDevice            string `json:"control_device"`
+	ATPort                   string `json:"at_port"`
+	USBPath                  string `json:"usb_path"`
+	AudioDevice              string `json:"audio_device"`
+	ModemIMEI                string `json:"modem_imei"`
+	SIMPIN                   string `json:"sim_pin"`
+	APN                      string `json:"apn"`
+	ProxyPort                int    `json:"proxy_port"`
+	BaudRate                 int    `json:"baud_rate"`
+	DataBits                 int    `json:"data_bits"`
+	StopBits                 int    `json:"stop_bits"`
+	Parity                   string `json:"parity"`
+	DeviceBackend            string `json:"device_backend"`
+	ESIMTransport            string `json:"esim_transport"`
+	QMIUseProxy              bool   `json:"qmi_use_proxy"`
+	QMIProxyPath             string `json:"qmi_proxy_path"`
+	QMIProxyExecutable       string `json:"qmi_proxy_executable"`
+	NetworkEnabled           bool   `json:"network_enabled"`
+	SMSEnabled               bool   `json:"sms_enabled"`
+	VoWiFiEnabled            bool   `json:"vowifi_enabled"`
+	PCSCIMEIMode             string `json:"pcsc_imei_mode"`
+	PCSCIMEI                 string `json:"pcsc_imei"`
 }
 
 func (payload deviceConfigPayload) toStoreDevice() store.Device {
@@ -112,30 +119,33 @@ func (payload deviceConfigPayload) toStoreDevice() store.Device {
 		name = payload.ID
 	}
 	return store.Device{
-		ID:                 strings.TrimSpace(payload.ID),
-		Name:               name,
-		DeviceType:         store.NormalizeDeviceType(payload.DeviceType),
-		Interface:          strings.TrimSpace(payload.Interface),
-		ControlDevice:      strings.TrimSpace(payload.ControlDevice),
-		ATPort:             strings.TrimSpace(payload.ATPort),
-		USBPath:            strings.TrimSpace(payload.USBPath),
-		AudioDevice:        strings.TrimSpace(payload.AudioDevice),
-		ModemIMEI:          strings.TrimSpace(payload.ModemIMEI),
-		SIMPIN:             strings.TrimSpace(payload.SIMPIN),
-		APN:                strings.TrimSpace(payload.APN),
-		ProxyPort:          payload.ProxyPort,
-		BaudRate:           payload.BaudRate,
-		DataBits:           payload.DataBits,
-		StopBits:           payload.StopBits,
-		Parity:             payload.Parity,
-		DeviceBackend:      payload.DeviceBackend,
-		ESIMTransport:      payload.ESIMTransport,
-		QMIUseProxy:        payload.QMIUseProxy,
-		QMIProxyPath:       strings.TrimSpace(payload.QMIProxyPath),
-		QMIProxyExecutable: strings.TrimSpace(payload.QMIProxyExecutable),
-		NetworkEnabled:     payload.NetworkEnabled,
-		SMSEnabled:         payload.SMSEnabled,
-		VoWiFiEnabled:      payload.VoWiFiEnabled,
+		ID:                       strings.TrimSpace(payload.ID),
+		AgentID:                  strings.TrimSpace(payload.AgentID),
+		RemoteDeviceID:           strings.TrimSpace(payload.RemoteDeviceID),
+		RemoteHardwareGeneration: strings.TrimSpace(payload.RemoteHardwareGeneration),
+		Name:                     name,
+		DeviceType:               store.NormalizeDeviceType(payload.DeviceType),
+		Interface:                strings.TrimSpace(payload.Interface),
+		ControlDevice:            strings.TrimSpace(payload.ControlDevice),
+		ATPort:                   strings.TrimSpace(payload.ATPort),
+		USBPath:                  strings.TrimSpace(payload.USBPath),
+		AudioDevice:              strings.TrimSpace(payload.AudioDevice),
+		ModemIMEI:                strings.TrimSpace(payload.ModemIMEI),
+		SIMPIN:                   strings.TrimSpace(payload.SIMPIN),
+		APN:                      strings.TrimSpace(payload.APN),
+		ProxyPort:                payload.ProxyPort,
+		BaudRate:                 payload.BaudRate,
+		DataBits:                 payload.DataBits,
+		StopBits:                 payload.StopBits,
+		Parity:                   payload.Parity,
+		DeviceBackend:            payload.DeviceBackend,
+		ESIMTransport:            payload.ESIMTransport,
+		QMIUseProxy:              payload.QMIUseProxy,
+		QMIProxyPath:             strings.TrimSpace(payload.QMIProxyPath),
+		QMIProxyExecutable:       strings.TrimSpace(payload.QMIProxyExecutable),
+		NetworkEnabled:           payload.NetworkEnabled,
+		SMSEnabled:               payload.SMSEnabled,
+		VoWiFiEnabled:            payload.VoWiFiEnabled,
 	}
 }
 
@@ -236,6 +246,10 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) bool {
 			writeError(w, http.StatusBadRequest, "invalid_device_type", "select a supported device type")
 			return true
 		}
+		if strings.TrimSpace(payload.AgentID) != "" {
+			s.createRemoteDevice(w, r, payload)
+			return true
+		}
 		if _, err := s.store.Device(r.Context(), payload.ID); err == nil {
 			writeError(w, http.StatusConflict, "device_exists", "a device with this ID already exists")
 			return true
@@ -245,6 +259,11 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) bool {
 		}
 		devices, err := s.devices.Discover(r.Context())
 		if err != nil {
+			if errors.Is(err, device.ErrUnsupportedCapability) {
+				writeError(w, http.StatusBadRequest, "agent_id_required",
+					"local hardware discovery is disabled; select a VoNet-Agent device")
+				return true
+			}
 			s.writeDeviceError(w, err)
 			return true
 		}
@@ -379,6 +398,129 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+func (s *Server) createRemoteDevice(w http.ResponseWriter, r *http.Request, payload deviceConfigPayload) {
+	if s.agentGRPC == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent_grpc_unavailable", "Agent gRPC service is unavailable")
+		return
+	}
+	agentID := strings.TrimSpace(payload.AgentID)
+	remoteID := strings.TrimSpace(payload.RemoteDeviceID)
+	if remoteID == "" {
+		remoteID = payload.ID
+	}
+	configID := s.remoteConfigID(r.Context(), agentID, remoteID, payload.ID)
+	payload.ID = configID
+	var selected *device.Device
+	for _, raw := range s.agentGRPC.Devices(agentID) {
+		var entry device.Device
+		if json.Unmarshal(raw, &entry) != nil {
+			continue
+		}
+		if entry.ID == remoteID || entry.Candidate.ID == remoteID {
+			value := entry
+			selected = &value
+			break
+		}
+	}
+	if selected == nil {
+		writeError(w, http.StatusNotFound, "remote_device_not_found", "the selected Agent device is offline or no longer present")
+		return
+	}
+	config := payload.toStoreDevice()
+	config.AgentID = agentID
+	config.RemoteDeviceID = remoteID
+	config.RemoteHardwareGeneration = strings.TrimSpace(payload.RemoteHardwareGeneration)
+	if config.RemoteHardwareGeneration == "" {
+		config.RemoteHardwareGeneration = strings.TrimSpace(selected.RemoteHardwareGeneration)
+	}
+	config.VoWiFiEnabled = false
+	config.NetworkEnabled = false
+	fillConfigFromPhysical(&config, *selected)
+	if isReaderDeviceType(config.DeviceType) {
+		config.SMSEnabled = true
+	}
+	setup, ok := s.devices.(remoteDeviceSetup)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "remote_device_setup_unavailable", "remote device setup is unavailable")
+		return
+	}
+	if strings.TrimSpace(payload.SIMPIN) != "" {
+		if err := setup.SetRemoteSIMPin(agentID, remoteID, payload.SIMPIN); err != nil {
+			s.writeDeviceError(w, err)
+			return
+		}
+	}
+	if strings.TrimSpace(payload.DeviceBackend) != "" {
+		if err := setup.SetRemoteBackend(agentID, remoteID, payload.DeviceBackend); err != nil {
+			s.writeDeviceError(w, err)
+			return
+		}
+	}
+	if strings.TrimSpace(payload.ESIMTransport) != "" {
+		if err := setup.SetRemoteESIMTransport(agentID, remoteID, payload.ESIMTransport); err != nil {
+			s.writeDeviceError(w, err)
+			return
+		}
+	}
+	var saveErr error
+	var lease store.PCSCIMEILease
+	if isReaderDeviceType(config.DeviceType) {
+		request, err := s.pcscIMEILeaseRequest(r.Context(), config.ID, payload, nil)
+		if err != nil {
+			s.writePCSCIMEIError(w, err)
+			return
+		}
+		_, lease, saveErr = s.store.CreateDeviceWithPCSCIMEILease(r.Context(), config, request)
+	} else {
+		saveErr = s.store.UpsertDevice(r.Context(), config)
+	}
+	if saveErr != nil {
+		s.writePCSCIMEIError(w, saveErr)
+		return
+	}
+	summary := s.configuredDeviceSummary(config, selected)
+	if isReaderDeviceType(config.DeviceType) {
+		summary = withPCSCIMEILease(summary, lease)
+	}
+	warning := ""
+	if _, err := s.devices.SetFlight(r.Context(), config.ID, true); err != nil {
+		warning = "remote device configuration was saved, but the Agent has not confirmed airplane mode"
+	}
+	s.recordAudit(r.Context(), "admin", "device.create_remote", "device", config.ID, "success", "remote device configured")
+	writeJSON(w, http.StatusCreated, map[string]any{"data": map[string]any{
+		"status": "created", "id": config.ID, "agent_id": agentID,
+		"discovery_key": remoteID, "physical_device": summary, "warning": warning,
+	}})
+}
+
+func (s *Server) remoteConfigID(ctx context.Context, agentID, remoteID, preferred string) string {
+	if existing, err := s.store.DeviceByRemoteBinding(ctx, agentID, remoteID); err == nil {
+		return existing.ID
+	}
+	preferred = strings.TrimSpace(preferred)
+	if preferred != "" {
+		if _, err := s.store.Device(ctx, preferred); errors.Is(err, store.ErrNotFound) {
+			return preferred
+		}
+	}
+	digest := sha256.Sum256([]byte(agentID + "\x00" + remoteID))
+	suffix := hex.EncodeToString(digest[:4])
+	base := strings.TrimRight(remoteID, "-_")
+	if base == "" {
+		base = "remote"
+	}
+	for index := 0; index < 100; index++ {
+		candidate := fmt.Sprintf("%s-%s", base, suffix)
+		if index > 0 {
+			candidate = fmt.Sprintf("%s-%d", candidate, index)
+		}
+		if _, err := s.store.Device(ctx, candidate); errors.Is(err, store.ErrNotFound) {
+			return candidate
+		}
+	}
+	return fmt.Sprintf("%s-%d", base, time.Now().UnixNano())
+}
+
 func findDiscoveredDevice(devices []device.Device, config deviceConfigPayload) *device.Device {
 	if isReaderDeviceType(config.DeviceType) {
 		if selected := findPCSCDiscoveredDevice(devices, config.ID, strings.TrimSpace(config.ControlDevice), strings.TrimSpace(config.USBPath)); selected != nil {
@@ -441,16 +583,13 @@ func (s *Server) handleDiscoveredDevices(w http.ResponseWriter, r *http.Request)
 	if !requireMethod(w, r, http.MethodGet) {
 		return true
 	}
-	if s.devices == nil {
+	agentID := strings.TrimSpace(r.URL.Query().Get("agent_id"))
+	if agentID == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"devices": []any{}}})
 		return true
 	}
-	// This endpoint backs the add-device dialog. Always perform a new physical
-	// scan instead of serving Manager.List(), which intentionally retains
-	// unplugged configured devices so the main device list can show them offline.
-	devices, err := s.devices.Discover(r.Context())
-	if err != nil {
-		s.writeDeviceError(w, err)
+	if s.agentGRPC == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent_grpc_unavailable", "Agent gRPC service is unavailable")
 		return true
 	}
 	configured, err := s.store.ListDevices(r.Context())
@@ -458,8 +597,12 @@ func (s *Server) handleDiscoveredDevices(w http.ResponseWriter, r *http.Request)
 		s.writeStoreError(w, err)
 		return true
 	}
-	result := make([]map[string]any, 0, len(devices))
-	for _, entry := range devices {
+	result := make([]map[string]any, 0)
+	for _, raw := range s.agentGRPC.Devices(agentID) {
+		var entry device.Device
+		if json.Unmarshal(raw, &entry) != nil {
+			continue
+		}
 		if !entry.Discovered {
 			continue
 		}
@@ -476,7 +619,8 @@ func (s *Server) handleDiscoveredDevices(w http.ResponseWriter, r *http.Request)
 		}
 		configuredID := ""
 		for _, config := range configured {
-			if physicalMatchesConfig(entry, config) {
+			if strings.TrimSpace(config.AgentID) == agentID &&
+				(config.RemoteDeviceID == entry.ID || config.RemoteDeviceID == entry.Candidate.ID) {
 				configuredID = config.ID
 				break
 			}
@@ -489,26 +633,29 @@ func (s *Server) handleDiscoveredDevices(w http.ResponseWriter, r *http.Request)
 			continue
 		}
 		result = append(result, map[string]any{
-			"hardware_kind":   candidate.HardwareKind,
-			"reader_name":     candidate.ReaderName,
-			"device_type":     discoveredDeviceType(candidate),
-			"discovery_key":   entry.ID,
-			"control_path":    controlPath,
-			"net_interface":   candidate.NetworkInterface,
-			"usb_path":        candidate.USBPath,
-			"vendor_id":       parseHexID(candidate.VendorID),
-			"product_id":      parseHexID(candidate.ProductID),
-			"driver_name":     candidate.Product,
-			"at_ports":        atPorts,
-			"at_port":         candidate.ATPort.OpenPath(),
-			"imei":            snapshotString(entry.Snapshot, func(snapshot *device.Snapshot) string { return snapshot.IMEI }),
-			"mode":            backendMode(candidate),
-			"network_capable": candidate.HardwareKind != "pcsc" && (candidate.NetworkInterface != "" || candidate.QMIControl != ""),
-			"configured":      configuredID != "",
-			"configured_id":   configuredID,
-			"degraded":        candidate.DiscoveryIssue != "" || (candidate.HardwareKind != "pcsc" && !candidate.HasATPort()),
-			"discovery_issue": candidate.DiscoveryIssue,
-			"suggested_id":    suggestedDeviceID(candidate, entry.Snapshot),
+			"agent_id":            agentID,
+			"remote_device_id":    entry.ID,
+			"hardware_generation": entry.RemoteHardwareGeneration,
+			"hardware_kind":       candidate.HardwareKind,
+			"reader_name":         candidate.ReaderName,
+			"device_type":         discoveredDeviceType(candidate),
+			"discovery_key":       entry.ID,
+			"control_path":        controlPath,
+			"net_interface":       candidate.NetworkInterface,
+			"usb_path":            candidate.USBPath,
+			"vendor_id":           parseHexID(candidate.VendorID),
+			"product_id":          parseHexID(candidate.ProductID),
+			"driver_name":         candidate.Product,
+			"at_ports":            atPorts,
+			"at_port":             candidate.ATPort.OpenPath(),
+			"imei":                snapshotString(entry.Snapshot, func(snapshot *device.Snapshot) string { return snapshot.IMEI }),
+			"mode":                backendMode(candidate),
+			"network_capable":     candidate.HardwareKind != "pcsc" && (candidate.NetworkInterface != "" || candidate.QMIControl != ""),
+			"configured":          configuredID != "",
+			"configured_id":       configuredID,
+			"degraded":            candidate.DiscoveryIssue != "" || (candidate.HardwareKind != "pcsc" && !candidate.HasATPort()),
+			"discovery_issue":     candidate.DiscoveryIssue,
+			"suggested_id":        suggestedDeviceID(candidate, entry.Snapshot),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"devices": result}})
@@ -525,7 +672,11 @@ func parseHexID(value string) int64 {
 // Format: "Reader-" + USBSerialNumber (e.g., "Reader-TEST00000002")
 func suggestedDeviceID(candidate modem.Candidate, snapshot *device.Snapshot) string {
 	if candidate.HardwareKind == pcsc.HardwareKind {
-		if serial := strings.TrimSpace(candidate.SerialNumber); serial != "" {
+		serial := strings.TrimSpace(candidate.SerialNumber)
+		if serial == "" {
+			serial = strings.TrimSpace(candidate.ReaderName)
+		}
+		if serial != "" {
 			return "Reader-" + serial
 		}
 		return ""
@@ -794,17 +945,32 @@ func (s *Server) handleDeviceRescan(w http.ResponseWriter, r *http.Request) bool
 	if !requireMethod(w, r, http.MethodPost) {
 		return true
 	}
-	if s.devices == nil {
-		writeError(w, http.StatusServiceUnavailable, "device_manager_unavailable", "device manager is unavailable")
+	agentID := strings.TrimSpace(r.URL.Query().Get("agent_id"))
+	if agentID == "" {
+		writeError(w, http.StatusBadRequest, "agent_id_required", "device discovery is handled by VoNet-Agent")
 		return true
 	}
-	devices, err := s.devices.Discover(r.Context())
+	if s.agentGRPC == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent_grpc_unavailable", "Agent gRPC service is unavailable")
+		return true
+	}
+	raw := make([]byte, 12)
+	if _, err := rand.Read(raw); err != nil {
+		s.writeStoreError(w, err)
+		return true
+	}
+	event, err := s.agentGRPC.Execute(r.Context(), agentID, &agentproto.AgentCommand{
+		Command: &agentproto.AgentCommand_GetHardwareSnapshot{GetHardwareSnapshot: &agentproto.GetHardwareSnapshotCommand{
+			CommandId: "rescan-" + hex.EncodeToString(raw),
+		}},
+	})
 	if err != nil {
-		s.writeDeviceError(w, err)
+		writeError(w, http.StatusBadGateway, "agent_command_failed", err.Error())
 		return true
 	}
+	snapshot := event.GetHardwareSnapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"data": map[string]any{"status": "ok", "devices": len(devices)},
+		"data": map[string]any{"status": "ok", "devices": len(snapshot.GetDevices())},
 	})
 	return true
 }
@@ -815,22 +981,32 @@ func (s *Server) handleDevicePath(
 	id string,
 	tail []string,
 ) bool {
-	config, err := s.store.Device(r.Context(), id)
+	agentID := strings.TrimSpace(r.URL.Query().Get("agent_id"))
+	var config store.Device
+	var err error
+	if agentID != "" {
+		config, err = s.store.Device(r.Context(), id)
+		if err == nil && strings.TrimSpace(config.AgentID) != agentID {
+			err = store.ErrNotFound
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			config, err = s.store.DeviceByRemoteBinding(r.Context(), agentID, id)
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			config, err = s.ensureRemoteDeviceConfig(r.Context(), agentID, id)
+		}
+	} else {
+		config, err = s.store.Device(r.Context(), id)
+	}
 	if err != nil {
 		s.writeStoreError(w, err)
 		return true
 	}
+	id = config.ID
 	if len(tail) == 0 {
 		switch r.Method {
 		case http.MethodDelete:
-			if err := s.clearEsimProfileCache(r.Context(), id); err != nil {
-				s.writeStoreError(w, err)
-				return true
-			}
-			if remover, ok := s.vowifi.(VoWiFiDeviceRemover); ok {
-				remover.Remove(r.Context(), id)
-			}
-			if err := s.store.DeleteDevice(r.Context(), id); err != nil {
+			if err := s.deleteDeviceConfig(r.Context(), config); err != nil {
 				s.writeStoreError(w, err)
 				return true
 			}
@@ -851,6 +1027,9 @@ func (s *Server) handleDevicePath(
 				return true
 			}
 			next := payload.toStoreDevice()
+			next.AgentID = config.AgentID
+			next.RemoteDeviceID = config.RemoteDeviceID
+			next.RemoteHardwareGeneration = config.RemoteHardwareGeneration
 			// DeviceExtra carries internal lifecycle state such as
 			// card_runtime_stale. A normal config edit must not erase it.
 			next.Extra = config.Extra
@@ -1054,6 +1233,8 @@ func (s *Server) handleDevicePath(
 			return true
 		}
 		return s.handleFlightMode(w, r, config, physicalID)
+	case "pin/status", "pin/verify", "pin/change", "pin/unblock":
+		return s.handlePINOperation(w, r, config, physicalID, tail[0]+"/"+tail[1])
 	case "network":
 		if !s.requirePhysicalDevice(w, physicalPresent) {
 			return true
@@ -1142,6 +1323,64 @@ func (s *Server) handleDevicePath(
 		return false
 	}
 	return true
+}
+
+func (s *Server) deleteDeviceConfig(ctx context.Context, config store.Device) error {
+	id := strings.TrimSpace(config.ID)
+	if releaser, ok := s.devices.(interface {
+		ReleaseDevice(context.Context, string) error
+	}); ok && strings.TrimSpace(config.AgentID) != "" {
+		if err := releaser.ReleaseDevice(ctx, id); err != nil {
+			s.logger.Warn("release remote device before delete", "device_id", id, "agent_id", config.AgentID, "error", err)
+		}
+	}
+	if err := s.clearEsimProfileCache(ctx, id); err != nil {
+		return err
+	}
+	if remover, ok := s.vowifi.(VoWiFiDeviceRemover); ok {
+		remover.Remove(ctx, id)
+	}
+	return s.store.DeleteDevice(ctx, id)
+}
+
+func (s *Server) ensureRemoteDeviceConfig(ctx context.Context, agentID, remoteID string) (store.Device, error) {
+	if s.agentGRPC == nil {
+		return store.Device{}, errors.New("agent gRPC service is unavailable")
+	}
+	if existing, err := s.store.DeviceByRemoteBinding(ctx, agentID, remoteID); err == nil {
+		return existing, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return store.Device{}, err
+	}
+	var selected *device.Device
+	for _, raw := range s.agentGRPC.Devices(agentID) {
+		var entry device.Device
+		if json.Unmarshal(raw, &entry) != nil {
+			continue
+		}
+		if entry.ID == remoteID || entry.Candidate.ID == remoteID {
+			value := entry
+			selected = &value
+			break
+		}
+	}
+	if selected == nil {
+		return store.Device{}, store.ErrNotFound
+	}
+	config := store.Device{
+		ID: s.remoteConfigID(ctx, agentID, remoteID, remoteID), AgentID: agentID, RemoteDeviceID: remoteID,
+		Name:                     firstNonEmpty(selected.Candidate.Product, remoteID),
+		DeviceType:               discoveredDeviceType(selected.Candidate),
+		RemoteHardwareGeneration: strings.TrimSpace(selected.RemoteHardwareGeneration),
+	}
+	fillConfigFromPhysical(&config, *selected)
+	if isReaderDeviceType(config.DeviceType) {
+		config.SMSEnabled = true
+	}
+	if err := s.store.UpsertDevice(ctx, config); err != nil {
+		return store.Device{}, err
+	}
+	return config, nil
 }
 
 func native410UnsupportedOperation(tail []string) bool {
@@ -1753,6 +1992,80 @@ func ussdResultFromUSSI(result vowifi.USSISubmitResult) device.USSDResult {
 		mapped.Continueable = true
 	}
 	return mapped
+}
+
+func (s *Server) handlePINOperation(
+	w http.ResponseWriter,
+	r *http.Request,
+	config store.Device,
+	physicalID, operation string,
+) bool {
+	controller, ok := s.devices.(interface {
+		PINStatus(context.Context, string) (pcsc.PINState, error)
+		VerifyPIN(context.Context, string, string) (pcsc.PINState, error)
+		ChangePIN(context.Context, string, string, string) (pcsc.PINState, error)
+		UnblockPIN(context.Context, string, string, string) (pcsc.PINState, error)
+	})
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "pin_unsupported", "this device does not expose PC/SC PIN operations")
+		return true
+	}
+	controlID := physicalID
+	if strings.TrimSpace(config.AgentID) != "" {
+		controlID = config.ID
+	}
+	if operation == "pin/status" {
+		if !requireMethod(w, r, http.MethodGet) {
+			return true
+		}
+		state, err := controller.PINStatus(r.Context(), controlID)
+		if err != nil {
+			s.writeDeviceError(w, err)
+			return true
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": pinStateResponse(state)})
+		return true
+	}
+	if !requireMethod(w, r, http.MethodPost) {
+		return true
+	}
+	var request struct {
+		PIN    string `json:"pin"`
+		NewPIN string `json:"new_pin"`
+		PUK    string `json:"puk"`
+	}
+	if err := s.decodeJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return true
+	}
+	var state pcsc.PINState
+	var err error
+	switch operation {
+	case "pin/verify":
+		state, err = controller.VerifyPIN(r.Context(), controlID, request.PIN)
+	case "pin/change":
+		state, err = controller.ChangePIN(r.Context(), controlID, request.PIN, request.NewPIN)
+	case "pin/unblock":
+		state, err = controller.UnblockPIN(r.Context(), controlID, request.PUK, request.NewPIN)
+	default:
+		writeError(w, http.StatusNotFound, "not_found", "PIN operation not found")
+		return true
+	}
+	if err != nil {
+		s.writeDeviceError(w, err)
+		return true
+	}
+	s.recordAudit(r.Context(), "admin", "device."+operation, "device", config.ID, "success", "PC/SC PIN operation completed")
+	writeJSON(w, http.StatusOK, map[string]any{"data": pinStateResponse(state)})
+	return true
+}
+
+func pinStateResponse(state pcsc.PINState) map[string]any {
+	return map[string]any{
+		"required":     state.Required,
+		"tries":        state.Tries,
+		"puk_required": state.PUKRequired,
+	}
 }
 
 func (s *Server) handleFlightMode(w http.ResponseWriter, r *http.Request, config store.Device, physicalID string) bool {
@@ -2950,7 +3263,7 @@ func rawJSONObject(value json.RawMessage) any {
 
 func deviceSummary(entry device.Device) map[string]any {
 	snapshot := entry.Snapshot
-	healthy := entry.Discovered && snapshot != nil && snapshot.Responsive && entry.LastError == ""
+	healthy := entry.Discovered && snapshot != nil && snapshot.Responsive
 	phone := ""
 	phoneSource := ""
 	if snapshot != nil {
@@ -3042,30 +3355,33 @@ func storedDeviceConfig(config store.Device) map[string]any {
 	}
 	stale := config.CardRuntimeStale()
 	return map[string]any{
-		"id":                   config.ID,
-		"name":                 config.Name,
-		"device_type":          store.NormalizeDeviceType(config.DeviceType),
-		"interface":            config.Interface,
-		"control_device":       config.ControlDevice,
-		"at_port":              config.ATPort,
-		"usb_path":             config.USBPath,
-		"audio_device":         config.AudioDevice,
-		"modem_imei":           storedModemIMEI(config),
-		"sim_pin":              simPIN,
-		"apn":                  config.APN,
-		"proxy_port":           config.ProxyPort,
-		"baud_rate":            config.BaudRate,
-		"data_bits":            config.DataBits,
-		"stop_bits":            config.StopBits,
-		"parity":               config.Parity,
-		"device_backend":       config.DeviceBackend,
-		"esim_transport":       config.ESIMTransport,
-		"qmi_use_proxy":        config.QMIUseProxy,
-		"qmi_proxy_path":       config.QMIProxyPath,
-		"qmi_proxy_executable": config.QMIProxyExecutable,
-		"network_enabled":      config.NetworkEnabled,
-		"sms_enabled":          config.SMSEnabled,
-		"vowifi_enabled":       config.VoWiFiEnabled,
+		"id":                         config.ID,
+		"agent_id":                   config.AgentID,
+		"remote_device_id":           config.RemoteDeviceID,
+		"remote_hardware_generation": config.RemoteHardwareGeneration,
+		"name":                       config.Name,
+		"device_type":                store.NormalizeDeviceType(config.DeviceType),
+		"interface":                  config.Interface,
+		"control_device":             config.ControlDevice,
+		"at_port":                    config.ATPort,
+		"usb_path":                   config.USBPath,
+		"audio_device":               config.AudioDevice,
+		"modem_imei":                 storedModemIMEI(config),
+		"sim_pin":                    simPIN,
+		"apn":                        config.APN,
+		"proxy_port":                 config.ProxyPort,
+		"baud_rate":                  config.BaudRate,
+		"data_bits":                  config.DataBits,
+		"stop_bits":                  config.StopBits,
+		"parity":                     config.Parity,
+		"device_backend":             config.DeviceBackend,
+		"esim_transport":             config.ESIMTransport,
+		"qmi_use_proxy":              config.QMIUseProxy,
+		"qmi_proxy_path":             config.QMIProxyPath,
+		"qmi_proxy_executable":       config.QMIProxyExecutable,
+		"network_enabled":            config.NetworkEnabled,
+		"sms_enabled":                config.SMSEnabled,
+		"vowifi_enabled":             config.VoWiFiEnabled,
 		"card_runtime_stale": map[string]bool{
 			"binding":        stale.Binding,
 			"device_backend": stale.DeviceBackend,
@@ -3393,12 +3709,15 @@ func lifecyclePhase(entry device.Device) string {
 	switch {
 	case !entry.Discovered:
 		return "missing"
-	case entry.LastError != "":
-		return "degraded"
 	case entry.Snapshot == nil:
+		if entry.LastError != "" {
+			return "degraded"
+		}
 		return "discovered"
 	case entry.Snapshot.Responsive:
 		return "ready"
+	case entry.LastError != "":
+		return "degraded"
 	default:
 		return "unresponsive"
 	}

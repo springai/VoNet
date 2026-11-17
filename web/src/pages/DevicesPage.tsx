@@ -7,6 +7,7 @@ import { usePolling } from "../lib/usePolling";
 import { useMediaQuery } from "../lib/useMediaQuery";
 import { Button, PageHeader, RefreshButton, ErrorState, ListSkeleton, Tabs, confirmDialog, message } from "../components/ui";
 import { DeviceListPanel, type StatusFilter, type SortDir, type SortKey } from "../components/devices/DeviceListPanel";
+import { AgentManager } from "../components/agents/AgentManager";
 import { DeviceDetailHeader } from "../components/devices/DeviceDetailHeader";
 import { DeviceEsimTab } from "../components/devices/DeviceEsimTab";
 import { DeviceConfigTab } from "../components/devices/DeviceConfigTab";
@@ -19,6 +20,9 @@ import { tf, useI18n } from "../lib/i18n";
 const VALID_TABS = new Set(["esim", "config"]);
 const EMPTY_ADD: AddDeviceForm = {
   id: "",
+  agentId: "",
+  remoteDeviceId: "",
+  remoteHardwareGeneration: "",
   name: "",
   deviceType: "",
   interface: "",
@@ -41,6 +45,7 @@ export default function DevicesPage() {
   const [listError, setListError] = useState<LoadError | null>(null);
   const [lastOkAt, setLastOkAt] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState("");
+  const [selectedAgentId, setSelectedAgentId] = useState("");
   const [activeTab, setActiveTab] = useState("esim");
   const [editConfig, setEditConfig] = useState<DeviceConfig | null>(null);
   const [configSnapshot, setConfigSnapshot] = useState("");
@@ -66,6 +71,7 @@ export default function DevicesPage() {
   activeTabRef.current = activeTab;
   const searchParamsRef = useRef(searchParams);
   searchParamsRef.current = searchParams;
+  const discoveryInFlightRef = useRef(false);
 
   const isMobile = useMediaQuery("(max-width: 767px)");
 
@@ -84,34 +90,47 @@ export default function DevicesPage() {
       return;
     }
     try {
-      const res = await api<{ config?: DeviceConfig }>(`/devices/${id}/config`);
+      const agentQuery = selectedAgentId ? `?agent_id=${encodeURIComponent(selectedAgentId)}` : "";
+      const res = await api<{ config?: DeviceConfig }>(`/devices/${id}/config${agentQuery}`);
       const cfg = res?.config ? (JSON.parse(JSON.stringify(res.config)) as DeviceConfig) : null;
       if (cfg && isQmiControl(cfg.controlDevice)) cfg.deviceBackend = "qmi";
+      if (cfg?.id && cfg.id !== id) setSelectedId(cfg.id);
       setEditConfig(cfg);
       setConfigSnapshot(JSON.stringify(cfg));
     } catch {
       setEditConfig(null);
       setConfigSnapshot("");
     }
-  }, []);
+  }, [selectedAgentId]);
 
-  const loadDiscovered = useCallback(async () => {
-    setDiscovering(true);
-    // Never leave a previous physical scan visible while a new scan is in
-    // progress or after it fails.
-    setDiscovered([]);
-    setAddSelected(null);
-    setAddConfig(EMPTY_ADD);
+  const loadDiscovered = useCallback(async (resetSelection = true, showLoading = true) => {
+    if (discoveryInFlightRef.current) return;
+    discoveryInFlightRef.current = true;
+    if (showLoading) setDiscovering(true);
+    if (resetSelection) {
+      setDiscovered([]);
+      setAddSelected(null);
+      setAddConfig(EMPTY_ADD);
+    }
     try {
-      const res = await api<{ devices?: DiscoveredDevice[] }>("/devices/discovered?with_imei=1");
+      if (!selectedAgentId) {
+        if (showLoading) setDiscovering(false);
+        return;
+      }
+      await api(`/devices/actions/rescan?agent_id=${encodeURIComponent(selectedAgentId)}`, {
+        method: "POST",
+        body: {},
+      });
+      const res = await api<{ devices?: DiscoveredDevice[] }>(`/devices/discovered?agent_id=${encodeURIComponent(selectedAgentId)}`);
       const devices = Array.isArray(res?.devices) ? res!.devices! : [];
       setDiscovered(devices);
     } catch {
-      setDiscovered([]);
+      if (resetSelection) setDiscovered([]);
     } finally {
-      setDiscovering(false);
+      discoveryInFlightRef.current = false;
+      if (showLoading) setDiscovering(false);
     }
-  }, []);
+  }, [selectedAgentId]);
   const selectDevice = useCallback(
     (id: string, updateUrl = true) => {
       const clean = (id || "").trim();
@@ -158,12 +177,22 @@ export default function DevicesPage() {
 
   const loadDevices = useCallback(
     async (manual: boolean) => {
+      if (!selectedAgentId) {
+        setList([]);
+        setSelectedId("");
+        setEditConfig(null);
+        setConfigSnapshot("");
+        return;
+      }
       if (manual) {
         setListLoading(true);
         setListError(null);
       }
       try {
-        const res = await api<{ devices?: DeviceListItem[] }>("/devices");
+        const endpoint = selectedAgentId
+          ? `/agents/${encodeURIComponent(selectedAgentId)}/devices`
+          : "/devices";
+        const res = await api<{ devices?: DeviceListItem[] }>(endpoint);
         const devices = res?.devices || [];
         setList(devices);
         void loadCandidateStatus();
@@ -188,7 +217,7 @@ export default function DevicesPage() {
         if (manual) setListLoading(false);
       }
     },
-    [loadCandidateStatus, loadConfig],
+    [loadCandidateStatus, loadConfig, selectedAgentId],
   );
 
   const refreshAll = useCallback(async () => {
@@ -247,17 +276,17 @@ export default function DevicesPage() {
   }, [refreshAll, refreshSoon]);
 
   const handleRescan = useCallback(async () => {
+    if (!selectedAgentId) return;
     setRescanning(true);
     try {
-      await api("/devices/actions/rescan", { method: "POST" });
-      message.success(t("设备重新扫描完成"));
       await Promise.all([loadDevices(true), loadDiscovered()]);
+      message.success(t("设备重新扫描完成"));
     } catch (e) {
       message.error(apiMessage(e) || t("重新扫描失败"));
     } finally {
       setRescanning(false);
     }
-  }, [loadDevices, loadDiscovered]);
+  }, [loadDevices, loadDiscovered, selectedAgentId]);
 
   const handleSaveConfig = useCallback(async () => {
     const id = selectedIdRef.current.trim();
@@ -312,8 +341,7 @@ export default function DevicesPage() {
     setAddOpen(true);
     setAddSelected(null);
     setAddConfig(EMPTY_ADD);
-    void loadDiscovered();
-  }, [loadDiscovered]);
+  }, []);
 
   const selectDiscovered = useCallback((d: DiscoveredDevice) => {
     if (d.discoveryIssue === "pcsc_service_unavailable") {
@@ -355,6 +383,9 @@ export default function DevicesPage() {
       return {
         ...prev,
         id,
+        agentId: d.agentId || selectedAgentId,
+        remoteDeviceId: d.remoteDeviceId || d.discoveryKey,
+        remoteHardwareGeneration: d.hardwareGeneration || "",
         interface: d.netInterface || "",
         atPort: d.atPort || "",
         controlDevice: d.controlPath || "",
@@ -367,7 +398,7 @@ export default function DevicesPage() {
 		esimTransport: isReader ? "pcsc" : backend,
       };
     });
-  }, []);
+  }, [selectedAgentId]);
 
   const saveAdd = useCallback(async () => {
     setAddSaving(true);
@@ -457,6 +488,15 @@ export default function DevicesPage() {
   useEffect(() => {
     if (activeTab !== "esim" && activeTab !== "config") setActiveTab("config");
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!addOpen) return;
+    void loadDiscovered(true, true);
+    const timer = window.setInterval(() => {
+      void loadDiscovered(false, false);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [addOpen, loadDiscovered]);
   const tabItems = [
     { key: "esim", label: t("eSIM") },
     { key: "config", label: t("配置") },
@@ -467,91 +507,96 @@ export default function DevicesPage() {
       <PageHeader
         title={t("设备管理")}
         subtitle={t("管理设备硬件、eSIM Profile 和设备配置")}
-        actions={
-          <div className="flex items-center gap-2">
-            <RefreshButton loading={listLoading} onClick={refreshAll} />
-            <Button loading={rescanning} onClick={handleRescan} icon={<ArrowSyncRegular />}>
-              {t("重新扫描")}
-            </Button>
-            <Button
-              variant="primary"
-              onClick={openAddDialog}
-              className="!border-0"
-              icon={<AddRegular />}
-            >
-              {t("添加设备")}
-            </Button>
-          </div>
-        }
       />
-      {listError ? (
-        <ErrorState
-          className="mb-4"
-          title={t("设备列表加载失败")}
-          message={listError.message}
-          statusCode={listError.status}
-          lastSuccessAt={lastOkAt}
-          retryText={t("重试")}
-          onRetry={() => void loadDevices(true)}
-        />
-      ) : null}
-      <div className="devices-layout">
-        {(!isMobile || !selectedId) && (
-          <DeviceListPanel
-            loading={listLoading}
-            query={query}
-            statusFilter={statusFilter}
-            sortKey={sortKey}
-            sortDir={sortDir}
-            selectedId={selectedId}
-            filteredDevices={filteredDevices}
-            candidateByICCID={candidateByICCID}
-            onQueryChange={setQuery}
-            onStatusFilterChange={setStatusFilter}
-            onSortKeyChange={setSortKey}
-            onSortDirChange={setSortDir}
-            onSelectDevice={(id) => selectDevice(id)}
-          />
-        )}
-        <div className={`min-w-0 space-y-4 ${isMobile && selectedId ? "" : isMobile ? "hidden" : ""}`}>
-          {isMobile && selectedId && selectedListItem ? (
-            <Button variant="text" onClick={handleBackToList} icon={<ChevronLeftRegular />}>
-              {t("返回")}
-            </Button>
+      <AgentManager selectedAgentId={selectedAgentId} onSelect={setSelectedAgentId}>
+        <div className="space-y-4">
+          {selectedAgentId ? (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <RefreshButton loading={listLoading} onClick={refreshAll} />
+              <Button loading={rescanning} onClick={handleRescan} icon={<ArrowSyncRegular />}>
+                {t("重新扫描")}
+              </Button>
+              <Button variant="primary" onClick={openAddDialog} className="!border-0" icon={<AddRegular />}>
+                {t("添加设备")}
+              </Button>
+            </div>
           ) : null}
-          {selectedListItem ? (
-            <>
-              <DeviceDetailHeader device={selectedListItem} onCopyText={handleCopyText} />
-              <div className="device-detail-tabs ui-card p-6">
-                <Tabs tabs={tabItems} value={activeTab} onChange={handleTabChange} />
-                <div className="mt-5">
-                  {activeTab === "esim" ? (
-                    <DeviceEsimTab
-                      deviceId={selectedListItem.id}
-                      hostType={selectedListItem.deviceType}
-                      deviceImei={selectedListItem.modem?.imei || ""}
-                      isActive={activeTab === "esim"}
-                      deviceOnline={isDeviceOnline(selectedListItem)}
-                      rebooting={rebooting}
-                      onRebootModem={handleRebootModem}
-                      onProfileChanged={handleProfileChanged}
-                    />
-                  ) : null}
-                  {activeTab === "config" ? (
-                    <DeviceConfigTab editConfig={editConfig} deviceStatus={selectedListItem} saving={saving} deleting={deleting} onSave={handleSaveConfig} onDelete={handleDeleteDevice} onEditConfig={setEditConfig} />
-                  ) : null}
-                </div>
+          {selectedAgentId && listError ? (
+            <ErrorState
+              title={t("设备列表加载失败")}
+              message={listError.message}
+              statusCode={listError.status}
+              lastSuccessAt={lastOkAt}
+              retryText={t("重试")}
+              onRetry={() => void loadDevices(true)}
+            />
+          ) : null}
+          {selectedAgentId ? (
+            <div className="devices-layout">
+              {(!isMobile || !selectedId) && (
+                <DeviceListPanel
+                  embedded
+                  loading={listLoading}
+                  query={query}
+                  statusFilter={statusFilter}
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  selectedId={selectedId}
+                  filteredDevices={filteredDevices}
+                  candidateByICCID={candidateByICCID}
+                  onQueryChange={setQuery}
+                  onStatusFilterChange={setStatusFilter}
+                  onSortKeyChange={setSortKey}
+                  onSortDirChange={setSortDir}
+                  onSelectDevice={(id) => selectDevice(id)}
+                />
+              )}
+              <div className={`min-w-0 space-y-4 ${isMobile && selectedId ? "" : isMobile ? "hidden" : ""}`}>
+                {isMobile && selectedId && selectedListItem ? (
+                  <Button variant="text" onClick={handleBackToList} icon={<ChevronLeftRegular />}>
+                    {t("返回")}
+                  </Button>
+                ) : null}
+                {selectedListItem ? (
+                  <>
+                    <DeviceDetailHeader device={selectedListItem} onCopyText={handleCopyText} />
+                    <div className="device-detail-tabs ui-card p-6">
+                      <Tabs tabs={tabItems} value={activeTab} onChange={handleTabChange} />
+                      <div className="mt-5">
+                        {activeTab === "esim" ? (
+                          <DeviceEsimTab
+                            deviceId={selectedListItem.id}
+                            hostType={selectedListItem.deviceType}
+                            deviceImei={selectedListItem.modem?.imei || ""}
+                            isActive={activeTab === "esim"}
+                            deviceOnline={isDeviceOnline(selectedListItem)}
+                            rebooting={rebooting}
+                            onRebootModem={handleRebootModem}
+                            onProfileChanged={handleProfileChanged}
+                          />
+                        ) : null}
+                        {activeTab === "config" ? (
+                          <DeviceConfigTab editConfig={editConfig} deviceStatus={selectedListItem} saving={saving} deleting={deleting} onSave={handleSaveConfig} onDelete={handleDeleteDevice} onEditConfig={setEditConfig} />
+                        ) : null}
+                      </div>
+                    </div>
+                  </>
+                ) : listLoading ? (
+                  <ListSkeleton rows={8} />
+                ) : (
+                  <div className="ui-card p-10 text-center text-sm text-gray-400">
+                    {list.length === 0 ? t("该 Agent 当前没有已配置设备") : t("请选择设备查看详情")}
+                  </div>
+                )}
               </div>
-            </>
-          ) : listLoading ? (
-            <ListSkeleton rows={8} />
+            </div>
           ) : (
-            <div className="ui-card p-10 text-center text-sm text-gray-400">
-              {list.length === 0 ? t("暂无设备，点击右上角“添加设备”开始接管") : t("请选择左侧设备查看详情")}
+            <div className="py-8 text-center text-sm text-gray-500">
+              {t("请先选择 VoNet-Agent")}
             </div>
           )}
         </div>
-      </div>
+      </AgentManager>
       <DeviceAddDialog
         open={addOpen}
         discovering={discovering}

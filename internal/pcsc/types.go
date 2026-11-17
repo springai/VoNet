@@ -67,6 +67,12 @@ type Identity struct {
 	PINTries        int
 }
 
+type PINState struct {
+	Required    bool
+	Tries       int
+	PUKRequired bool
+}
+
 type Snapshot struct {
 	Reader   Reader
 	Identity Identity

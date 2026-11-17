@@ -493,6 +493,12 @@ func TestMigration4PreservesIMSRedeliveryAndUsesReceiptTime(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := legacy.db.ExecContext(ctx,
+			`UPDATE sms_messages SET extra_json = ? WHERE message_id = ?`,
+			string(extra), fmt.Sprintf("legacy-call-%d", index),
+		); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := legacy.db.ExecContext(ctx, `PRAGMA user_version = 3`); err != nil {
 		t.Fatal(err)
@@ -627,7 +633,7 @@ func TestUSBSIMReaderConfigurationIsWiFiCallingOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.DeviceBackend != "pcsc" || got.ESIMTransport != "pcsc" || got.NetworkEnabled || !got.SMSEnabled || got.VoWiFiEnabled || got.SIMPIN != "1234" {
+	if got.DeviceBackend != "pcsc" || got.ESIMTransport != "pcsc" || got.NetworkEnabled || !got.SMSEnabled || got.VoWiFiEnabled || got.SIMPIN != "" {
 		t.Fatalf("reader config = %+v", got)
 	}
 	bad := got

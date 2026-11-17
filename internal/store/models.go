@@ -36,33 +36,36 @@ type PCSCIMEILeaseRequest struct {
 }
 
 type Device struct {
-	ID                 string
-	Name               string
-	DeviceType         string
-	Interface          string
-	ControlDevice      string
-	ATPort             string
-	USBPath            string
-	AudioDevice        string
-	ModemIMEI          string
-	SIMPIN             string
-	APN                string
-	ProxyPort          int
-	BaudRate           int
-	DataBits           int
-	StopBits           int
-	Parity             string
-	DeviceBackend      string
-	ESIMTransport      string
-	QMIUseProxy        bool
-	QMIProxyPath       string
-	QMIProxyExecutable string
-	NetworkEnabled     bool
-	SMSEnabled         bool
-	VoWiFiEnabled      bool
-	Extra              json.RawMessage
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                       string
+	AgentID                  string
+	RemoteDeviceID           string
+	RemoteHardwareGeneration string
+	Name                     string
+	DeviceType               string
+	Interface                string
+	ControlDevice            string
+	ATPort                   string
+	USBPath                  string
+	AudioDevice              string
+	ModemIMEI                string
+	SIMPIN                   string
+	APN                      string
+	ProxyPort                int
+	BaudRate                 int
+	DataBits                 int
+	StopBits                 int
+	Parity                   string
+	DeviceBackend            string
+	ESIMTransport            string
+	QMIUseProxy              bool
+	QMIProxyPath             string
+	QMIProxyExecutable       string
+	NetworkEnabled           bool
+	SMSEnabled               bool
+	VoWiFiEnabled            bool
+	Extra                    json.RawMessage
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
 }
 
 type DeviceRuntime struct {
@@ -548,6 +551,10 @@ type SimCard struct {
 	HomePLMN    string
 	EID         string
 	ProfileAID  string
+	GID1        string
+	GID2        string
+	SMSC        string
+	DerivedJSON json.RawMessage
 	HostType    string
 	Source      string
 	CreatedAt   time.Time

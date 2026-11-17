@@ -19,11 +19,16 @@ func reconcileCardPolicies(
 	ctx context.Context,
 	logger *slog.Logger,
 	database *store.Store,
-	manager *device.Manager,
+	controller any,
 	vowifiManager *vowifiruntime.Manager,
 ) {
+	devices, ok := controller.(cardPolicyDevices)
+	if !ok {
+		logger.Error("card policy reconciler device controller is missing required capabilities")
+		return
+	}
 	reconciler := &cardPolicyReconciler{
-		logger: logger, database: database, devices: manager, wifi: vowifiManager,
+		logger: logger, database: database, devices: devices, wifi: vowifiManager,
 		observedCards:           make(map[string]string),
 		wifi410StartupNotBefore: time.Now().Add(wifi410VoWiFiStartupDelay),
 		bindingStableAfter:      cardBindingStableAfter,

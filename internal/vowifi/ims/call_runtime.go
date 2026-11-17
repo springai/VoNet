@@ -140,6 +140,7 @@ func (session *Session) DialCall(ctx context.Context, number string) (vowifi.Cal
 		"Content-Length: "+strconv.Itoa(len(body)), "", "",
 	)
 	request := append([]byte(strings.Join(lines, "\r\n")), body...)
+	session.logCallRequest("INVITE", request, target, preferredIdentity, identitySource)
 	responses := make(chan *sipResponse, 8)
 	key := sipTransactionKey{callID: callID, cseq: cseq, method: "INVITE"}
 	session.transactionsMu.Lock()
@@ -874,6 +875,7 @@ func (session *Session) sendDialogRequest(ctx context.Context, call *imsCall, me
 		session.mu.Unlock()
 	}
 	request := session.buildDialogRequest(call, method, cseq)
+	session.logCallRequest(method, request, call.target, "", "")
 	if method == "ACK" {
 		session.writeMu.Lock()
 		_, err := session.conn.Write(request)
@@ -1142,7 +1144,72 @@ func (session *Session) logCallResponse(response *sipResponse, diagnostic string
 		"diagnostic", diagnostic,
 		"content_type", safeSIPDiagnostic(response.value("Content-Type")),
 		"body_bytes", len(response.Body),
+		"headers", safeCallResponseHeaders(response),
 	)
+}
+
+func (session *Session) logCallRequest(method string, request []byte, target, preferredIdentity, identitySource string) {
+	if session == nil || session.provider == nil || session.provider.config.Logger == nil {
+		return
+	}
+	parsed, err := parseSIPPacket(request)
+	if err != nil || parsed.Request == nil {
+		return
+	}
+	sdp := ""
+	contentType := parsed.Request.value("Content-Type")
+	if strings.HasPrefix(strings.ToLower(contentType), "application/sdp") {
+		sdp = safeSIPDiagnostic(string(parsed.Request.Body))
+	}
+	session.provider.config.Logger.Debug("IMS call SIP request",
+		"category", "call",
+		"device_id", session.request.DeviceID,
+		"method", method,
+		"target", safeSIPDiagnostic(target),
+		"identity_source", identitySource,
+		"preferred_identity_scheme", publicIdentityScheme(preferredIdentity),
+		"from", safeSIPDiagnostic(parsed.Request.value("From")),
+		"to", safeSIPDiagnostic(parsed.Request.value("To")),
+		"cseq", safeSIPDiagnostic(parsed.Request.value("CSeq")),
+		"service_routes", len(parsed.Request.values("Service-Route")),
+		"require", safeSIPDiagnostic(parsed.Request.value("Require")),
+		"supported", safeSIPDiagnostic(parsed.Request.value("Supported")),
+		"content_type", safeSIPDiagnostic(contentType),
+		"body_bytes", len(parsed.Request.Body),
+		"sdp", sdp,
+	)
+}
+
+func publicIdentityScheme(value string) string {
+	value = strings.TrimSpace(value)
+	if index := strings.IndexByte(value, ':'); index > 0 {
+		return strings.ToLower(value[:index])
+	}
+	return ""
+}
+
+func safeCallResponseHeaders(response *sipResponse) map[string][]string {
+	if response == nil {
+		return nil
+	}
+	excluded := map[string]bool{
+		"authorization": true, "proxy-authorization": true,
+		"p-asserted-identity": true, "p-preferred-identity": true,
+		"remote-party-id": true, "history-info": true, "diversion": true,
+		"referred-by": true, "contact": true, "record-route": true, "route": true,
+	}
+	result := make(map[string][]string)
+	for name, values := range response.Headers {
+		if excluded[name] {
+			continue
+		}
+		copied := make([]string, 0, len(values))
+		for _, value := range values {
+			copied = append(copied, safeSIPDiagnostic(value))
+		}
+		result[name] = copied
+	}
+	return result
 }
 
 func (session *Session) setCallState(id, state string) {

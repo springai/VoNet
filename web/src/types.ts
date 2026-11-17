@@ -260,6 +260,9 @@ export interface DeviceStatus {
 }
 
 export interface DiscoveredDevice {
+  agentId: string;
+  remoteDeviceId: string;
+  hardwareGeneration?: string;
 	 hardwareKind?: string;
 	 readerName?: string;
   deviceType?: DeviceType;
@@ -286,6 +289,9 @@ export interface DiscoveredDevice {
 
 export interface DeviceConfig {
   id: string;
+  agentId?: string;
+  remoteDeviceId?: string;
+  remoteHardwareGeneration?: string;
   name: string;
   deviceType: DeviceType;
   interface: string;
@@ -655,6 +661,19 @@ export interface SystemLimitsSettings {
   smsHourlyLimit: number;
   defaultSmsHourlyLimit: number;
   autoClearModemStorage?: boolean;
+}
+
+export interface VoNetAgent {
+  id: string;
+  name: string;
+  notes?: string;
+  keyVersion: number;
+  status: "waiting_for_key" | "online" | "offline" | "revoked";
+  certificateFingerprint?: string;
+  protocolVersion?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  lastSeenAt?: string;
 }
 
 export type Notice = {

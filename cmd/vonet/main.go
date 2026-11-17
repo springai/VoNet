@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,7 +21,11 @@ import (
 	"time"
 
 	"golang.org/x/term"
+	"google.golang.org/grpc"
 
+	"vonet/internal/agentgrpc"
+	"vonet/internal/agentproto"
+	"vonet/internal/agentregistry"
 	"vonet/internal/auth"
 	"vonet/internal/buildinfo"
 	"vonet/internal/config"
@@ -435,6 +440,17 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 		return err
 	}
 	defer database.Close()
+	agentRegistry, err := agentregistry.Open(
+		startupContext,
+		database,
+		filepath.Join(filepath.Dir(cfg.DatabasePath), "secrets", "agent-registry.key"),
+	)
+	if err != nil {
+		return fmt.Errorf("open agent registry: %w", err)
+	}
+	agentGRPC := agentgrpc.New(logger, agentRegistry)
+	agentRegistry.SetRevocationHook(agentGRPC.DisconnectAgent)
+	agentGRPC.SetCommandStore(database)
 	pluginRoot := filepath.Join(filepath.Dir(cfg.DatabasePath), "plugins")
 	legacyExportProxyConfig := filepath.Join(pluginRoot, exportproxy.ReservedID, "data", "configs.json")
 	httpsManager, err := httpsmode.New(
@@ -497,30 +513,10 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 	if err != nil {
 		return fmt.Errorf("create device manager: %w", err)
 	}
-	// Device startup has a separate budget because EC20 CFUN transitions can
-	// temporarily remove the USB serial transport, and OpenStick 410 deliberately
-	// delays its persisted VoWiFi policy after a cold boot. Do not reuse the short
-	// database/configuration deadline for this hardware lifecycle.
+	// VoNet does not discover local QMI/AT/PCSC hardware. VoNet-Agent owns
+	// discovery and reports its hardware snapshots over gRPC.
 	deviceStartupContext, cancelDeviceStartup := deviceStartupContext(startupContext)
 	defer cancelDeviceStartup()
-	stableModemContext, cancelStableModem := context.WithTimeout(deviceStartupContext, stableModemWaitTimeout)
-	if err := deviceManager.WaitForStableModem(
-		stableModemContext,
-		20*time.Second,
-		time.Second,
-		20*time.Second,
-	); err != nil {
-		logger.Warn("wait for stable modem enumeration", "error", err)
-	}
-	cancelStableModem()
-	if err := deviceManager.Start(deviceStartupContext); err != nil {
-		logger.Warn("device discovery is not available at startup", "error", err)
-	}
-	if err := provisionDiscoveredDevices(deviceStartupContext, database, deviceManager); err != nil {
-		logger.Warn("automatic first-run device provisioning failed", "error", err)
-	}
-	configureDeviceBackends(deviceStartupContext, logger, database, deviceManager)
-	restoreDefaultCellularRadios(deviceStartupContext, logger, database, deviceManager)
 	defer func() {
 		stopContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -548,6 +544,7 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 		database,
 		deviceManager,
 		cardReaders,
+		agentGRPC,
 		func(ctx context.Context, call ims.ReceivedCall) error {
 			if onIncomingCall != nil {
 				return onIncomingCall(ctx, call)
@@ -565,10 +562,8 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 	// startup sequence. A snapshot refresh also takes the device operation
 	// mutex; starting it earlier can strand cold boot forever behind a serial
 	// read from an unstable USB enumeration.
-	go pollDeviceSnapshots(pollContext, deviceLogger, database, deviceManager)
 	go collectCellularTraffic(pollContext, logger, database)
 	go persistLogsToStore(pollContext, logger, logs, database)
-	go reconcileCardPolicies(pollContext, logger, database, deviceManager, vowifiManager)
 	defer func() {
 		stopContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -632,6 +627,8 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 		UpdateRepository:    strings.TrimSpace(os.Getenv("VONET_REPO")),
 		UpdateToken:         strings.TrimSpace(os.Getenv("GITHUB_TOKEN")),
 		HTTPS:               httpsManager,
+		Agents:              agentRegistry,
+		AgentGRPC:           agentGRPC,
 		MCP:                 mcpHandlers,
 	})
 	if err != nil {
@@ -639,6 +636,7 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 	}
 	defer handler.StopQQBotBinding()
 	switchESIM = handler.SwitchESIMProfile
+	go reconcileCardPolicies(pollContext, logger, database, handler.DeviceController(), vowifiManager)
 
 	onIncomingCall = func(ctx context.Context, call ims.ReceivedCall) error {
 		deviceConfig, _ := database.Device(ctx, call.DeviceID)
@@ -693,6 +691,30 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 		return fmt.Errorf("listen on %s: %w", cfg.Address, err)
 	}
 	protocolMux := httpsmode.NewMultiplexer(baseListener, httpsManager)
+	agentGRPCAddress := os.Getenv("VONET_AGENT_GRPC_ADDR")
+	if strings.TrimSpace(agentGRPCAddress) == "" {
+		agentGRPCAddress = "0.0.0.0:17577"
+	}
+	agentCAContext, cancelAgentCA := context.WithTimeout(context.Background(), 5*time.Second)
+	agentCA, err := agentRegistry.CACertificatePEM(agentCAContext)
+	cancelAgentCA()
+	if err != nil {
+		return fmt.Errorf("read agent CA: %w", err)
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM([]byte(agentCA)) {
+		return errors.New("agent CA certificate is invalid")
+	}
+	webTLSConfig := httpsManager.TLSConfig()
+	webTLSConfig.ClientAuth = tls.VerifyClientCertIfGiven
+	webTLSConfig.ClientCAs = clientCAs
+	agentTLSConfig := webTLSConfig.Clone()
+	agentTLSConfig.ClientAuth = tls.RequireAndVerifyClientCert
+	agentTLSConfig.ClientCAs = clientCAs
+	agentGRPCListener, err := net.Listen("tcp", agentGRPCAddress)
+	if err != nil {
+		return fmt.Errorf("listen for Agent gRPC on %s: %w", agentGRPCAddress, err)
+	}
 
 	signalContext, stopSignals := signal.NotifyContext(
 		context.Background(),
@@ -701,7 +723,7 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 	)
 	defer stopSignals()
 
-	serverError := make(chan error, 2)
+	serverError := make(chan error, 3)
 	go func() {
 		logger.Info("HTTP server listening", "address", cfg.Address, "self_signed_https", httpsManager.Enabled())
 		err := plainServer.Serve(protocolMux.Plain())
@@ -711,8 +733,16 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 		serverError <- err
 	}()
 	go func() {
-		err := tlsServer.Serve(tls.NewListener(protocolMux.TLS(), httpsManager.TLSConfig()))
+		err := tlsServer.Serve(tls.NewListener(protocolMux.TLS(), webTLSConfig))
 		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		serverError <- err
+	}()
+	go func() {
+		logger.Info("Agent gRPC listening", "address", agentGRPCAddress, "mtls", true)
+		err := agentGRPC.Serve(agentGRPCListener, agentTLSConfig)
+		if errors.Is(err, grpc.ErrServerStopped) {
 			err = nil
 		}
 		serverError <- err
@@ -721,6 +751,7 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 	select {
 	case err := <-serverError:
 		cancelDeviceStartup()
+		agentGRPC.Stop()
 		_ = protocolMux.Close()
 		return err
 	case <-signalContext.Done():
@@ -733,6 +764,7 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 	// http.Server.Shutdown so they do not consume the entire graceful-shutdown
 	// deadline while waiting for a stream that is intentionally still active.
 	cancelPolling()
+	agentGRPC.Stop()
 
 	shutdownContext, cancelShutdown := context.WithTimeout(
 		context.Background(),
@@ -915,6 +947,7 @@ func configureVoWiFiRuntime(
 	database *store.Store,
 	deviceManager *device.Manager,
 	cardReaders *pcsc.Service,
+	agentGRPC *agentgrpc.Server,
 	onIncomingCall func(context.Context, ims.ReceivedCall) error,
 ) (*vowifiruntime.Manager, error) {
 	mapper := integration.ATMapper{
@@ -967,7 +1000,8 @@ func configureVoWiFiRuntime(
 		selector := pcsc.Selector{USBPath: config.USBPath, ReaderName: config.ControlDevice, USBSerial: usbSerial}
 		return selector, config.SIMPIN, nil
 	})
-	pcscLeaseAdapter, err := vowifi.NewPCSCAdapterWithLeases(pcscAdapter, storePCSCIMEILeaseSource{store: database})
+	pcscIMEILeaseSource := storePCSCIMEILeaseSource{store: database}
+	pcscLeaseAdapter, err := vowifi.NewPCSCAdapterWithLeases(pcscAdapter, pcscIMEILeaseSource)
 	if err != nil {
 		return nil, err
 	}
@@ -983,6 +1017,34 @@ func configureVoWiFiRuntime(
 			deviceConfig, err := database.Device(factoryContext, deviceID)
 			if err != nil {
 				return nil, fmt.Errorf("load device %q VoWiFi config: %w", deviceID, err)
+			}
+			if strings.TrimSpace(deviceConfig.AgentID) != "" {
+				remoteAdapter, remoteErr := vowifi.NewRemoteSIMAdapter(agentGRPC, func(resolveContext context.Context, configuredID string) (vowifi.RemoteDeviceBinding, error) {
+					config, err := database.Device(resolveContext, configuredID)
+					if err != nil {
+						return vowifi.RemoteDeviceBinding{}, err
+					}
+					remoteID := strings.TrimSpace(config.RemoteDeviceID)
+					if remoteID == "" {
+						remoteID = strings.TrimSpace(config.ID)
+					}
+					return vowifi.RemoteDeviceBinding{
+						AgentID: strings.TrimSpace(config.AgentID), DeviceID: remoteID,
+						ReaderID: remoteID, Generation: strings.TrimSpace(config.RemoteHardwareGeneration),
+					}, nil
+				}, pcscIMEILeaseSource, func(profileContext context.Context, profile *agentproto.CardProfile) error {
+					derived, _ := json.Marshal(map[string]any{
+						"provisioned_imsi": strings.TrimSpace(profile.GetProvisionedImsi()),
+						"remote_hardware":  strings.TrimSpace(profile.GetHardwareGeneration()),
+						"remote_card":      strings.TrimSpace(profile.GetCardGeneration()),
+						"remote_reader":    strings.TrimSpace(profile.GetReaderId()),
+					})
+					return upsertRemoteCardProfile(profileContext, database, profile, derived)
+				})
+				if remoteErr != nil {
+					return nil, remoteErr
+				}
+				return newVoWiFiOrchestrator(factoryContext, deviceConfig, database, remoteAdapter, logger, onIncomingCall)
 			}
 			// Prefer the live HardwareKind from the device manager over the
 			// persisted DeviceType in the database. When a user swaps hardware

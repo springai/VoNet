@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 39
+const schemaVersion = 40
 
 var ErrNotFound = errors.New("store: not found")
 var ErrAlreadyExists = errors.New("store: already exists")
@@ -22,6 +22,8 @@ var ErrAlreadyExists = errors.New("store: already exists")
 // Store owns the SQLite connection used by the process.
 type Store struct {
 	db           *sql.DB
+	sensitive    *fieldCipher
+	sensitiveMu  sync.Mutex
 	logMu        sync.Mutex
 	logClearedAt time.Time
 	logMinLevel  string
@@ -104,9 +106,16 @@ func open(ctx context.Context, path string, migrateSchema bool) (*Store, error) 
 			return closeOnError(fmt.Errorf("secure sqlite file: %w", err))
 		}
 	}
-	s := &Store{db: db}
+	sensitive, err := newFieldCipher(path)
+	if err != nil {
+		return closeOnError(fmt.Errorf("open store data key: %w", err))
+	}
+	s := &Store{db: db, sensitive: sensitive}
 	if !migrateSchema {
 		return s, nil
+	}
+	if err := s.encryptLegacySensitiveFields(ctx); err != nil {
+		return closeOnError(err)
 	}
 	if err := s.DeleteExpiredSSOFlows(ctx, time.Now()); err != nil {
 		return closeOnError(err)
@@ -167,6 +176,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 					(nextVersion == 25 && strings.Contains(statement, "ADD COLUMN mbn_profile")) ||
 					(nextVersion == 31 && strings.Contains(statement, "ADD COLUMN revert_profile")) ||
 					(nextVersion == 34 && strings.Contains(statement, "ADD COLUMN")) ||
+					(nextVersion == 40 && strings.Contains(statement, "ADD COLUMN")) ||
 					(nextVersion == 35 && strings.Contains(statement, "ADD COLUMN")) ||
 					(nextVersion >= 36 && strings.Contains(statement, "ADD COLUMN"))
 				if duplicateAdditiveColumn && strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {

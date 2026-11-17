@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { ArrowDownloadRegular, ArrowUploadRegular, LockClosedRegular, ShieldCheckmarkRegular } from "@fluentui/react-icons";
+import { ArrowDownloadRegular, ArrowUploadRegular, CopyRegular, LockClosedRegular, ShieldCheckmarkRegular } from "@fluentui/react-icons";
 import { api, apiMessage } from "../../api";
 import type { HTTPSSettings } from "../../types";
 import { useI18n } from "../../lib/i18n";
 import { Button, Modal, Textarea, message } from "../ui";
+import { copyText } from "./controls";
 import { CardDecor, CardIcon, CardTitle } from "./Cards";
 
 export function HTTPSCard({
@@ -21,6 +22,7 @@ export function HTTPSCard({
   const [certificate, setCertificate] = useState("");
   const [privateKey, setPrivateKey] = useState("");
   const [saving, setSaving] = useState(false);
+  const agentFingerprint = (value?.fingerprint ?? "").replaceAll(":", "").toLowerCase();
 
   async function uploadCertificate() {
     if (!certificate.trim() || !privateKey.trim() || saving) return;
@@ -84,9 +86,19 @@ export function HTTPSCard({
             </div>
           ) : null}
           {value?.fingerprint ? (
-            <div className="min-w-0 text-xs text-gray-500 dark:text-gray-400">
-              <span className="font-semibold">SHA-256: </span>
-              <span className="break-all font-mono">{value.fingerprint}</span>
+            <div className="flex min-w-0 items-center justify-between gap-3 text-xs text-gray-500 dark:text-gray-400">
+              <div className="min-w-0">
+                <div className="font-semibold">VoNet HTTPS证书SHA256</div>
+                <div className="mt-1 break-all font-mono">{agentFingerprint}</div>
+              </div>
+              <Button
+                size="small"
+                plain
+                icon={<CopyRegular className="text-[16px]" />}
+                onClick={() => void copyText(agentFingerprint, zh ? "已复制证书 SHA256" : "Certificate SHA256 copied")}
+              >
+                {zh ? "复制" : "Copy"}
+              </Button>
             </div>
           ) : null}
         </div>

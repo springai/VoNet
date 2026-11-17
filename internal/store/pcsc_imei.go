@@ -254,7 +254,7 @@ func (s *Store) CreateDeviceWithPCSCIMEILease(
 	if !errors.Is(err, sql.ErrNoRows) {
 		return Device{}, PCSCIMEILease{}, fmt.Errorf("check PCSC device before create: %w", err)
 	}
-	if err := upsertDevice(ctx, tx, value); err != nil {
+	if err := upsertDevice(ctx, tx, value, s.ensureSensitive()); err != nil {
 		return Device{}, PCSCIMEILease{}, err
 	}
 	lease, err := upsertPCSCIMEILease(ctx, tx, value.ID, request)
@@ -280,7 +280,7 @@ func (s *Store) UpdateDeviceWithPCSCIMEILease(
 		return Device{}, PCSCIMEILease{}, fmt.Errorf("begin PCSC device update: %w", err)
 	}
 	defer tx.Rollback()
-	if err := upsertDevice(ctx, tx, value); err != nil {
+	if err := upsertDevice(ctx, tx, value, s.ensureSensitive()); err != nil {
 		return Device{}, PCSCIMEILease{}, err
 	}
 	lease, err := upsertPCSCIMEILease(ctx, tx, value.ID, request)
