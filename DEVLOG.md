@@ -323,3 +323,11 @@ npm run build
 - 涉及文件：`web/src/pages/CardsPage.tsx`、`web/src/components/cards/CardAtUssdTab.tsx`、`web/src/components/devices/DeviceAtTab.tsx`、`web/src/components/devices/DeviceUssdTab.tsx`、`web/src/reborn.css`、`web/src/lib/i18n-en.ts`。
 - 验证：`npm test` 84 项通过，`npm run build` 通过；Linux amd64 二进制已部署，`vonet.service` 为 `active`，Agent 已重新连接。
 - 合并风险：不修改 AT/USSD API、会话状态机、设备能力判断来源或 Agent proto；同步时保留 `CardAtUssdTab`、`config-tab-surface`、`terminal-*` 和禁用输入状态。
+
+### 2026-11-17 设备管理 Agent 工作区重构
+
+- 现象：Agent 列表、选择操作和设备详情层级混杂，设备列表与 SIM 管理列表风格不一致，标签顺序与预期相反。
+- 修复：仅调整 UI。顶部单行展示 VoNet-Agent 标题、Agent 下拉选择框和新建 Agent；下方使用完整 Agent 工作区面板，上部展示 Agent ID、状态、密钥版本、协议版本、证书指纹和时间信息，并保留编辑、换发密钥、删除操作，下部承载设备管理。设备列表改为 SIM 管理同款透明紧凑条目，并固定为每屏展示 10 条、超出后滚动；右侧设备详情保持原结构，标签顺序调整为“配置、eSIM”。
+- 涉及文件：`web/src/components/agents/AgentManager.tsx`、`web/src/components/devices/DeviceListItemCard.tsx`、`web/src/pages/DevicesPage.tsx`、`web/src/reborn.css`、`web/src/lib/i18n-en.ts`。
+- 验证：`npm test` 84 项通过，`npm run build` 通过；Linux amd64 已部署，`vonet.service` 为 `active`，Agent 已恢复事件上报。
+- 合并风险：不修改 Agent API、设备发现、设备操作、数据库或业务状态机；同步时保留 Agent 下拉选择和 `agent-focus-panel` 结构。

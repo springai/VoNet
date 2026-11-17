@@ -47,7 +47,7 @@ export default function DevicesPage() {
   const [lastOkAt, setLastOkAt] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState("");
-  const [activeTab, setActiveTab] = useState("esim");
+  const [activeTab, setActiveTab] = useState("config");
   const [editConfig, setEditConfig] = useState<DeviceConfig | null>(null);
   const [configSnapshot, setConfigSnapshot] = useState("");
   const [saving, setSaving] = useState(false);
@@ -499,8 +499,8 @@ export default function DevicesPage() {
     return () => window.clearInterval(timer);
   }, [addOpen, loadDiscovered]);
   const tabItems = [
-    { key: "esim", label: t("eSIM") },
     { key: "config", label: t("配置") },
+    { key: "esim", label: t("eSIM") },
   ];
 
   return (

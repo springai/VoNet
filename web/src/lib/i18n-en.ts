@@ -1749,5 +1749,17 @@ export const EN_DICT: Record<string, string> = {
   "USSD 短码": "USSD short code",
   "输入 USSD 短码或菜单回复": "Enter a USSD short code or menu reply",
   "当前设备或卡片不可用，USSD 无法输入": "USSD input is unavailable because the device or card is unavailable",
+  "选择 VoNet-Agent": "Select VoNet-Agent",
+  "远程硬件执行节点": "Remote hardware execution node",
+  "Agent ID": "Agent ID",
+  "Agent 名称": "Agent name",
+  "密钥版本": "Key version",
+  "协议版本": "Protocol version",
+  "证书指纹": "Certificate fingerprint",
+  "最近活动": "Last activity",
+  "waiting_for_key": "Waiting for key",
+  "revoked": "Revoked",
+  "online": "Online",
+  "offline": "Offline",
 
 };
