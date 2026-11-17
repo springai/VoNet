@@ -24,6 +24,7 @@ import SettingsPage from "./pages/SettingsPage";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
 import ExtensionPage from "./pages/ExtensionPage";
 import { safeRedirect } from "./lib/safeRedirect";
+import { CallSessionProvider } from "./components/call/CallSessionContext";
 
 const THEME_KEY = "theme";
 const DISCLAIMER_KEY = "vonet_disclaimer_agreed_at";
@@ -104,8 +105,9 @@ function AppRoot() {
   if (!ready) return <LoadingScreen />;
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-transparent font-sans text-gray-900 transition-colors duration-300 selection:bg-sky-500 selection:text-white dark:bg-transparent dark:text-gray-100">
-      <Routes>
+    <CallSessionProvider>
+      <div className="h-screen w-screen overflow-hidden bg-transparent font-sans text-gray-900 transition-colors duration-300 selection:bg-sky-500 selection:text-white dark:bg-transparent dark:text-gray-100">
+        <Routes>
         <Route path="/login" element={<LoginLayout isDark={isDark} onToggleTheme={toggle} />}>
           <Route index element={<LoginPage />} />
         </Route>
@@ -133,9 +135,10 @@ function AppRoot() {
           <Route path="diagnostics" element={<DiagnosticsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-      {showDisclaimer && <Disclaimer firstTime={firstTime} onAgree={agree} />}
-    </div>
+        </Routes>
+        {showDisclaimer && <Disclaimer firstTime={firstTime} onAgree={agree} />}
+      </div>
+    </CallSessionProvider>
   );
 }
 

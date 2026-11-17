@@ -26,7 +26,7 @@ import { cx } from "../../lib/utils";
 import { BrandLogo } from "./BrandLogo";
 import { VersionBadge } from "./VersionBadge";
 import { listPlugins, type InstalledPlugin } from "../../extensions";
-import { IncomingCallMonitor } from "../call/IncomingCallMonitor";
+import { GlobalCallWidget } from "../call/GlobalCallWidget";
 
 type NavigationIcon = typeof GlobeRegular;
 
@@ -175,7 +175,7 @@ export function AuthenticatedShell({
 
   return (
     <div className="app-shell-frame">
-      <IncomingCallMonitor />
+      <GlobalCallWidget />
 
       <div className="app-shell-main">
         <header className="reborn-topbar">

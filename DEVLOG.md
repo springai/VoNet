@@ -339,3 +339,11 @@ npm run build
 - 涉及文件：`web/src/pages/SmsPage.tsx`、`web/src/components/sms/ContactList.tsx`、`web/src/components/sms/ThreadPanel.tsx`、`web/src/components/sms/NewSmsModal.tsx`、`web/src/reborn.css`、`web/src/lib/i18n-en.ts`。
 - 验证：`npm test` 84 项通过，`npm run build` 通过；Linux amd64 已部署，`vonet.service` 为 `active`。
 - 合并风险：不修改短信 API、轮询、会话读取、发送、删除或导出逻辑；同步时保留 `sms-reference-layout`、`sms-contact-panel`、`sms-thread-panel` 和 `sms-new-panel`。
+
+### 2026-11-18 真实通话工作区与全局通话状态
+
+- 现象：通话页只有分散的拨号、移动弹窗和来电监控，切换页面会丢失本地呼叫状态，挂断阶段、对方响铃、通话结束和跨页面通话入口缺少统一真实状态。
+- 修复：新增跨路由 `CallSessionProvider`，使用真实 `/calls` API 和 VoWiFi `calls/media` WebSocket 统一管理拨号、正在接通、对方响铃、来电、通话中、挂断中和通话结束状态。重构拨号盘、DTMF、取消呼叫确认、结束页、重新拨号、线路详情和媒体连接面板；通话中固定提供静音、结束、免提，静音真实控制麦克风轨道，免提真实控制浏览器输出增益并在支持时切换输出设备。右下角新增全局通话条，在其他页面显示来电或通话状态，并提供接听、静音、返回通话和挂断；通话线路列表默认展示 10 条、最近通话默认展示 5 条，超出后分别垂直滚动，拨号键盘缩小，左侧线路栏和列表内容放大 50% 以提高可读性。
+- 涉及文件：`web/src/components/call/CallSessionContext.tsx`、`web/src/components/call/CallPanel.tsx`、`web/src/components/call/GlobalCallWidget.tsx`、`web/src/pages/CallPage.tsx`、`web/src/App.tsx`、`web/src/components/shell/AuthenticatedShell.tsx`、`web/src/reborn.css`、`web/src/lib/i18n-en.ts`。
+- 验证：`npm test` 84 项通过，`npm run build` 通过；静态检查无演示、mock 或 fake 数据；Linux amd64 已部署，`vonet.service` 为 `active`，Agent 已重新连接。
+- 合并风险：保留 `CallSessionProvider` 和 `GlobalCallWidget`；不要恢复页面内独立移动通话状态机，也不要添加模拟通话或虚构媒体质量数据。
