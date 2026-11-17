@@ -264,3 +264,22 @@ npm run build
 - 涉及文件。
 - 验证方式和真实运营商结果。
 - 对上游合并的风险提示。
+
+## 12. 本地变更记录
+
+### 2026-11-17 SIM 卡片概览运行状态重构
+
+- 现象：VoWiFi 和蜂窝运行状态布局与新设计不一致，详情字段混在动画区域。
+- 修复：VoWiFi 改为身份、安全隧道、鉴权、注册四阶段顺序动画；当前阶段显示旋转状态，只有阶段通过后才显示勾选。语音、短信和 USSD 分别显示可用、准备中或不可用。蜂窝状态改为 RSRP、RSRQ、SINR 仪表盘和信号质量视图，详情统一归入 `SIM / 设备`。
+- 涉及文件：`web/src/components/devices/OverviewVowifiCard.tsx`、`web/src/components/devices/OverviewNetworkCard.tsx`、`web/src/components/devices/OverviewSimPanel.tsx`、`web/src/components/cards/CardOverviewTab.tsx`、`web/src/types.ts`、`internal/server/device_api.go`、`web/src/lib/i18n-en.ts`。
+- 验证：`npm test`、`npm run build`、`go test ./internal/server` 通过，并已部署 VoNet。
+- 合并风险：保留 `VoWiFiRuntime.attempt/sequence/startedAt` 字段，避免同步上游时丢失运行阶段和连续注册时长数据。
+
+### 2026-11-17 SIM 卡片列表取消自动刷新
+
+- 现象：SIM 管理的卡片列表约每 10 秒自动重新加载，列表视觉刷新频繁，影响浏览和操作。
+- 根因：`CardsPage` 使用 `usePolling` 每 10 秒调用 `loadCards`，后台刷新会重新覆盖列表状态。
+- 修复：移除卡片列表定时轮询，仅保留首次加载、手动刷新以及保存、删除、导入后的必要更新。
+- 涉及文件：`web/src/pages/CardsPage.tsx`。
+- 验证：`npm test` 84 项通过，`npm run build` 通过，并已部署 VoNet。
+- 合并风险：同步上游时不要再加入 `CardsPage` 的固定 10 秒卡片列表轮询。

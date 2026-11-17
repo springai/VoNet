@@ -30,7 +30,6 @@ import { CardOverviewTab } from "../components/cards/CardOverviewTab";
 import { buildCardTransfer, cardTransferFilename, parseCardTransfer } from "../components/cards/cardTransfer";
 import { SensitiveInfoButton } from "../components/ui/SensitiveInfoButton";
 import { useMediaQuery } from "../lib/useMediaQuery";
-import { usePolling } from "../lib/usePolling";
 import { tf, useI18n } from "../lib/i18n";
 import { cx } from "../lib/utils";
 import { displayICCID } from "../lib/sensitive";
@@ -282,10 +281,6 @@ export default function CardsPage() {
       setImportingCards(false);
     }
   }, [importingCards, loadCards, t]);
-
-  usePolling(() => {
-    if (!addOpen) void loadCards();
-  }, 10000, false);
 
   const loadPolicy = useCallback(async (iccid?: string) => {
     const clean = normalizeICCID(iccid || "");

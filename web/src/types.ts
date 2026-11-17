@@ -80,6 +80,9 @@ export interface VoWiFiRuntime {
   lastError: string;
   lastReason: string;
   updatedAt: string;
+  attempt?: number;
+  sequence?: number;
+  startedAt?: string;
   tunnel?: Record<string, unknown>;
   imscore?: Record<string, unknown>;
   smsip?: Record<string, unknown>;

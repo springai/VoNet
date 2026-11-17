@@ -40,6 +40,19 @@ export function OverviewSimPanel({ device, card, simOperatorDisplay, customPhone
           : device?.backendMode === "pcsc"
             ? "PC/SC"
             : "Auto";
+  const runtime = device?.vowifiRuntime;
+  const networkMode = [device?.modem?.networkDuplex, device?.modem?.networkMode].filter(Boolean).join(" ");
+  const registrationText = device?.vowifiActive
+    ? t("WiFi Calling 已注册")
+    : device?.modem?.regStatus === 5
+      ? t("已驻网（漫游）")
+      : device?.modem?.regStatus === 1
+        ? t("已驻网")
+        : device?.registrationStateLabel === "searching"
+          ? t("正在搜索网络")
+          : device?.registrationStateLabel === "denied"
+            ? t("驻网被拒")
+            : t("未驻网");
   const storage = device?.smsStorage;
   const meFull = storageAreaFull(storage?.me);
   const smFull = storageAreaFull(storage?.sm);
@@ -87,6 +100,21 @@ export function OverviewSimPanel({ device, card, simOperatorDisplay, customPhone
           <span>{flightOn ? t("是") : t("否")}</span>
         </div>
         <FieldRow label={t("运行模式")} value={backendLabel} monospace />
+        <FieldRow label={t("网络模式")} value={networkMode || "--"} monospace />
+        <FieldRow label={t("频段")} value={device?.modem?.radioBand || "--"} monospace />
+        <FieldRow label={t("信道")} value={device?.modem?.radioChannel ? String(device.modem.radioChannel) : "--"} monospace />
+        <FieldRow label={t("注册状态")} value={registrationText} monospace />
+        <FieldRow label={t("数据平面")} value={runtime?.dataplaneMode || "--"} monospace />
+        <FieldRow
+          label={t("运营商配置")}
+          value={!runtime?.carrierProfile || runtime.carrierProfile === "standard-3gpp" ? "3GPP Standard" : runtime.carrierProfile}
+          monospace
+          copyable
+        />
+        <FieldRow label={t("匹配依据")} value={runtime?.carrierProfileFrom || "standard"} monospace />
+        <FieldRow label={t("最后原因")} value={runtime?.lastReason || "--"} />
+        <FieldRow label={t("错误分类")} value={runtime?.lastErrorClass || "--"} monospace copyable />
+        {runtime?.lastError ? <FieldRow label={t("错误详情")} value={runtime.lastError} monospace copyable /> : null}
         <SMSStorageRow label="ME" area={storage?.me} warningLabel={t("模组短信存储已满，新短信可能无法接收")} />
         <SMSStorageRow label="SM" area={storage?.sm} warningLabel={t("SIM 短信存储已满，新短信可能无法接收")} />
         {storageWarning ? (

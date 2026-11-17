@@ -3164,6 +3164,9 @@ func storedVoWiFiRuntime(runtime store.VoWiFiRuntime) map[string]any {
 	extra, _ := rawJSONObject(runtime.Extra).(map[string]any)
 	enabled, _ := extra["enabled"].(bool)
 	active, _ := extra["active"].(bool)
+	attempt, _ := extra["attempt"].(float64)
+	sequence, _ := extra["sequence"].(float64)
+	startedAt, _ := extra["started_at"].(string)
 	return map[string]any{
 		"device_id":            runtime.DeviceID,
 		"phase":                runtime.Phase,
@@ -3188,6 +3191,9 @@ func storedVoWiFiRuntime(runtime store.VoWiFiRuntime) map[string]any {
 		"last_error":           runtime.LastError,
 		"last_reason":          runtime.LastReason,
 		"updated_at":           runtime.UpdatedAt,
+		"attempt":              attempt,
+		"sequence":             sequence,
+		"started_at":           startedAt,
 		"tunnel":               rawJSONObject(runtime.Tunnel),
 		"imscore":              rawJSONObject(runtime.IMSCore),
 		"smsip":                rawJSONObject(runtime.SMSIP),
@@ -3219,6 +3225,9 @@ func liveVoWiFiRuntime(runtime vowifi.State) map[string]any {
 		"last_error":           runtime.LastError,
 		"last_reason":          runtime.LastReason,
 		"updated_at":           runtime.UpdatedAt,
+		"attempt":              runtime.Attempt,
+		"sequence":             runtime.Sequence,
+		"started_at":           runtime.StartedAt,
 		"tunnel": map[string]any{
 			"established":    runtime.TunnelReady,
 			"name":           runtime.TunnelName,

@@ -10,7 +10,6 @@ import { OverviewSimPanel } from "../devices/OverviewSimPanel";
 import { OverviewNetworkPanel } from "../devices/OverviewNetworkPanel";
 import { OverviewTrafficChart } from "../devices/OverviewTrafficChart";
 import { OperatorSelectionDialog } from "../devices/OperatorSelectionDialog";
-import { CellLockButton } from "../devices/CellLockButton";
 import { CellLockDialog } from "../devices/CellLockDialog";
 import { E911SetupDialog } from "../devices/E911SetupDialog";
 import { useDeviceCellLock } from "../devices/useDeviceCellLock";
@@ -239,24 +238,19 @@ export function CardOverviewTab({ card }: { card: SimCard }) {
               </Button>
             ) : null}
           </div>
-          <div className={`grid grid-cols-1 gap-4 ${showNetworkDetails ? "lg:grid-cols-3" : "lg:grid-cols-2"}`}>
-            <section className="ui-panel-muted p-4">
-              <div className="mb-3 text-xs font-bold uppercase tracking-wider text-gray-500">{t("运行状态")}</div>
-              {vowifiInUse ? (
-                <>
-                  <OverviewVowifiCard device={device} />
-                  {supportsCellLock ? <CellLockButton onClick={cellLock.openDialog} locked={!!cellLock.status?.target} statusKnown={cellLock.status !== null} /> : null}
-                </>
-              ) : (
-                <OverviewNetworkCard
-                  device={device}
-                  onOpenOperatorSelection={isReader ? undefined : () => setOperatorOpen(true)}
-                  onOpenCellLock={supportsCellLock ? cellLock.openDialog : undefined}
-                  cellLocked={!!cellLock.status?.target}
-                  cellLockStatusKnown={cellLock.status !== null}
-                />
-              )}
-            </section>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {vowifiInUse ? (
+              <OverviewVowifiCard device={device} card={card} operatorDisplay={operatorDisplay} />
+            ) : (
+              <OverviewNetworkCard
+                device={device}
+                card={card}
+                onOpenOperatorSelection={isReader ? undefined : () => setOperatorOpen(true)}
+                onOpenCellLock={supportsCellLock ? cellLock.openDialog : undefined}
+                cellLocked={!!cellLock.status?.target}
+                cellLockStatusKnown={cellLock.status !== null}
+              />
+            )}
             <OverviewSimPanel
               device={device}
               card={card}
@@ -265,16 +259,16 @@ export function CardOverviewTab({ card }: { card: SimCard }) {
               e911Starting={false}
               onSetupE911={() => setE911Open(true)}
             />
-            {showNetworkDetails ? (
-              <OverviewNetworkPanel
-                device={device}
-                trafficMinuteRx={device.traffic?.rx || ""}
-                trafficMinuteTx={device.traffic?.tx || ""}
-                trafficSpeedRx={device.traffic?.rate || ""}
-                trafficSpeedTx={device.traffic?.rateTx || ""}
-              />
-            ) : null}
           </div>
+          {showNetworkDetails ? (
+            <OverviewNetworkPanel
+              device={device}
+              trafficMinuteRx={device.traffic?.rx || ""}
+              trafficMinuteTx={device.traffic?.tx || ""}
+              trafficSpeedRx={device.traffic?.rate || ""}
+              trafficSpeedTx={device.traffic?.rateTx || ""}
+            />
+          ) : null}
           {device.networkEnabled && !isReader ? (
             <OverviewTrafficChart deviceId={device.id} />
           ) : null}
