@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type UIEvent } from "react";
 import { useSearchParams } from "react-router-dom";
-import { AddRegular, ArrowDownloadRegular, DeleteRegular } from "@fluentui/react-icons";
+import { CardUiRegular, DeleteRegular } from "@fluentui/react-icons";
 import { SmsExportModal } from "../components/sms/SmsExportModal";
 import { ApiError, apiMessage } from "../api";
-import { Button, ErrorState, PageHeader, RefreshButton, Spinner, confirmDialog, message } from "../components/ui";
+import { Button, ErrorState, Spinner, confirmDialog, message } from "../components/ui";
 import { usePolling } from "../lib/usePolling";
 import { cx } from "../lib/utils";
 import type { SimCard, SMSMessage } from "../types";
@@ -46,6 +46,8 @@ interface DeviceFilterOption {
   label: string;
   healthy: boolean;
   card?: SimCard;
+  conversationCount?: number;
+  unreadCount?: number;
 }
 
 function toLoadError(e: unknown): LoadError {
@@ -89,6 +91,7 @@ export default function SmsPage() {
   const [selectedDevice, setSelectedDevice] = useState<string>(() => searchParams.get("iccid") || searchParams.get("device") || "all");
   const [selectedKey, setSelectedKey] = useState<string>(() => searchParams.get("contact") || "");
   const [searchQuery, setSearchQuery] = useState("");
+  const [threadFilter, setThreadFilter] = useState<"all" | "unread">("all");
   const [messages, setMessages] = useState<SMSMessage[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -158,23 +161,45 @@ export default function SmsPage() {
     setContactsState(contactsRef.current.map((t) => (t.key === key && t.unread ? { ...t, unread: false } : t)));
   };
 
-  const filteredContacts = useMemo(() => filterThreads(contacts, searchQuery), [contacts, searchQuery]);
+  const searchedContacts = useMemo(() => filterThreads(contacts, searchQuery), [contacts, searchQuery]);
+  const filteredContacts = useMemo(
+    () => threadFilter === "unread" ? searchedContacts.filter((thread) => thread.unread) : searchedContacts,
+    [searchedContacts, threadFilter],
+  );
+  const unreadCount = useMemo(() => contacts.reduce((count, thread) => count + (thread.unread ? 1 : 0), 0), [contacts]);
   const activeThread = useMemo(() => contacts.find((t) => t.key === selectedKey) || null, [contacts, selectedKey]);
   const groups = useMemo(() => groupMessagesByDay(messages), [messages]);
   const composerInfo = useMemo(() => analyzeSmsEncoding(composer), [composer]);
   const composerLength = useMemo(() => Array.from(composer || "").length, [composer]);
-  const deviceFilters = useMemo<DeviceFilterOption[]>(
-    () => [
-      { id: "all", label: t("全部卡片"), healthy: true },
-      ...devices.map((d) => ({
-        id: d.id,
-        label: d.name || d.id,
-        healthy: d.healthy,
-        card: d.card,
-      })),
-    ],
-    [devices, t],
-  );
+  const scopeCounts = useMemo(() => {
+    const conversation = new Map<string, number>();
+    const unread = new Map<string, number>();
+    for (const thread of contacts) {
+      const ids = [thread.iccid, thread.deviceId].filter(Boolean);
+      for (const id of ids) {
+        conversation.set(id, (conversation.get(id) || 0) + 1);
+        if (thread.unread) unread.set(id, (unread.get(id) || 0) + 1);
+      }
+    }
+    return { conversation, unread };
+  }, [contacts]);
+  const deviceFilters = useMemo<DeviceFilterOption[]>(() => [
+    {
+      id: "all",
+      label: t("全部设备"),
+      healthy: true,
+      conversationCount: contacts.length,
+      unreadCount,
+    },
+    ...devices.map((d) => ({
+      id: d.id,
+      label: d.name || d.id,
+      healthy: d.healthy,
+      card: d.card,
+      conversationCount: scopeCounts.conversation.get(d.id) || 0,
+      unreadCount: scopeCounts.unread.get(d.id) || 0,
+    })),
+  ], [contacts.length, devices, scopeCounts, t, unreadCount]);
   const deviceSelectOptions = useMemo(() => deviceFilters.map((o) => ({ value: o.id, label: o.label })), [deviceFilters]);
 
   const isUnread = (t: SmsThread) => t.unread;
@@ -667,25 +692,9 @@ export default function SmsPage() {
   useEffect(() => () => clearLongPress(), [clearLongPress]);
 
   return (
-    <div ref={pageRef} className="sms-page workspace-page flex h-[calc(100vh-168px)] flex-col">
-      <PageHeader
-        title={t("短信")}
-        subtitle={t("查看、发送和检测 SIM 卡短信")}
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <RefreshButton loading={contactsLoading} onClick={refreshAll} />
-            <Button onClick={() => setExportOpen(true)} icon={<ArrowDownloadRegular />}>
-              {t("导出短信")}
-            </Button>
-            <Button variant="primary" onClick={openNewSms} className="font-bold !border-0" icon={<AddRegular />}>
-              {t("发送测试短信")}
-            </Button>
-          </div>
-        }
-      />
+    <div ref={pageRef} className="sms-page workspace-page">
       {devicesError ? (
         <ErrorState
-          className="mb-4"
           title={t("设备列表加载失败")}
           message={devicesError.message}
           statusCode={devicesError.status}
@@ -696,7 +705,6 @@ export default function SmsPage() {
       ) : null}
       {contactsError ? (
         <ErrorState
-          className="mb-6"
           title={t("短信加载失败")}
           message={contactsError.message}
           statusCode={contactsError.status}
@@ -705,95 +713,114 @@ export default function SmsPage() {
           onRetry={refreshAll}
         />
       ) : null}
-      <div className="relative flex-1 overflow-hidden ui-card">
-        {contactsLoading && contacts.length === 0 ? (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/50 backdrop-blur-sm dark:bg-black/20">
-            <Spinner className="h-7 w-7 text-[#0ea5e9]" />
+      <div className="sms-reference-layout">
+        <aside className="sms-scope-panel">
+          <div className="sms-scope-heading">
+            <strong>{t("收件范围")}</strong>
+            <span>{tf("{count} 个会话", { count: contacts.length })}</span>
           </div>
-        ) : null}
-        <div className="sms-main-layout">
-          {isDesktop ? (
-            <div className="flex flex-col border-r border-gray-100 dark:border-white/10">
-              <div className="border-b border-gray-100 p-4 dark:border-white/10">
-                <div className="text-xs font-bold uppercase tracking-wider text-gray-500">{t("设备")}</div>
-              </div>
-              <div className="space-y-1 overflow-auto p-3">
-                {deviceFilters.map((d) => (
-                  <button
-                    key={d.id}
-                    type="button"
-                    onClick={() => void selectDevice(d.id)}
-                    className={cx(
-                      "flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition-all",
-                      selectedDevice === d.id
-                        ? "border-indigo-200 bg-indigo-50/70 dark:border-indigo-500/30 dark:bg-indigo-500/10"
-                        : "border-transparent hover:bg-gray-50/60 dark:hover:bg-white/5",
-                    )}
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-bold text-gray-800 dark:text-gray-100">{d.label}</div>
-                      <div className="truncate text-xs text-gray-400">{d.id === "all" ? t("汇总全部设备检测记录") : d.id}</div>
-                    </div>
-                    {d.id !== "all" ? (
-                      <span className={cx("h-2 w-2 rounded-full", d.healthy ? "bg-green-500" : "bg-red-500")} />
-                    ) : null}
-                  </button>
-                ))}
-              </div>
+          <div className="sms-scope-list">
+            {deviceFilters.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                onClick={() => void selectDevice(d.id)}
+                className={cx("sms-scope-item reference-list-item", selectedDevice === d.id && "is-active")}
+              >
+                <span className="reference-list-icon"><CardUiRegular /></span>
+                <span className="reference-list-copy">
+                  <span className="reference-list-title">{d.label}</span>
+                  <span className="reference-list-subtitle">{tf("{count} 个会话", { count: d.conversationCount || 0 })}</span>
+                  <span className={cx("reference-list-connection", d.healthy ? "is-online" : "is-danger")}>
+                    <i />
+                    {d.healthy ? t("在线") : t("离线")}
+                  </span>
+                </span>
+                {d.unreadCount ? <span className="sms-scope-badge">{d.unreadCount}</span> : null}
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        <section className="sms-messenger-panel">
+          {contactsLoading && contacts.length === 0 ? (
+            <div className="sms-loading-overlay">
+              <Spinner className="h-7 w-7 text-[#0ea5e9]" />
             </div>
           ) : null}
-          {showContactColumn ? (
-            <ContactList
-              isMobile={isMobile}
-              isDesktop={isDesktop}
-              selectedDevice={selectedDevice}
-              deviceOptions={deviceSelectOptions}
-              onSelectDevice={(id) => void selectDevice(id)}
-              searchQuery={searchQuery}
-              onSearchChange={setSearch}
-              loading={contactsLoading}
-              contacts={filteredContacts}
-              activeKey={selectedKey}
-              isUnread={isUnread}
-              deletingKey={deletingThreadKey}
-              canHover={canHover}
-              onSelect={(key) => void selectContact(key)}
-              onDelete={(t) => void deleteThreadAction(t)}
-              onRowPointerDown={onThreadPointerDown}
-              onRowPointerMove={moveLongPress}
-              onRowPointerEnd={clearLongPress}
-            />
-          ) : null}
-          {showDetailColumn ? (
-            <ThreadPanel
-              isMobile={isMobile}
-              isDesktop={isDesktop}
-              selectedDevice={selectedDevice}
-              activeThread={activeThread}
-              canLoadMore={!!activeThread && hasMore}
-              loadingMore={loadingMore}
-              groups={groups}
-              deletingMessageId={deletingMessageId}
-              canHover={canHover}
-              composer={composer}
-              composerInfo={composerInfo}
-              composerLength={composerLength}
-              sending={sending}
-              detailRef={detailRef}
-              composerRef={composerRef}
-              onBack={onBack}
-              onScrollToBottom={scrollToBottomNow}
-              onLoadMore={() => void loadMore()}
-              onDeleteMessage={(m) => void deleteMessageAction(m)}
-              onComposerChange={setComposer}
-              onSend={() => void sendReply()}
-              onDetailScroll={onDetailScroll}
-              onMsgPointerDown={onMsgPointerDown}
-              onMsgPointerMove={moveLongPress}
-              onMsgPointerEnd={clearLongPress}
-            />
-          ) : null}
-        </div>
+          <div className="sms-main-layout">
+            {showContactColumn ? (
+              <ContactList
+                isMobile={isMobile}
+                isDesktop={isDesktop}
+                selectedDevice={selectedDevice}
+                deviceOptions={deviceSelectOptions}
+                onSelectDevice={(id) => void selectDevice(id)}
+                searchQuery={searchQuery}
+                onSearchChange={setSearch}
+                loading={contactsLoading}
+                contacts={filteredContacts}
+                activeKey={selectedKey}
+                isUnread={isUnread}
+                deletingKey={deletingThreadKey}
+                canHover={canHover}
+                onSelect={(key) => void selectContact(key)}
+                onDelete={(thread) => void deleteThreadAction(thread)}
+                onRowPointerDown={onThreadPointerDown}
+                onRowPointerMove={moveLongPress}
+                onRowPointerEnd={clearLongPress}
+                totalCount={contacts.length}
+                unreadCount={unreadCount}
+                threadFilter={threadFilter}
+                onThreadFilterChange={setThreadFilter}
+                onNewSms={openNewSms}
+                onExport={() => setExportOpen(true)}
+                onRefresh={() => void refreshAll()}
+                refreshing={contactsLoading}
+              />
+            ) : null}
+            {isDesktop && newSmsOpen ? (
+              <NewSmsModal
+                variant="panel"
+                open
+                cards={cards}
+                defaultICCID={newSmsDevice}
+                sending={sending}
+                onClose={() => setNewSmsOpen(false)}
+                onSend={sendNewSms}
+              />
+            ) : showDetailColumn && !newSmsOpen ? (
+              <ThreadPanel
+                isMobile={isMobile}
+                isDesktop={isDesktop}
+                selectedDevice={selectedDevice}
+                activeThread={activeThread}
+                canLoadMore={!!activeThread && hasMore}
+                loadingMore={loadingMore}
+                groups={groups}
+                deletingMessageId={deletingMessageId}
+                canHover={canHover}
+                composer={composer}
+                composerInfo={composerInfo}
+                composerLength={composerLength}
+                sending={sending}
+                detailRef={detailRef}
+                composerRef={composerRef}
+                onBack={onBack}
+                onScrollToBottom={scrollToBottomNow}
+                onLoadMore={() => void loadMore()}
+                onDeleteMessage={(m) => void deleteMessageAction(m)}
+                onComposerChange={setComposer}
+                onSend={() => void sendReply()}
+                onDetailScroll={onDetailScroll}
+                onMsgPointerDown={onMsgPointerDown}
+                onMsgPointerMove={moveLongPress}
+                onMsgPointerEnd={clearLongPress}
+                onDeleteThread={(thread) => void deleteThreadAction(thread)}
+              />
+            ) : null}
+          </div>
+        </section>
       </div>
       {actionSheetOpen && isMobile && actionTarget ? (
         <div className="sms-action-sheet-mask animate-[fade-slide-in_0.18s_ease]" onClick={closeActionSheet}>
@@ -815,14 +842,16 @@ export default function SmsPage() {
       {exportOpen && (
         <SmsExportModal cards={cards} defaultICCID={selectedDevice} onClose={() => setExportOpen(false)} />
       )}
-      <NewSmsModal
-        open={newSmsOpen}
-        cards={cards}
-        defaultICCID={newSmsDevice}
-        sending={sending}
-        onClose={() => setNewSmsOpen(false)}
-        onSend={sendNewSms}
-      />
+      {isMobile ? (
+        <NewSmsModal
+          open={newSmsOpen}
+          cards={cards}
+          defaultICCID={newSmsDevice}
+          sending={sending}
+          onClose={() => setNewSmsOpen(false)}
+          onSend={sendNewSms}
+        />
+      ) : null}
     </div>
   );
 }

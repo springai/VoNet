@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { SendRegular } from "@fluentui/react-icons";
+import { DismissRegular, SendRegular } from "@fluentui/react-icons";
 import { Button, Input, Modal, Select, Textarea } from "../ui";
 import type { SimCard } from "../../types";
 import { activeCardDevice } from "../cards/cardApi";
@@ -19,6 +19,7 @@ export interface NewSmsModalProps {
   sending: boolean;
   onClose: () => void;
   onSend: (payload: NewSmsPayload) => void;
+  variant?: "modal" | "panel";
 }
 
 function FormItem({ label, children }: { label: ReactNode; children: ReactNode }) {
@@ -30,7 +31,7 @@ function FormItem({ label, children }: { label: ReactNode; children: ReactNode }
   );
 }
 
-export function NewSmsModal({ open, cards, defaultICCID, sending, onClose, onSend }: NewSmsModalProps) {
+export function NewSmsModal({ open, cards, defaultICCID, sending, onClose, onSend, variant = "modal" }: NewSmsModalProps) {
   const { t } = useI18n();
   const [iccid, setICCID] = useState(defaultICCID);
   const [phone, setPhone] = useState("");
@@ -57,6 +58,58 @@ export function NewSmsModal({ open, cards, defaultICCID, sending, onClose, onSen
   );
   const info = useMemo(() => analyzeSmsEncoding(content), [content]);
   const length = useMemo(() => Array.from(content || "").length, [content]);
+
+  if (!open) return null;
+
+  if (variant === "panel") {
+    return (
+      <section className="sms-new-panel">
+        <header className="sms-new-header">
+          <div className="sms-new-title">
+            <span className="sms-new-icon"><SendRegular /></span>
+            <div>
+              <strong>{t("新短信")}</strong>
+              <p>{t("选择发送设备并填写收件人")}</p>
+            </div>
+          </div>
+          <button type="button" className="sms-icon-button" onClick={onClose} aria-label={t("关闭")}>
+            <DismissRegular />
+          </button>
+        </header>
+        <div className="sms-new-fields">
+          <FormItem label={t("发送设备")}>
+            <Select value={iccid} onChange={setICCID} options={deviceOptions} placeholder={t("选择卡片")} size="large" />
+          </FormItem>
+          <FormItem label={t("目标号码")}>
+            <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+12025550177" inputSize="large" />
+          </FormItem>
+        </div>
+        <div className="sms-new-composer">
+          <Textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            placeholder={t("短信内容")}
+            rows={3}
+            className="sms-new-textarea"
+          />
+          <Button
+            variant="primary"
+            className="sms-send-circle"
+            loading={sending}
+            disabled={!iccid || !phone.trim() || !content.trim() || !activeCardDevice(cards.find((card) => card.iccid === iccid))}
+            icon={<SendRegular />}
+            aria-label={t("发送")}
+            title={t("发送")}
+            onClick={() => onSend({ iccid, phone, message: content })}
+          />
+          <div className="sms-composer-meta">
+            <span>{t("经当前卡片发送")}</span>
+            <span>{tf("{encoding} · 预计 {parts} 段 · {length} 字", { encoding: info.encoding, parts: info.parts, length })}</span>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <Modal

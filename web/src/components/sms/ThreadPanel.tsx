@@ -1,6 +1,6 @@
-import type { PointerEvent, RefObject, UIEvent, KeyboardEvent } from "react";
-import { DeleteRegular, SendRegular } from "@fluentui/react-icons";
-import { Button, EmptyState, Textarea } from "../ui";
+import { useState, type PointerEvent, type RefObject, type UIEvent, type KeyboardEvent } from "react";
+import { CopyRegular, DeleteRegular, InfoRegular, MoreHorizontalRegular, SendRegular } from "@fluentui/react-icons";
+import { Button, EmptyState, Textarea, message } from "../ui";
 import { cx } from "../../lib/utils";
 import type { SMSMessage } from "../../types";
 import {
@@ -39,6 +39,7 @@ export interface ThreadPanelProps {
   onMsgPointerDown: (m: SMSMessage, e: PointerEvent) => void;
   onMsgPointerMove: (e: PointerEvent) => void;
   onMsgPointerEnd: (e: PointerEvent) => void;
+  onDeleteThread: (thread: SmsThread) => void;
 }
 
 function DeleteMsgButton({
@@ -67,8 +68,17 @@ function DeleteMsgButton({
   );
 }
 
+function verificationCode(text: string): string {
+  const labeled = text.match(/(?:验证码|校验码|verification code|code)\D{0,16}(\d{4,8})/i);
+  if (labeled?.[1]) return labeled[1];
+  return /(?:验证码|校验码|verification|otp|code|密码)/i.test(text)
+    ? text.match(/\b(\d{4,8})\b/)?.[1] || ""
+    : "";
+}
+
 export function ThreadPanel(props: ThreadPanelProps) {
   const { t } = useI18n();
+  const [menuOpen, setMenuOpen] = useState(false);
   const {
     isMobile,
     isDesktop,
@@ -95,6 +105,7 @@ export function ThreadPanel(props: ThreadPanelProps) {
     onMsgPointerDown,
     onMsgPointerMove,
     onMsgPointerEnd,
+    onDeleteThread,
   } = props;
 
   const subtitle =
@@ -112,26 +123,56 @@ export function ThreadPanel(props: ThreadPanelProps) {
   }
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-col">
-      <div className="flex items-center justify-between gap-3 border-b border-gray-100 p-4 dark:border-white/10">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            {isMobile && activeThread ? (
-              <Button variant="text" onClick={onBack}>
-                {t("返回")}
-              </Button>
-            ) : null}
-            <div className="truncate text-sm font-extrabold text-gray-900 dark:text-white">
-              {activeThread?.peer || t("请选择会话")}
-            </div>
+    <div className="sms-thread-panel flex min-h-0 min-w-0 flex-col">
+      <div className="sms-thread-header">
+        <div className="sms-thread-identity">
+          <span className="sms-thread-peer-icon">
+            {String(activeThread?.peer || "").trim().startsWith("+") ? "☎" : "#"}
+          </span>
+          <div className="min-w-0">
+            <strong>{activeThread?.peer || t("请选择会话")}</strong>
+            <p>{subtitle}</p>
           </div>
-          <div className="mt-1 text-xs text-gray-400">{subtitle}</div>
         </div>
         {activeThread ? (
-          <div className="flex items-center gap-2">
-            <Button variant="text" onClick={onScrollToBottom}>
-              {t("最新")}
-            </Button>
+          <div className="sms-thread-actions">
+            {isMobile ? <Button variant="text" onClick={onBack}>{t("返回")}</Button> : null}
+            <Button variant="text" onClick={onScrollToBottom}>{t("最新")}</Button>
+            <div className="sms-thread-menu-wrap">
+              <button
+                type="button"
+                className="sms-icon-button"
+                aria-label={t("会话操作")}
+                onClick={() => setMenuOpen((value) => !value)}
+              >
+                <MoreHorizontalRegular />
+              </button>
+              {menuOpen ? (
+                <div className="sms-thread-menu">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      message.info(`${activeThread.peer} · ${subtitle}`);
+                    }}
+                  >
+                    <InfoRegular />
+                    {t("会话信息")}
+                  </button>
+                  <button
+                    type="button"
+                    className="is-danger"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onDeleteThread(activeThread);
+                    }}
+                  >
+                    <DeleteRegular />
+                    {t("删除整个会话")}
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </div>
         ) : null}
       </div>
@@ -145,71 +186,66 @@ export function ThreadPanel(props: ThreadPanelProps) {
                 </Button>
               </div>
             ) : null}
-{groups.map((g) => (
-  <div key={g.date} className="space-y-4">
-    <div className="flex justify-center">
-      <div className="rounded-full border border-gray-200/60 bg-gray-100/80 px-3 py-1 text-[11px] font-bold text-gray-500 dark:border-white/10 dark:bg-white/5 dark:text-gray-300">
-        {g.date}
-      </div>
-    </div>
-    {g.items.map((m) => {
-      const outbound = messageType(m) !== 1;
-      const delivery = messageDeliveryIndicator(m);
-      const hasDevice = !!m.deviceName;
-      return (
-        <div key={m.id} className={cx("flex", outbound ? "justify-end" : "justify-start")}>
-<div
-  className="sms-msg-wrapper group"
-  onPointerDown={(e) => onMsgPointerDown(m, e)}
-  onPointerMove={onMsgPointerMove}
-  onPointerUp={onMsgPointerEnd}
-  onPointerCancel={onMsgPointerEnd}
->
-<div className={cx("mb-1 flex items-center gap-2", outbound && "justify-end")}>
-  {!outbound ? <span className="text-xs font-bold text-gray-700 dark:text-gray-200">{m.sender}</span> : null}
-  {isDesktop && outbound && hasDevice ? (
-    <DeleteMsgButton loading={deletingMessageId === m.id} id={m.id} canHover={canHover} onDelete={() => onDeleteMessage(m)} />
-  ) : null}
-  {hasDevice ? (
-    <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-bold text-gray-400 dark:bg-white/5">{m.deviceName}</span>
-  ) : null}
-  <span className="font-mono text-[11px] text-gray-400">{new Date(m.timestamp).toLocaleString()}</span>
-  {outbound && delivery === "delivered" ? (
-    <span className="text-xs font-bold text-green-500" title="已确认送达">✓✓</span>
-  ) : outbound && delivery === "accepted_unconfirmed" ? (
-    <span className="text-xs font-bold text-amber-500" title="已提交，尚未确认送达">✓</span>
-  ) : outbound && delivery === "failed" ? (
-    <span className="text-xs font-bold text-red-500" title="发送失败">✗</span>
-  ) : outbound ? (
-    <span className="text-xs font-bold text-gray-400" title="发送状态未知">?</span>
-  ) : null}
-  {isDesktop && (!outbound || !hasDevice) ? (
-    <DeleteMsgButton loading={deletingMessageId === m.id} id={m.id} canHover={canHover} onDelete={() => onDeleteMessage(m)} />
-  ) : null}
-</div>
-<div
-  className={cx(
-    "rounded-2xl border px-5 py-4 text-sm leading-[1.75] shadow-sm",
-    outbound
-      ? "border-indigo-100 bg-indigo-50 text-gray-800 dark:border-indigo-500/20 dark:bg-indigo-500/10 dark:text-gray-100"
-      : "border-gray-100 bg-white/90 text-gray-700 dark:border-white/10 dark:bg-white/5 dark:text-gray-200",
-  )}
->
-  {m.decodeError ? (
-    <div className="mb-1 text-xs text-amber-700 dark:text-amber-400" role="status">
-      {t("短信解析失败")}：{m.decodeError}
-    </div>
-  ) : null}
-  {messageBody(m) || (
-    <span className="text-gray-400">{t("短信正文为空")}</span>
-  )}
-</div>
-</div>
-        </div>
-      );
-    })}
-  </div>
-))}
+            {groups.map((g) => (
+              <div key={g.date} className="sms-day-group">
+                <div className="sms-day-label">{g.date}</div>
+                {g.items.map((m) => {
+                  const outbound = messageType(m) !== 1;
+                  const delivery = messageDeliveryIndicator(m);
+                  const code = verificationCode(messageBody(m));
+                  return (
+                    <div key={m.id} className={cx("sms-message-row", outbound && "is-outbound")}>
+                      <div
+                        className="sms-msg-wrapper group"
+                        onPointerDown={(e) => onMsgPointerDown(m, e)}
+                        onPointerMove={onMsgPointerMove}
+                        onPointerUp={onMsgPointerEnd}
+                        onPointerCancel={onMsgPointerEnd}
+                      >
+                        <div className="sms-message-meta">
+                          {!outbound ? <span>{m.sender || activeThread.peer}</span> : null}
+                          {m.deviceName ? <span className="sms-message-device">{m.deviceName}</span> : null}
+                          <span>{new Date(m.timestamp).toLocaleTimeString()}</span>
+                          {outbound && delivery === "delivered" ? (
+                            <span className="is-delivered" title={t("已确认送达")}>✓✓</span>
+                          ) : outbound && delivery === "accepted_unconfirmed" ? (
+                            <span className="is-accepted" title={t("已提交，尚未确认送达")}>✓</span>
+                          ) : outbound && delivery === "failed" ? (
+                            <span className="is-failed" title={t("发送失败")}>✗</span>
+                          ) : outbound ? (
+                            <span title={t("发送状态未知")}>?</span>
+                          ) : null}
+                          <DeleteMsgButton
+                            loading={deletingMessageId === m.id}
+                            id={m.id}
+                            canHover={canHover}
+                            onDelete={() => onDeleteMessage(m)}
+                          />
+                        </div>
+                        <div className={cx("sms-message-bubble", outbound && "is-outbound")}>
+                          {m.decodeError ? (
+                            <div className="sms-decode-error" role="status">{t("短信解析失败")}：{m.decodeError}</div>
+                          ) : null}
+                          {messageBody(m) || <span className="text-gray-400">{t("短信正文为空")}</span>}
+                        </div>
+                        {code ? (
+                          <button
+                            type="button"
+                            className="sms-verification-chip"
+                            onClick={() => void navigator.clipboard.writeText(code)}
+                          >
+                            <span>{t("验证码")}</span>
+                            <strong>{code}</strong>
+                            <CopyRegular />
+                            {t("复制")}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
             <div className="h-2" />
           </div>
         </div>
@@ -218,27 +254,39 @@ export function ThreadPanel(props: ThreadPanelProps) {
           <EmptyState title={t("请选择一个会话")} subtitle={t("从左侧联系人列表进入短信明细")} />
         </div>
       )}
-{activeThread ? (
-  <div className="border-t border-gray-100 p-4 dark:border-white/10">
-    <div className="mb-2 text-left text-[11px] text-gray-400">
-      {tf("{encoding} · 预计 {parts} 段 · {length} 字", { encoding: composerInfo.encoding, parts: composerInfo.parts, length: composerLength })}
-    </div>
-    <div className="flex items-end gap-3">
-      <Textarea
-        ref={composerRef}
-        value={composer}
-        onChange={(e) => onComposerChange(e.target.value)}
-        onKeyDown={onComposerKeyDown}
-        placeholder={t("回复（Enter 发送）")}
-        rows={1}
-        className="max-h-40 resize-none [field-sizing:content]"
-      />
-      <Button variant="primary" loading={sending} onClick={onSend} className="!border-0 self-end" icon={<SendRegular />}>
-        {t("发送")}
-      </Button>
-    </div>
-  </div>
-) : null}
+      {activeThread ? (
+        <div className="sms-composer-panel">
+          <div className="sms-composer-box">
+            <Textarea
+              ref={composerRef}
+              value={composer}
+              onChange={(e) => onComposerChange(e.target.value)}
+              onKeyDown={onComposerKeyDown}
+              placeholder={t("短信内容")}
+              rows={1}
+              className="sms-composer-textarea"
+            />
+            <Button
+              variant="primary"
+              className="sms-send-circle"
+              loading={sending}
+              disabled={!composer.trim()}
+              onClick={onSend}
+              icon={<SendRegular />}
+              aria-label={t("发送")}
+              title={t("发送")}
+            />
+          </div>
+          <div className="sms-composer-meta">
+            <span>{tf("经 {device} 发送", { device: activeThread.localPhone || activeThread.lastDeviceName || t("当前卡片") })}</span>
+            <span>
+              {composerInfo.encoding === "GSM7"
+                ? t("单段：GSM7 160 字符，中文 70 字")
+                : tf("单段：UCS2 70 字 · 当前 {length} 字", { length: composerLength })}
+            </span>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

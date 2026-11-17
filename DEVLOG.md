@@ -331,3 +331,11 @@ npm run build
 - 涉及文件：`web/src/components/agents/AgentManager.tsx`、`web/src/components/devices/DeviceListItemCard.tsx`、`web/src/pages/DevicesPage.tsx`、`web/src/reborn.css`、`web/src/lib/i18n-en.ts`。
 - 验证：`npm test` 84 项通过，`npm run build` 通过；Linux amd64 已部署，`vonet.service` 为 `active`，Agent 已恢复事件上报。
 - 合并风险：不修改 Agent API、设备发现、设备操作、数据库或业务状态机；同步时保留 Agent 下拉选择和 `agent-focus-panel` 结构。
+
+### 2026-11-18 短信页面工作区重构
+
+- 现象：短信页面仍使用旧的 PageHeader、设备栏和线程布局，卡片/设备列表存在独立背景，与 SIM 管理和参考站的短信工作区不一致。
+- 修复：仅调整 UI。改为左侧透明“收件范围”卡片列表、中间短信会话列表、右侧会话详情三栏工作区；增加搜索、全部/未读筛选、未读徽标、新短信入口、刷新和导出操作。会话页按参考图重排消息气泡、日期、设备信息、验证码复制、会话信息/删除菜单和圆形发送按钮，并提高顶部刷新、导出和新短信按钮的对比度；导出按钮改为“导出”文字按钮。桌面端“新短信”改为右侧内嵌面板，移动端保留弹窗。
+- 涉及文件：`web/src/pages/SmsPage.tsx`、`web/src/components/sms/ContactList.tsx`、`web/src/components/sms/ThreadPanel.tsx`、`web/src/components/sms/NewSmsModal.tsx`、`web/src/reborn.css`、`web/src/lib/i18n-en.ts`。
+- 验证：`npm test` 84 项通过，`npm run build` 通过；Linux amd64 已部署，`vonet.service` 为 `active`。
+- 合并风险：不修改短信 API、轮询、会话读取、发送、删除或导出逻辑；同步时保留 `sms-reference-layout`、`sms-contact-panel`、`sms-thread-panel` 和 `sms-new-panel`。
