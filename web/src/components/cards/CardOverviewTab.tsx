@@ -13,6 +13,7 @@ import { OverviewTrafficChart } from "../devices/OverviewTrafficChart";
 import { OperatorSelectionDialog } from "../devices/OperatorSelectionDialog";
 import { CellLockDialog } from "../devices/CellLockDialog";
 import { E911SetupDialog } from "../devices/E911SetupDialog";
+import { CardKeepAliveOverviewCard } from "./CardKeepAliveOverviewCard";
 import { useDeviceCellLock } from "../devices/useDeviceCellLock";
 import { isVoWiFiInUse, simOperatorDisplay } from "../devices/shared";
 import { usePolling } from "../../lib/usePolling";
@@ -45,6 +46,7 @@ interface Props {
 export function CardOverviewTab({ card, tabs, activeTab, onTabChange, onOpenSms, onOpenCall, onDelete, deleting, children }: Props) {
   const { t } = useI18n();
   const deviceId = card.binding?.deviceId?.trim() || "";
+  const unbound = !deviceId;
   const [device, setDevice] = useState<DeviceDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -196,20 +198,23 @@ export function CardOverviewTab({ card, tabs, activeTab, onTabChange, onOpenSms,
   return (
     <div className="overview-tab-shell">
       {!hostReady ? (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <EmptyState
-            title={deviceId ? t("卡片当前离线") : t("卡片当前未绑定设备")}
-            subtitle={t("设备稳定读取到此 ICCID 后，将重新绑定并恢复实时 VoWiFi 和蜂窝网络状态")}
-          />
-          <OverviewSimPanel
-            card={card}
-            simOperatorDisplay={operatorDisplay}
-            customPhoneNumber={card.policy?.customPhoneNumber}
-            variant="summary"
-            e911Starting={false}
-            onSetupE911={() => setE911Open(true)}
-          />
-        </div>
+        <>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <EmptyState
+              title={deviceId ? t("卡片当前离线") : t("卡片当前未绑定设备")}
+              subtitle={t("设备稳定读取到此 ICCID 后，将重新绑定并恢复实时 VoWiFi 和蜂窝网络状态")}
+            />
+            <OverviewSimPanel
+              card={card}
+              simOperatorDisplay={operatorDisplay}
+              customPhoneNumber={card.policy?.customPhoneNumber}
+              variant="summary"
+              e911Starting={false}
+              onSetupE911={() => setE911Open(true)}
+            />
+          </div>
+          {unbound ? children : null}
+        </>
       ) : loading && !device ? (
         <ListSkeleton rows={6} />
       ) : error && !device ? (
@@ -267,6 +272,7 @@ export function CardOverviewTab({ card, tabs, activeTab, onTabChange, onOpenSms,
           <Tabs tabs={tabs} value={activeTab} onChange={onTabChange} />
           {activeTab === "overview" ? (
             <>
+              <CardKeepAliveOverviewCard card={card} />
               <div className="overview-lower-grid">
                 <OverviewNetworkPanel
                   device={device}

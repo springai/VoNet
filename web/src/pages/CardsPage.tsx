@@ -27,10 +27,12 @@ import { CardPolicyPanel } from "../components/devices/CardPolicyPanel";
 import { CardDeviceConfig } from "../components/cards/CardDeviceConfig";
 import { CardConfigTab } from "../components/cards/CardConfigTab";
 import { CardAtUssdTab } from "../components/cards/CardAtUssdTab";
+import { CardKeepAliveFields } from "../components/cards/CardKeepAliveFields";
+import { defaultKeepAliveConfig } from "../components/cards/cardConfigModel";
 import { getCardPolicy } from "../components/devices/deviceActions";
-import { createCard, deleteCard, importCards, isCardOperable, listCardCandidates, listCards } from "../components/cards/cardApi";
+import { createCard, deleteCard, importCards, isCardOperable, listCardCandidates, listCardKeepAliveCharges, listCards } from "../components/cards/cardApi";
 import { CardOverviewTab } from "../components/cards/CardOverviewTab";
-import { buildCardTransfer, cardTransferFilename, parseCardTransfer } from "../components/cards/cardTransfer";
+import { buildCardTransfer, cardTransferFilename, parseCardTransferFile } from "../components/cards/cardTransfer";
 import { useMediaQuery } from "../lib/useMediaQuery";
 import { tf, useI18n } from "../lib/i18n";
 import { cx } from "../lib/utils";
@@ -56,6 +58,8 @@ const EMPTY_CARD_FORM: SimCardInput = {
   displayName: "",
   notes: "",
   cardType: "physical_sim",
+  msisdn: "",
+  keepalive: defaultKeepAliveConfig(),
 };
 
 function cardTone(status: SimCardStatus) {
@@ -205,6 +209,23 @@ function CardConnectivityIndicator({ card, state, candidates }: {
   return <CellularSignalIndicator online={state.online} pending={state.pending} level={state.level} />;
 }
 
+function CardExpiryIndicator({ card }: { card: SimCard }) {
+  const { t } = useI18n();
+  const keepAlive = card.keepalive;
+  if (!keepAlive?.enabled) {
+    return <span className="card-expiry-chip is-permanent">{t("永久")}</span>;
+  }
+  const days = typeof keepAlive.daysRemaining === "number"
+    ? Math.max(0, keepAlive.daysRemaining)
+    : keepAlive.expiresAt
+      ? Math.max(0, Math.ceil((keepAlive.expiresAt * 1000 - Date.now()) / 86400000))
+      : 0;
+  const expired = keepAlive.status === "expired" || (!keepAlive.autoRenew && (!!keepAlive.expiresAt ? keepAlive.expiresAt * 1000 < Date.now() : true));
+  if (expired) return <span className="card-expiry-chip is-expired">{t("过期")}</span>;
+  const tone = days <= 3 ? "is-expired" : days <= 10 ? "is-warning" : "is-ok";
+  return <span className={`card-expiry-chip ${tone}`} title={t("剩余到期天数")}>{days}</span>;
+}
+
 function normalizeICCID(value: string) {
   return value.replace(/\s+/g, "");
 }
@@ -280,6 +301,7 @@ export default function CardsPage() {
       profileAid: searchParams.get("profileAid") || candidate?.profileAid || "",
       deviceId: searchParams.get("deviceId") || candidate?.deviceId || "",
       hostType: (searchParams.get("hostType") || candidate?.hostType || "") as SimCardInput["hostType"],
+      keepalive: defaultKeepAliveConfig(),
     });
     setAddICCIDLocked(true);
     handledNewICCIDRef.current = pendingNewICCID;
@@ -338,25 +360,33 @@ export default function CardsPage() {
 
   const exportCards = useCallback(() => {
     if (cards.length === 0 || importingCards) return;
-    const blob = new Blob([JSON.stringify(buildCardTransfer(cards), null, 2)], {
-      type: "application/json;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = cardTransferFilename();
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    message.success(tf("已导出 {count} 张卡片配置", { count: cards.length }));
+    void Promise.all(cards.map(async (card) => [card.iccid, await listCardKeepAliveCharges(card.iccid).catch(() => [])] as const))
+      .then((entries) => {
+        const chargesByIccid = Object.fromEntries(entries);
+        const blob = new Blob([JSON.stringify(buildCardTransfer(cards, chargesByIccid), null, 2)], {
+          type: "application/json;charset=utf-8",
+        });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = cardTransferFilename();
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
+        message.success(tf("已导出 {count} 张卡片配置", { count: cards.length }));
+      })
+      .catch((error) => {
+        message.error(apiMessage(error) || t("导出卡片失败"));
+      });
   }, [cards, importingCards]);
 
   const importCardsFile = useCallback(async (file: File) => {
     if (importingCards) return;
     setImportingCards(true);
     try {
-      const parsed = parseCardTransfer(JSON.parse(await file.text()));
+      const transfer = parseCardTransferFile(JSON.parse(await file.text()));
+      const parsed = transfer.cards;
       if (parsed.length === 0) {
         message.warning(t("卡片导入文件没有卡片数据"));
         return;
@@ -367,7 +397,7 @@ export default function CardsPage() {
         { type: "warning", confirmText: t("确认导入"), cancelText: t("取消") },
       );
       if (!confirmed) return;
-      const result = await importCards(parsed);
+      const result = await importCards(parsed, transfer.chargeRecords);
       await loadCards(true);
       message.success(tf("导入完成：新增 {created} 张，更新 {updated} 张", {
         created: result.created,
@@ -443,6 +473,7 @@ export default function CardsPage() {
       profileAid: candidate.profileAid || "",
       deviceId: candidate.deviceId || "",
       hostType: candidate.hostType,
+      keepalive: defaultKeepAliveConfig(),
     });
     setAddICCIDLocked(true);
     setAddOpen(true);
@@ -615,6 +646,7 @@ export default function CardsPage() {
                           {t(connection.label)}
                         </span>
                       </span>
+                      <CardExpiryIndicator card={card} />
                       <CardConnectivityIndicator card={card} state={connection} candidates={candidates} />
                     </button>
                   );
@@ -648,7 +680,11 @@ export default function CardsPage() {
                 onDelete={() => void removeSelectedCard()}
                 deleting={deleting}
               >
-                {activeTab === "card_config" ? (
+                {!selectedCard.binding?.deviceId?.trim() ? (
+                  <div className="config-tab-surface">
+                    <CardConfigTab card={selectedCard} onSaved={() => void loadCards()} />
+                  </div>
+                ) : activeTab === "card_config" ? (
                   <div className="config-tab-surface">
                     <CardConfigTab card={selectedCard} onSaved={() => void loadCards()} />
                   </div>
@@ -698,6 +734,7 @@ export default function CardsPage() {
         open={addOpen}
         onClose={() => setAddOpen(false)}
         title={t("添加卡片")}
+        width="max-w-3xl"
         footer={
           <>
             <Button onClick={() => setAddOpen(false)}>{t("取消")}</Button>
@@ -783,6 +820,14 @@ export default function CardsPage() {
               placeholder={t("可选")}
             />
           </div>
+          <CardKeepAliveFields
+            value={addForm.keepalive || defaultKeepAliveConfig()}
+            phoneNumber={addForm.msisdn || ""}
+            operatorName={addForm.carrier || ""}
+            onChange={(keepalive) => setAddForm((form) => ({ ...form, keepalive }))}
+            onPhoneNumberChange={(msisdn) => setAddForm((form) => ({ ...form, msisdn }))}
+            onOperatorNameChange={(carrier) => setAddForm((form) => ({ ...form, carrier }))}
+          />
         </div>
       </Modal>
     </div>

@@ -876,6 +876,64 @@ func migrationStatements(version int) []string {
 				ON devices(agent_id, remote_device_id)
 				WHERE agent_id <> '' AND remote_device_id <> ''`,
 		}
+	case 41:
+		return []string{
+			`CREATE TABLE IF NOT EXISTS card_keepalive (
+				iccid TEXT PRIMARY KEY,
+				enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+				plan_info TEXT NOT NULL DEFAULT '',
+				currency TEXT NOT NULL DEFAULT 'CNY'
+					CHECK (currency IN ('CNY', 'USD', 'GBP', 'EUR', 'NZD')),
+				balance_cents INTEGER NOT NULL DEFAULT 0 CHECK (balance_cents >= 0),
+				plan_start_at INTEGER NOT NULL DEFAULT 0,
+				cycle_rule TEXT NOT NULL DEFAULT 'monthly'
+					CHECK (cycle_rule IN ('custom_days', 'monthly', 'quarterly', 'half_yearly', 'yearly')),
+				cycle_days INTEGER NOT NULL DEFAULT 0 CHECK (cycle_days >= 0),
+				deduction_cents INTEGER NOT NULL DEFAULT 0 CHECK (deduction_cents >= 0),
+				auto_renew INTEGER NOT NULL DEFAULT 0 CHECK (auto_renew IN (0, 1)),
+				notification_enabled INTEGER NOT NULL DEFAULT 0 CHECK (notification_enabled IN (0, 1)),
+				notify_days_before INTEGER NOT NULL DEFAULT 3 CHECK (notify_days_before BETWEEN 0 AND 365),
+				current_cycle_start_at INTEGER NOT NULL DEFAULT 0,
+				expires_at INTEGER NOT NULL DEFAULT 0,
+				last_renewed_at INTEGER NOT NULL DEFAULT 0,
+				last_charge_at INTEGER NOT NULL DEFAULT 0,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (iccid) REFERENCES sim_cards(iccid) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS card_keepalive_expiry_idx
+				ON card_keepalive(enabled, expires_at)`,
+			`CREATE TABLE IF NOT EXISTS card_keepalive_charges (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				iccid TEXT NOT NULL,
+				status TEXT NOT NULL CHECK (status IN ('success', 'insufficient', 'failed')),
+				amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
+				balance_before_cents INTEGER NOT NULL CHECK (balance_before_cents >= 0),
+				balance_after_cents INTEGER NOT NULL CHECK (balance_after_cents >= 0),
+				currency TEXT NOT NULL CHECK (currency IN ('CNY', 'USD', 'GBP', 'EUR', 'NZD')),
+				cycle_start_at INTEGER NOT NULL,
+				cycle_end_at INTEGER NOT NULL,
+				note TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				FOREIGN KEY (iccid) REFERENCES sim_cards(iccid) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS card_keepalive_charges_card_idx
+				ON card_keepalive_charges(iccid, created_at DESC, id DESC)`,
+			`CREATE TABLE IF NOT EXISTS card_keepalive_reminders (
+				iccid TEXT NOT NULL,
+				event_type TEXT NOT NULL CHECK (event_type IN ('before_expiry', 'expiry_day', 'renewal_failed')),
+				cycle_end_at INTEGER NOT NULL,
+				created_at INTEGER NOT NULL,
+				PRIMARY KEY (iccid, event_type, cycle_end_at),
+				FOREIGN KEY (iccid) REFERENCES sim_cards(iccid) ON DELETE CASCADE
+			)`,
+		}
+	case 42:
+		return []string{
+			`ALTER TABLE card_keepalive_charges
+				ADD COLUMN source TEXT NOT NULL DEFAULT 'automatic'
+					CHECK (source IN ('automatic', 'manual'))`,
+		}
 	default:
 		return nil
 	}

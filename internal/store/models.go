@@ -561,6 +561,57 @@ type SimCard struct {
 	UpdatedAt   time.Time
 }
 
+type CardKeepAlive struct {
+	ICCID               string
+	Enabled             bool
+	PlanInfo            string
+	Currency            string
+	BalanceCents        int64
+	PlanStartedAt       time.Time
+	CycleRule           string
+	CycleDays           int
+	DeductionCents      int64
+	AutoRenew           bool
+	NotificationEnabled bool
+	NotifyDaysBefore    int
+	CurrentCycleStartAt time.Time
+	ExpiresAt           time.Time
+	LastRenewedAt       time.Time
+	LastChargeAt        time.Time
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type CardKeepAliveCharge struct {
+	ID                 int64
+	ICCID              string
+	Status             string
+	Source             string
+	AmountCents        int64
+	BalanceBeforeCents int64
+	BalanceAfterCents  int64
+	Currency           string
+	CycleStartAt       time.Time
+	CycleEndAt         time.Time
+	Note               string
+	CreatedAt          time.Time
+}
+
+type CardKeepAliveRenewal struct {
+	ICCID              string
+	Status             string
+	Source             string
+	AmountCents        int64
+	BalanceBeforeCents int64
+	BalanceAfterCents  int64
+	Currency           string
+	CycleStartAt       time.Time
+	CycleEndAt         time.Time
+	NewExpiresAt       time.Time
+	Note               string
+	CreatedAt          time.Time
+}
+
 type SimCardCandidate struct {
 	ICCID            string
 	DeviceID         string

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { CardUiRegular, SaveRegular } from "@fluentui/react-icons";
+import { CardUiRegular, DeleteRegular, SaveRegular } from "@fluentui/react-icons";
 import { apiMessage } from "../../api";
-import type { SimCard, SimCardType } from "../../types";
-import { Button, Input, Select, Textarea, message } from "../ui";
+import type { CardKeepAliveCharge, SimCard, SimCardType } from "../../types";
+import { Button, Input, Select, Textarea, confirmDialog, message } from "../ui";
 import { useI18n } from "../../lib/i18n";
-import { updateCard } from "./cardApi";
+import { deleteCardKeepAliveCharge, listCardKeepAliveCharges, updateCard } from "./cardApi";
 import { cardConfigDirty, cardConfigDraft, cardConfigPatch, type CardConfigDraft } from "./cardConfigModel";
+import { CardKeepAliveFields, centsToMoney, dateInputValue } from "./CardKeepAliveFields";
 import { SensitiveInfoButton } from "../ui/SensitiveInfoButton";
 import { useShowSensitive } from "../devices/shared";
 import { displayICCID } from "../../lib/sensitive";
@@ -14,12 +15,22 @@ export function CardConfigTab({ card, onSaved }: { card: SimCard; onSaved: () =>
   const { t } = useI18n();
   const [draft, setDraft] = useState<CardConfigDraft>(() => cardConfigDraft(card));
   const [saving, setSaving] = useState(false);
+  const [charges, setCharges] = useState<CardKeepAliveCharge[]>([]);
+  const [deletingChargeId, setDeletingChargeId] = useState<number | null>(null);
   const [showSensitive] = useShowSensitive();
   const dirty = cardConfigDirty(card, draft);
 
   useEffect(() => {
     setDraft(cardConfigDraft(card));
-  }, [card.iccid]);
+  }, [card.iccid, card.updatedAt, card.keepalive?.lastChargeAt]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listCardKeepAliveCharges(card.iccid)
+      .then((values) => { if (!cancelled) setCharges(values); })
+      .catch(() => { if (!cancelled) setCharges([]); });
+    return () => { cancelled = true; };
+  }, [card.iccid, card.keepalive?.lastChargeAt, card.keepalive?.balanceCents]);
 
   async function save() {
     if (!dirty || saving) return;
@@ -32,6 +43,26 @@ export function CardConfigTab({ card, onSaved }: { card: SimCard; onSaved: () =>
       message.error(apiMessage(error) || t("卡片配置保存失败"));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function removeCharge(charge: CardKeepAliveCharge) {
+    if (deletingChargeId !== null) return;
+    const confirmed = await confirmDialog(
+      t("删除这条扣费记录后无法恢复，但不会修改当前余额或续期周期。"),
+      t("删除扣费记录"),
+      { type: "danger", confirmText: t("删除"), cancelText: t("取消") },
+    );
+    if (!confirmed) return;
+    setDeletingChargeId(charge.id);
+    try {
+      await deleteCardKeepAliveCharge(card.iccid, charge.id);
+      setCharges((current) => current.filter((item) => item.id !== charge.id));
+      message.success(t("扣费记录已删除"));
+    } catch (error) {
+      message.error(apiMessage(error) || t("扣费记录删除失败"));
+    } finally {
+      setDeletingChargeId(null);
     }
   }
 
@@ -105,6 +136,49 @@ export function CardConfigTab({ card, onSaved }: { card: SimCard; onSaved: () =>
           />
           <div className="mt-1.5 text-xs text-gray-400">{t("ICCID 创建后不可修改")}</div>
         </div>
+        <CardKeepAliveFields
+          value={draft.keepalive}
+          phoneNumber={draft.phoneNumber}
+          operatorName={draft.operatorName}
+          onChange={(keepalive) => setDraft((current) => ({ ...current, keepalive }))}
+          onPhoneNumberChange={(phoneNumber) => setDraft((current) => ({ ...current, phoneNumber }))}
+          onOperatorNameChange={(operatorName) => setDraft((current) => ({ ...current, operatorName }))}
+        />
+        {charges.length > 0 ? (
+          <div className="card-charge-history">
+            <div className="card-charge-history-head">
+              <strong>{t("扣费记录")}</strong>
+              <span>{t("自动延期每次扣费都会记录")}</span>
+            </div>
+            <div className="card-charge-history-list">
+              {charges.map((charge) => (
+                <div key={charge.id} className="card-charge-row">
+                  <div>
+                    <strong>
+                      {charge.status === "success" ? t("扣费成功") : charge.status === "insufficient" ? t("余额不足") : t("扣费失败")}
+                    </strong>
+                    <span>{dateInputValue(charge.createdAt)}</span>
+                  </div>
+                  <div className="card-charge-amount">
+                    <strong>-{centsToMoney(charge.amountCents)} {charge.currency}</strong>
+                    <span>{centsToMoney(charge.balanceBeforeCents)} → {centsToMoney(charge.balanceAfterCents)} {charge.currency}</span>
+                  </div>
+                  <Button
+                    variant="danger"
+                    size="small"
+                    plain
+                    icon={<DeleteRegular />}
+                    aria-label={t("删除扣费记录")}
+                    title={t("删除扣费记录")}
+                    loading={deletingChargeId === charge.id}
+                    disabled={deletingChargeId !== null && deletingChargeId !== charge.id}
+                    onClick={() => void removeCharge(charge)}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

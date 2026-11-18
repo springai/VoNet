@@ -1,5 +1,5 @@
 import { api } from "../../api";
-import type { SimCard, SimCardCandidate, SimCardInput, SimCardsResponse } from "../../types";
+import type { CardKeepAliveCharge, CardKeepAliveConfig, CardKeepAliveRenewalResult, SimCard, SimCardCandidate, SimCardInput, SimCardsResponse } from "../../types";
 import type { CardTransferRecord } from "./cardTransfer";
 
 type CardsPayload = SimCard[] | SimCardsResponse;
@@ -41,16 +41,43 @@ export async function updateCard(iccid: string, input: Partial<SimCardInput>): P
   );
 }
 
+export async function updateCardKeepAlive(iccid: string, input: CardKeepAliveConfig): Promise<CardKeepAliveConfig> {
+  return api<CardKeepAliveConfig>(`/cards/${encodeURIComponent(iccid)}/keepalive`, {
+    method: "PUT",
+    body: input,
+  });
+}
+
+export async function renewCardKeepAlive(iccid: string): Promise<CardKeepAliveRenewalResult> {
+  return api<CardKeepAliveRenewalResult>(`/cards/${encodeURIComponent(iccid)}/keepalive/renew`, {
+    method: "POST",
+  });
+}
+
+export async function listCardKeepAliveCharges(iccid: string): Promise<CardKeepAliveCharge[]> {
+  const response = await api<{ charges?: CardKeepAliveCharge[] }>(
+    `/cards/${encodeURIComponent(iccid)}/keepalive/charges`,
+  );
+  return response.charges || [];
+}
+
+export async function deleteCardKeepAliveCharge(iccid: string, id: number): Promise<void> {
+  await api(`/cards/${encodeURIComponent(iccid)}/keepalive/charges/${id}`, { method: "DELETE" });
+}
+
 export interface CardImportResult {
   imported: number;
   created: number;
   updated: number;
 }
 
-export async function importCards(cards: CardTransferRecord[]): Promise<CardImportResult> {
+export async function importCards(
+  cards: CardTransferRecord[],
+  chargeRecords: CardKeepAliveCharge[] = [],
+): Promise<CardImportResult> {
   return api<CardImportResult>("/cards/import", {
     method: "POST",
-    body: { cards },
+    body: { cards, chargeRecords },
   });
 }
 

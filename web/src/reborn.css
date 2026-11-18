@@ -895,7 +895,7 @@ html.dark .reborn-topbar {
   display: grid;
   height: 72px;
   min-height: 72px;
-  grid-template-columns: 34px minmax(0, 1fr) 24px;
+  grid-template-columns: 34px minmax(0, 1fr) auto 24px;
   align-items: center;
   gap: 10px;
   padding: 10px;
@@ -906,6 +906,32 @@ html.dark .reborn-topbar {
   background: transparent;
   box-shadow: none;
   text-align: left;
+}
+.card-expiry-chip {
+  display: inline-flex;
+  min-width: 34px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.58);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  font-weight: 750;
+}
+.card-expiry-chip.is-permanent,
+.card-expiry-chip.is-ok {
+  color: var(--rb-green);
+}
+.card-expiry-chip.is-warning {
+  color: var(--rb-amber);
+  background: rgba(224, 155, 20, 0.11);
+}
+.card-expiry-chip.is-expired {
+  color: var(--rb-red);
+  background: rgba(216, 74, 63, 0.11);
 }
 .cards-page .reference-list-copy {
   min-width: 0;
@@ -1093,6 +1119,268 @@ html.dark .reborn-topbar {
   border-radius: 0;
   background: transparent;
   box-shadow: none;
+}
+.card-keepalive-fields {
+  display: grid;
+  gap: 18px;
+  padding-top: 4px;
+}
+.card-keepalive-basic-grid {
+  display: grid;
+  grid-template-columns: 0.85fr 0.9fr 1.35fr;
+  gap: 14px;
+}
+.card-keepalive-fields label {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  color: var(--rb-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.card-keepalive-section {
+  display: grid;
+  gap: 13px;
+  padding-top: 17px;
+  border-top: 1px solid var(--rb-border);
+}
+.card-keepalive-section-head,
+.card-keepalive-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.card-keepalive-section-head strong,
+.card-keepalive-switch-row strong {
+  color: var(--rb-ink);
+  font-size: 13px;
+}
+.card-keepalive-section-head p,
+.card-keepalive-switch-row p {
+  margin-top: 3px;
+  color: var(--rb-muted);
+  font-size: 10px;
+}
+.card-keepalive-panel {
+  display: grid;
+  gap: 15px;
+  padding: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 18px;
+  background: rgba(238, 244, 249, 0.72);
+}
+.card-keepalive-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.money-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px;
+  gap: 8px;
+}
+.card-keepalive-switch-row {
+  padding: 11px 12px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.52);
+}
+.card-notification-panel {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.55fr) minmax(220px, 1fr);
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 16px;
+  background: rgba(238, 244, 249, 0.72);
+}
+.card-fixed-reminder {
+  display: flex !important;
+  min-height: 54px;
+  align-items: center;
+  grid-template-columns: none !important;
+  gap: 10px !important;
+  padding: 9px 11px;
+  border: 1px solid rgba(42, 120, 214, 0.14);
+  border-radius: 12px;
+  background: rgba(42, 120, 214, 0.07);
+}
+.card-fixed-reminder input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--rb-accent);
+}
+.card-fixed-reminder span {
+  display: grid;
+  gap: 3px;
+}
+.card-fixed-reminder strong {
+  color: var(--rb-ink);
+  font-size: 11px;
+}
+.card-fixed-reminder small {
+  color: var(--rb-muted);
+  font-size: 9px;
+  font-weight: 500;
+}
+.card-charge-history {
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 18px;
+  background: rgba(238, 244, 249, 0.72);
+}
+.card-charge-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--rb-border);
+}
+.card-charge-history-head strong {
+  color: var(--rb-ink);
+  font-size: 13px;
+}
+.card-charge-history-head span {
+  color: var(--rb-muted);
+  font-size: 9px;
+}
+.card-charge-history-list {
+  display: grid;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.card-charge-row {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--rb-border);
+}
+.card-charge-row:last-child {
+  border-bottom: 0;
+}
+.card-charge-row > div {
+  display: grid;
+  gap: 3px;
+}
+.card-charge-row > .card-charge-amount {
+  text-align: right;
+}
+.card-charge-row > .ui-button {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+.card-charge-row strong {
+  color: var(--rb-ink);
+  font-size: 11px;
+}
+.card-charge-row span {
+  color: var(--rb-muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+}
+.card-keepalive-overview-card {
+  display: grid;
+  gap: 17px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.68);
+}
+.card-keepalive-overview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.card-keepalive-overview-head strong {
+  color: var(--rb-ink);
+  font-size: 14px;
+}
+.card-keepalive-overview-head p {
+  margin-top: 3px;
+  color: var(--rb-muted);
+  font-size: 10px;
+}
+.card-keepalive-overview-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.card-keepalive-overview-body {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 22px;
+  align-items: center;
+}
+.card-keepalive-overview-days {
+  display: grid;
+  min-height: 150px;
+  place-items: center;
+  align-content: center;
+  gap: 7px;
+  border: 1px solid rgba(42, 120, 214, 0.12);
+  border-radius: 18px;
+  background: rgba(42, 120, 214, 0.08);
+}
+.card-keepalive-overview-days strong {
+  color: var(--rb-accent);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 54px;
+  line-height: 1;
+}
+.card-keepalive-overview-days span {
+  color: var(--rb-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.card-keepalive-overview-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+.card-keepalive-overview-fields > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+.card-keepalive-overview-fields small {
+  color: var(--rb-muted);
+  font-size: 9px;
+}
+.card-keepalive-overview-fields strong {
+  overflow: hidden;
+  color: var(--rb-ink);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-keepalive-records {
+  display: grid;
+  gap: 9px;
+  padding-top: 15px;
+  border-top: 1px solid var(--rb-border);
+}
+.card-keepalive-records > strong {
+  color: var(--rb-ink);
+  font-size: 12px;
+}
+.card-keepalive-records > div {
+  display: grid;
+  gap: 6px;
+}
+.card-keepalive-records p {
+  overflow: hidden;
+  color: var(--rb-muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .at-ussd-tab-shell {
   display: grid;
@@ -2990,7 +3278,7 @@ html.dark .reborn-topbar {
 .call-number-display {
   display: grid;
   width: 100%;
-  grid-template-columns: minmax(0, 1fr) 38px;
+  grid-template-columns: minmax(0, 1fr) 38px 38px;
   align-items: center;
   gap: 8px;
 }
@@ -3014,6 +3302,12 @@ html.dark .reborn-topbar {
   border-radius: 10px;
   color: var(--rb-muted);
   background: transparent;
+}
+.call-number-display button:last-child {
+  color: var(--rb-accent);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 20px;
+  font-weight: 750;
 }
 .call-keypad {
   display: grid;
@@ -3559,6 +3853,18 @@ html.dark .terminal-module {
   border-color: rgba(255, 255, 255, 0.07);
   background: rgba(31, 42, 55, 0.72);
 }
+html.dark .card-keepalive-panel,
+html.dark .card-notification-panel,
+html.dark .card-charge-history,
+html.dark .card-keepalive-overview-card {
+  border-color: rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.035);
+}
+html.dark .card-keepalive-switch-row,
+html.dark .card-fixed-reminder {
+  border-color: rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.045);
+}
 html.dark .terminal-command-presets button {
   border-color: rgba(255, 255, 255, 0.1);
   color: var(--rb-ink);
@@ -3927,6 +4233,20 @@ html.dark .bottom-dock {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     column-gap: 18px;
   }
+  .card-keepalive-basic-grid,
+  .card-keepalive-grid,
+  .card-notification-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .card-keepalive-overview-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .card-keepalive-overview-days {
+    min-height: 120px;
+  }
+  .card-keepalive-overview-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .config-tab-surface,
   .terminal-module {
     padding: 15px;
@@ -4060,6 +4380,9 @@ html.dark .bottom-dock {
   .agent-info-notes {
     grid-template-columns: minmax(0, 1fr);
     gap: 5px;
+  }
+  .card-keepalive-overview-fields {
+    grid-template-columns: minmax(0, 1fr);
   }
   .call-line-hero {
     grid-template-columns: minmax(0, 1fr);

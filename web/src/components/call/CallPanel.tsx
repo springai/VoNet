@@ -23,7 +23,7 @@ import { fmtDur, useCallSession, type CallPhase } from "./CallSessionContext";
 const DTMF_KEYS = ["1","2","3","4","5","6","7","8","9","*","0","#"];
 const DTMF_LABELS: Record<string, string> = {
   "1":"","2":"ABC","3":"DEF","4":"GHI","5":"JKL","6":"MNO",
-  "7":"PQRS","8":"TUV","9":"WXYZ","*":"","0":"+","#":"",
+  "7":"PQRS","8":"TUV","9":"WXYZ","*":"","0":"","#":"",
 };
 
 function lineMode(card: SimCard, transport: string): string {
@@ -229,6 +229,15 @@ export function CallPanel({ card, externalNumber, onNumberConsumed }: CallPanelP
                 />
                 <button type="button" onClick={() => setPhoneNumber((value) => value.slice(0, -1))} disabled={!phoneNumber} title={t("退格")}>
                   <Delete />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPhoneNumber((value) => `${value}+`)}
+                  disabled={!cardOperable}
+                  title={t("输入国际区号前缀")}
+                  aria-label={t("输入国际区号前缀")}
+                >
+                  +
                 </button>
               </div>
               <div className="call-keypad">

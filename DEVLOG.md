@@ -343,7 +343,28 @@ npm run build
 ### 2026-11-18 真实通话工作区与全局通话状态
 
 - 现象：通话页只有分散的拨号、移动弹窗和来电监控，切换页面会丢失本地呼叫状态，挂断阶段、对方响铃、通话结束和跨页面通话入口缺少统一真实状态。
-- 修复：新增跨路由 `CallSessionProvider`，使用真实 `/calls` API 和 VoWiFi `calls/media` WebSocket 统一管理拨号、正在接通、对方响铃、来电、通话中、挂断中和通话结束状态。重构拨号盘、DTMF、取消呼叫确认、结束页、重新拨号、线路详情和媒体连接面板；通话中固定提供静音、结束、免提，静音真实控制麦克风轨道，免提真实控制浏览器输出增益并在支持时切换输出设备。右下角新增全局通话条，在其他页面显示来电或通话状态，并提供接听、静音、返回通话和挂断；通话线路列表默认展示 10 条、最近通话默认展示 5 条，超出后分别垂直滚动，拨号键盘缩小，左侧线路栏和列表内容放大 50% 以提高可读性。
+- 修复：新增跨路由 `CallSessionProvider`，使用真实 `/calls` API 和 VoWiFi `calls/media` WebSocket 统一管理拨号、正在接通、对方响铃、来电、通话中、挂断中和通话结束状态。重构拨号盘、DTMF、取消呼叫确认、结束页、重新拨号、线路详情和媒体连接面板；拨号号码区提供独立 `+` 国际区号按钮，通话中的 DTMF 键盘仍只发送 `0-9 * #`。通话中固定提供静音、结束、免提，静音真实控制麦克风轨道，免提真实控制浏览器输出增益并在支持时切换输出设备。右下角新增全局通话条，在其他页面显示来电或通话状态，并提供接听、静音、返回通话和挂断；通话线路列表默认展示 10 条、最近通话默认展示 5 条，超出后分别垂直滚动，拨号键盘缩小，左侧线路栏和列表内容放大 50% 以提高可读性。
 - 涉及文件：`web/src/components/call/CallSessionContext.tsx`、`web/src/components/call/CallPanel.tsx`、`web/src/components/call/GlobalCallWidget.tsx`、`web/src/pages/CallPage.tsx`、`web/src/App.tsx`、`web/src/components/shell/AuthenticatedShell.tsx`、`web/src/reborn.css`、`web/src/lib/i18n-en.ts`。
 - 验证：`npm test` 84 项通过，`npm run build` 通过；静态检查无演示、mock 或 fake 数据；Linux amd64 已部署，`vonet.service` 为 `active`，Agent 已重新连接。
 - 合并风险：保留 `CallSessionProvider` 和 `GlobalCallWidget`；不要恢复页面内独立移动通话状态机，也不要添加模拟通话或虚构媒体质量数据。
+
+### 2026-11-18 SIM 套餐、保号与自动续期
+
+- 现象：SIM 管理仅保存基础卡片身份，无法维护手机号、套餐、余额、周期扣费、自动延期、到期通知和扣费历史。
+- 修复：添加卡片和卡片配置新增手机号、运营商、套餐信息与保号方式。保号关闭时不显示后续设置；开启后可配置当前余额、套餐开始时间、到期日期、自定义天数/月付/季付/半年付/年付、每次扣费和自动延期。金额输入使用受控十进制格式，支持 `1.26`、`1.` 等编辑状态，限制一个小数点和两位小数；数据库和 API 以整数分保存金额，`160` 表示 `1.60`、`15` 表示 `0.15`，避免浮点误差。CNY、USD、GBP、EUR、NZD 使用统一货币字段，余额和扣费单位保持联动。新增到期通知开关、到期前提醒天数和不可关闭的到期当天保底提醒，通知通过系统设置中已启用的渠道发送。概览新增保号信息卡，默认隐藏手机号，突出展示剩余到期天数；右侧新增手动续期按钮，确认后立即扣费并延期。保号记录按 `日期 已手动/自动续期 -金额货币，余额 金额货币` 展示，并支持逐条删除扣费流水。SIM 卡片列表在信号图标前显示剩余到期天数：永久绿色、超过 10 天绿色、3 至 10 天黄色、3 天以内及过期红色。后台每分钟检查到期周期；手动和自动续期均以实际续期时间作为当前续期日重新计算周期并更新到期日期，再事务扣减余额并记录成功、余额不足和失败流水。一键导出/导入只复制卡片配置字段：ICCID、名称、类型、备注、手机号、运营商和完整保号配置，并同时导出/导入扣费流水；不导出 IMSI、SPN、PLMN、EID/AID、设备类型等硬件读取身份字段；新服务器导入后由设备重新读取身份。旧导出文件仍兼容，导入空字段保留原值。数据库 schema 升级到 42，新增保号配置、扣费流水和通知去重表，并记录 manual/automatic 扣费来源。
+- 涉及文件：`internal/store/card_keepalive.go`、`internal/store/migrations.go`、`internal/store/models.go`、`internal/server/card_keepalive_api.go`、`internal/server/card_api.go`、`cmd/vonet/main.go`、`web/src/components/cards/CardKeepAliveFields.tsx`、`web/src/components/cards/CardConfigTab.tsx`、`web/src/pages/CardsPage.tsx`、`web/src/types.ts`、`web/src/reborn.css`。
+- 验证：全量 `go test ./...` 通过；`npm test` 86 项通过；`npm run build` 通过。数据库升级前已备份到 `/opt/vonet/data/vonet.db.pre-keepalive-20261118` 和 `/opt/vonet/data/vonet.db.pre-renewal-source-20261118`，启动后确认 `user_version=42`、三张保号表均存在且扣费表包含 `source`。
+- 合并风险：保留 schema 42 的三张表、manual/automatic 扣费来源和事务扣费流程；自动续期必须继续写入扣费流水，手动续期必须允许在自动延期关闭时使用，到期当天提醒必须始终包含在启用后的通知中，货币仅允许 CNY、USD、GBP、EUR、NZD。
+
+### 2026-11-19 到期日期与同日续期
+
+- 变更：卡片配置中的周期基准字段改为“到期日期”，保存时直接编辑和显示 `expires_at`；没有显式到期日期的旧配置才按套餐开始时间或最近周期起点推算。
+- 续期规则：手动续期、自动续期都以实际续期当天的本地自然日零点为周期起点，再按自定义天数、月付、季付、半年付或年付规则精准计算新的到期日期。
+- 同一本地自然日多次手动续期不叠加周期天数，每次都从当前日期重新计算，因此重复续期会得到相同到期日期；每次续期仍按规则扣费并保留独立扣费流水。
+- 验证：`go test ./internal/store ./internal/server ./cmd/vonet` 通过，`npm test` 86 项通过，`npm run build` 通过。
+
+### 2026-11-19 未绑定卡片的配置修复入口
+
+- 修复：卡片未绑定设备时，在 SIM 概览顶部状态区下方直接展示完整的卡片配置，让用户可以修正卡片名称、类型、备注和保号配置；该区域只显示卡片配置，不混入设备配置、卡策略、AT/USSD 或其他设备内容。
+- 涉及文件：`web/src/components/cards/CardOverviewTab.tsx`、`web/src/pages/CardsPage.tsx`。
+- 验证：`npm test` 86 项通过，`npm run build` 通过。

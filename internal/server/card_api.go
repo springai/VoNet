@@ -13,42 +13,45 @@ import (
 )
 
 type simCardPayload struct {
-	ICCID       string `json:"iccid"`
-	DisplayName string `json:"display_name"`
-	Notes       string `json:"notes"`
-	CardType    string `json:"card_type"`
-	IMSI        string `json:"imsi"`
-	MSISDN      string `json:"msisdn"`
-	Carrier     string `json:"carrier"`
-	SPN         string `json:"spn"`
-	MCC         string `json:"mcc"`
-	MNC         string `json:"mnc"`
-	HomePLMN    string `json:"home_plmn"`
-	EID         string `json:"eid"`
-	ProfileAID  string `json:"profile_aid"`
-	DeviceID    string `json:"device_id"`
-	HostType    string `json:"host_type"`
-	RuntimeMode string `json:"runtime_mode"`
+	ICCID       string                `json:"iccid"`
+	DisplayName string                `json:"display_name"`
+	Notes       string                `json:"notes"`
+	CardType    string                `json:"card_type"`
+	IMSI        string                `json:"imsi"`
+	MSISDN      string                `json:"msisdn"`
+	Carrier     string                `json:"carrier"`
+	SPN         string                `json:"spn"`
+	MCC         string                `json:"mcc"`
+	MNC         string                `json:"mnc"`
+	HomePLMN    string                `json:"home_plmn"`
+	EID         string                `json:"eid"`
+	ProfileAID  string                `json:"profile_aid"`
+	DeviceID    string                `json:"device_id"`
+	HostType    string                `json:"host_type"`
+	RuntimeMode string                `json:"runtime_mode"`
+	KeepAlive   *cardKeepAlivePayload `json:"keepalive"`
 }
 
 type simCardPatchPayload struct {
-	DisplayName *string `json:"display_name"`
-	Notes       *string `json:"notes"`
-	CardType    *string `json:"card_type"`
-	IMSI        *string `json:"imsi"`
-	MSISDN      *string `json:"msisdn"`
-	Carrier     *string `json:"carrier"`
-	SPN         *string `json:"spn"`
-	MCC         *string `json:"mcc"`
-	MNC         *string `json:"mnc"`
-	HomePLMN    *string `json:"home_plmn"`
-	EID         *string `json:"eid"`
-	ProfileAID  *string `json:"profile_aid"`
-	HostType    *string `json:"host_type"`
+	DisplayName *string               `json:"display_name"`
+	Notes       *string               `json:"notes"`
+	CardType    *string               `json:"card_type"`
+	IMSI        *string               `json:"imsi"`
+	MSISDN      *string               `json:"msisdn"`
+	Carrier     *string               `json:"carrier"`
+	SPN         *string               `json:"spn"`
+	MCC         *string               `json:"mcc"`
+	MNC         *string               `json:"mnc"`
+	HomePLMN    *string               `json:"home_plmn"`
+	EID         *string               `json:"eid"`
+	ProfileAID  *string               `json:"profile_aid"`
+	HostType    *string               `json:"host_type"`
+	KeepAlive   *cardKeepAlivePayload `json:"keepalive"`
 }
 
 type simCardImportPayload struct {
-	Cards []simCardPayload `json:"cards"`
+	Cards         []simCardPayload             `json:"cards"`
+	ChargeRecords []cardKeepAliveChargePayload `json:"charge_records"`
 }
 
 func (s *Server) routeCardAPI(w http.ResponseWriter, r *http.Request, cleanPath string) bool {
@@ -91,6 +94,14 @@ func (s *Server) routeCardAPI(w http.ResponseWriter, r *http.Request, cleanPath 
 		return true
 	}
 	switch {
+	case len(segments) == 3 && segments[2] == "keepalive":
+		s.handleCardKeepAlive(w, r, iccid)
+	case len(segments) == 4 && segments[2] == "keepalive" && segments[3] == "charges":
+		s.handleCardKeepAliveCharges(w, r, iccid)
+	case len(segments) == 5 && segments[2] == "keepalive" && segments[3] == "charges":
+		s.handleCardKeepAliveCharge(w, r, iccid, segments[4])
+	case len(segments) == 4 && segments[2] == "keepalive" && segments[3] == "renew":
+		s.handleCardKeepAliveRenew(w, r, iccid)
 	case len(segments) == 3 && segments[2] == "policy":
 		s.handleCardPolicy(w, r, iccid)
 	case len(segments) == 3 && segments[2] == "apns":
@@ -121,6 +132,7 @@ func (s *Server) handleSimCardImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cards := make([]store.SimCard, 0, len(request.Cards))
+	keepAlives := make([]store.CardKeepAlive, 0, len(request.Cards))
 	for index, payload := range request.Cards {
 		card, err := normalizeSimCardPayload(payload)
 		if err != nil {
@@ -129,11 +141,35 @@ func (s *Server) handleSimCardImport(w http.ResponseWriter, r *http.Request) {
 		}
 		card.Source = "import"
 		cards = append(cards, card)
+		if payload.KeepAlive != nil {
+			keepAlive, keepAliveErr := normalizeCardKeepAlivePayload(card.ICCID, *payload.KeepAlive)
+			if keepAliveErr != nil {
+				writeError(w, http.StatusBadRequest, "invalid_card_import", fmt.Sprintf("card %d keep-alive: %v", index+1, keepAliveErr))
+				return
+			}
+			keepAlives = append(keepAlives, keepAlive)
+		}
 	}
 	result, err := s.store.ImportSimCards(r.Context(), cards)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "card_import_failed", err.Error())
 		return
+	}
+	for _, keepAlive := range keepAlives {
+		if _, err := s.store.UpsertCardKeepAlive(r.Context(), keepAlive); err != nil {
+			s.writeStoreError(w, err)
+			return
+		}
+	}
+	if len(request.ChargeRecords) > 0 {
+		chargeRecords := make([]store.CardKeepAliveCharge, 0, len(request.ChargeRecords))
+		for _, payload := range request.ChargeRecords {
+			chargeRecords = append(chargeRecords, payload.model())
+		}
+		if _, err := s.store.ImportCardKeepAliveCharges(r.Context(), chargeRecords); err != nil {
+			s.writeStoreError(w, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
 		"imported": len(cards),
@@ -168,6 +204,7 @@ func (s *Server) handleSimCards(w http.ResponseWriter, r *http.Request) {
 			} else {
 				response["policy_status"] = "missing"
 			}
+			response["keepalive"] = s.cardKeepAlivePayload(r.Context(), card.ICCID)
 			result = append(result, response)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"cards": result}})
@@ -181,6 +218,15 @@ func (s *Server) handleSimCards(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_sim_card", err.Error())
 			return
+		}
+		var keepAlive *store.CardKeepAlive
+		if request.KeepAlive != nil {
+			value, keepAliveErr := normalizeCardKeepAlivePayload(card.ICCID, *request.KeepAlive)
+			if keepAliveErr != nil {
+				writeError(w, http.StatusBadRequest, "invalid_card_keepalive", keepAliveErr.Error())
+				return
+			}
+			keepAlive = &value
 		}
 		if _, err := s.store.SimCard(r.Context(), card.ICCID); err == nil {
 			writeError(w, http.StatusConflict, "iccid_exists", "a card with this ICCID is already registered")
@@ -219,7 +265,18 @@ func (s *Server) handleSimCards(w http.ResponseWriter, r *http.Request) {
 			s.writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"data": simCardResponse(card)})
+		response := simCardResponse(card)
+		if keepAlive != nil {
+			saved, keepAliveErr := s.store.UpsertCardKeepAlive(r.Context(), *keepAlive)
+			if keepAliveErr != nil {
+				s.writeStoreError(w, keepAliveErr)
+				return
+			}
+			response["keepalive"] = cardKeepAliveResponse(saved, time.Now().UTC())
+		} else {
+			response["keepalive"] = defaultCardKeepAliveResponse(time.Now().UTC())
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"data": response})
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
@@ -254,6 +311,7 @@ func (s *Server) handleSimCard(w http.ResponseWriter, r *http.Request, iccid str
 		} else {
 			response["policy_status"] = "missing"
 		}
+		response["keepalive"] = s.cardKeepAlivePayload(r.Context(), normalized)
 		writeJSON(w, http.StatusOK, map[string]any{"data": response})
 	case http.MethodPatch:
 		existing, err := s.store.SimCard(r.Context(), normalized)
@@ -266,6 +324,15 @@ func (s *Server) handleSimCard(w http.ResponseWriter, r *http.Request, iccid str
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
+		var keepAlive *store.CardKeepAlive
+		if request.KeepAlive != nil {
+			value, keepAliveErr := normalizeCardKeepAlivePayload(normalized, *request.KeepAlive)
+			if keepAliveErr != nil {
+				writeError(w, http.StatusBadRequest, "invalid_card_keepalive", keepAliveErr.Error())
+				return
+			}
+			keepAlive = &value
+		}
 		updated, err := applySimCardPatch(existing, request)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_sim_card", err.Error())
@@ -275,7 +342,18 @@ func (s *Server) handleSimCard(w http.ResponseWriter, r *http.Request, iccid str
 			s.writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"data": simCardResponse(updated)})
+		response := simCardResponse(updated)
+		if keepAlive != nil {
+			saved, keepAliveErr := s.store.UpsertCardKeepAlive(r.Context(), *keepAlive)
+			if keepAliveErr != nil {
+				s.writeStoreError(w, keepAliveErr)
+				return
+			}
+			response["keepalive"] = cardKeepAliveResponse(saved, time.Now().UTC())
+		} else {
+			response["keepalive"] = s.cardKeepAlivePayload(r.Context(), normalized)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": response})
 	case http.MethodDelete:
 		if err := s.store.DeleteSimCard(r.Context(), normalized); err != nil {
 			s.writeStoreError(w, err)

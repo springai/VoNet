@@ -348,24 +348,53 @@ func (s *Store) ImportSimCards(ctx context.Context, values []SimCard) (SimCardIm
 	for _, value := range normalized {
 		var exists int
 		created := false
-		err := tx.QueryRowContext(ctx, `SELECT 1 FROM sim_cards WHERE iccid = ?`, value.ICCID).Scan(&exists)
+		sealed, err := s.sealSimCardFields(value)
+		if err != nil {
+			return result, fmt.Errorf("seal imported SIM card %q: %w", value.ICCID, err)
+		}
+		err = tx.QueryRowContext(ctx, `SELECT 1 FROM sim_cards WHERE iccid = ?`, value.ICCID).Scan(&exists)
 		switch {
 		case err == nil:
 			_, err = tx.ExecContext(ctx, `
 				UPDATE sim_cards SET
-					display_name = ?, notes = ?, card_type = ?, updated_at = ?
+					display_name = ?, notes = ?, card_type = ?,
+					imsi = CASE WHEN ? <> '' THEN ? ELSE imsi END,
+					msisdn = CASE WHEN ? <> '' THEN ? ELSE msisdn END,
+					carrier = CASE WHEN ? <> '' THEN ? ELSE carrier END,
+					spn = CASE WHEN ? <> '' THEN ? ELSE spn END,
+					mcc = CASE WHEN ? <> '' THEN ? ELSE mcc END,
+					mnc = CASE WHEN ? <> '' THEN ? ELSE mnc END,
+					home_plmn = CASE WHEN ? <> '' THEN ? ELSE home_plmn END,
+					eid = CASE WHEN ? <> '' THEN ? ELSE eid END,
+					profile_aid = CASE WHEN ? <> '' THEN ? ELSE profile_aid END,
+					gid1 = CASE WHEN ? <> '' THEN ? ELSE gid1 END,
+					gid2 = CASE WHEN ? <> '' THEN ? ELSE gid2 END,
+					smsc = CASE WHEN ? <> '' THEN ? ELSE smsc END,
+					derived_json = CASE WHEN ? <> '{}' THEN ? ELSE derived_json END,
+					host_type = CASE WHEN ? <> '' THEN ? ELSE host_type END,
+					source = ?, updated_at = ?
 				WHERE iccid = ?
-			`, value.DisplayName, value.Notes, value.CardType, now.Unix(), value.ICCID)
+			`, value.DisplayName, value.Notes, value.CardType,
+				value.IMSI, sealed.IMSI, value.MSISDN, sealed.MSISDN,
+				value.Carrier, value.Carrier, value.SPN, value.SPN,
+				value.MCC, value.MCC, value.MNC, value.MNC,
+				value.HomePLMN, value.HomePLMN, value.EID, sealed.EID,
+				value.ProfileAID, sealed.ProfileAID, value.GID1, sealed.GID1,
+				value.GID2, sealed.GID2, value.SMSC, sealed.SMSC,
+				string(value.DerivedJSON), sealed.Derived,
+				value.HostType, value.HostType, value.Source, now.Unix(), value.ICCID)
 		case errors.Is(err, sql.ErrNoRows):
 			created = true
 			_, err = tx.ExecContext(ctx, `
 				INSERT INTO sim_cards (
 					iccid, display_name, notes, card_type, imsi, msisdn, carrier, spn,
-					mcc, mnc, home_plmn, eid, profile_aid, host_type, source,
+					mcc, mnc, home_plmn, eid, profile_aid, gid1, gid2, smsc, derived_json, host_type, source,
 					created_at, updated_at
-				) VALUES (?, ?, ?, ?, '', '', '', '', '', '', '', '', '', '', ?, ?, ?)
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`, value.ICCID, value.DisplayName, value.Notes, value.CardType,
-				value.Source, now.Unix(), now.Unix())
+				sealed.IMSI, sealed.MSISDN, value.Carrier, value.SPN, value.MCC, value.MNC,
+				value.HomePLMN, sealed.EID, sealed.ProfileAID, sealed.GID1, sealed.GID2,
+				sealed.SMSC, sealed.Derived, value.HostType, value.Source, now.Unix(), now.Unix())
 		default:
 			return result, fmt.Errorf("inspect imported SIM card %q: %w", value.ICCID, err)
 		}

@@ -19,14 +19,34 @@ const cards = [{
   binding: { deviceId: "Reader-1" },
 }];
 
-test("card transfer exports only editable card configuration", () => {
+const emptyKeepAlive = {
+  enabled: false,
+  planInfo: "",
+  currency: "CNY",
+  balanceCents: 0,
+  planStartAt: 0,
+  currentCycleStartAt: 0,
+  expiresAt: 0,
+  cycleRule: "monthly",
+  cycleDays: 0,
+  deductionCents: 0,
+  autoRenew: false,
+  notificationEnabled: false,
+  notifyDaysBefore: 3,
+};
+
+test("card transfer exports complete editable card configuration", () => {
   assert.deepEqual(buildCardTransfer(cards), {
     cards: [{
       iccid: "8944300000000000001",
       displayName: "UK2",
       cardType: "esim_profile",
       notes: "Voice and SMS",
+      msisdn: "",
+      carrier: "",
+      keepalive: emptyKeepAlive,
     }],
+    chargeRecords: [],
   });
   assert.match(cardTransferFilename(new Date("2026-11-15T00:00:00Z")), /^vonet-cards-2026-11-15\.json$/);
 });
@@ -44,6 +64,9 @@ test("card transfer imports normalized cards and rejects duplicate ICCIDs", () =
     displayName: "UK2",
     cardType: "physical_sim",
     notes: "Updated",
+    msisdn: "",
+    carrier: "",
+    keepalive: emptyKeepAlive,
   }]);
 
   assert.throws(() => parseCardTransfer({

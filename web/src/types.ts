@@ -336,6 +336,59 @@ export interface OperatorSelection {
 
 export type SimCardType = "physical_sim" | "esim_profile";
 export type SimCardStatus = "active" | "offline" | "conflict" | "unknown";
+export type CardKeepAliveCurrency = "CNY" | "USD" | "GBP" | "EUR" | "NZD";
+export type CardKeepAliveCycleRule = "custom_days" | "monthly" | "quarterly" | "half_yearly" | "yearly";
+export type CardKeepAliveChargeStatus = "success" | "insufficient" | "failed";
+
+export interface CardKeepAliveConfig {
+  enabled: boolean;
+  planInfo: string;
+  currency: CardKeepAliveCurrency;
+  balanceCents: number;
+  planStartAt: number;
+  cycleRule: CardKeepAliveCycleRule;
+  cycleDays: number;
+  deductionCents: number;
+  autoRenew: boolean;
+  notificationEnabled: boolean;
+  notifyDaysBefore: number;
+  currentCycleStartAt?: number;
+  expiresAt?: number;
+  lastRenewedAt?: number;
+  lastChargeAt?: number;
+  status?: "disabled" | "incomplete" | "active" | "expired";
+  daysRemaining?: number;
+}
+
+export interface CardKeepAliveCharge {
+  id: number;
+  iccid: string;
+  status: CardKeepAliveChargeStatus;
+  source: "automatic" | "manual";
+  amountCents: number;
+  balanceBeforeCents: number;
+  balanceAfterCents: number;
+  currency: CardKeepAliveCurrency;
+  cycleStartAt: number;
+  cycleEndAt: number;
+  note: string;
+  createdAt: number;
+}
+
+export interface CardKeepAliveRenewalResult {
+  iccid: string;
+  status: "success" | "insufficient" | "failed";
+  source: "manual" | "automatic";
+  amountCents: number;
+  balanceBeforeCents: number;
+  balanceAfterCents: number;
+  currency: CardKeepAliveCurrency;
+  cycleStartAt: number;
+  cycleEndAt: number;
+  newExpiresAt: number;
+  note: string;
+  createdAt: number;
+}
 export type CardDeviceMode = "at" | "qmi" | "mbim" | "pcsc";
 export type CellularIMSMode = "mbn_default" | "force_enabled" | "force_disabled";
 
@@ -363,6 +416,7 @@ export interface SimCard {
   status: SimCardStatus;
   policyStatus?: "applied" | "pending" | "waiting" | "suspended" | "offline" | "failed" | "missing";
   policy?: CardPolicy;
+  keepalive?: CardKeepAliveConfig;
   registered: boolean;
   conflict?: boolean;
   imsi?: string;
@@ -398,6 +452,7 @@ export interface SimCardInput {
   eid?: string;
   profileAid?: string;
   deviceId?: string;
+  keepalive?: CardKeepAliveConfig;
 }
 
 export interface SimCardCandidate {

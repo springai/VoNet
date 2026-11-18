@@ -655,6 +655,7 @@ func run(logger *slog.Logger, logs *loghub.Hub) error {
 	handler.StartSSOCleanup(pollContext)
 	go handler.StartSMSSyncLoop(pollContext, 15*time.Second)
 	handler.StartCellularDataReconciler(pollContext)
+	go handler.StartCardKeepAlive(pollContext)
 	handler.StartTelegramBot(pollContext)
 	handler.StartSMSNotificationDispatchers(pollContext)
 	go handler.StartCellularCallMonitor(pollContext)

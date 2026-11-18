@@ -19,7 +19,7 @@ func TestAuthCleanupSchema34MigrationModes(t *testing.T) {
 		secureColumn  bool
 	}{
 		{name: "no migrate", args: []string{"--no-migrate"}, targetVersion: 34, secureColumn: false},
-		{name: "migrate", args: nil, targetVersion: 40, secureColumn: true},
+		{name: "migrate", args: nil, targetVersion: 42, secureColumn: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
