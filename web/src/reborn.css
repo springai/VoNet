@@ -2016,6 +2016,9 @@ html.dark .reborn-topbar {
   gap: 10px;
   margin-top: 16px;
 }
+.overview-quick-grid-single {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
 .overview-action-card {
   display: flex;
   min-height: 76px;
@@ -2512,6 +2515,8 @@ html.dark .reborn-topbar {
 }
 .sms-thread-list::-webkit-scrollbar { display: none; }
 .sms-thread-item-shell {
+  height: 72px;
+  min-height: 72px;
   overflow: hidden;
   border: 0 !important;
   border-radius: 14px;
@@ -2522,17 +2527,30 @@ html.dark .reborn-topbar {
   background: rgba(218, 216, 242, 0.72);
 }
 .sms-thread-row {
+  height: 72px;
   min-height: 72px;
   align-items: center !important;
   padding: 10px !important;
   background: transparent !important;
 }
+.sms-thread-row > button {
+  height: 100%;
+  min-width: 0;
+}
 .sms-thread-row-grid {
   display: grid;
+  width: 100%;
+  height: 52px;
   min-width: 0;
   grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
+}
+.sms-thread-copy {
+  display: grid;
+  min-width: 0;
+  grid-template-rows: 18px 16px 12px;
+  row-gap: 2px;
 }
 .sms-thread-avatar {
   display: grid;
@@ -2555,17 +2573,18 @@ html.dark .reborn-topbar {
   white-space: nowrap;
 }
 .sms-thread-title {
+  line-height: 18px;
   color: var(--rb-ink);
   font-size: 13px;
   font-weight: 750;
 }
 .sms-thread-preview {
-  margin-top: 3px;
+  line-height: 16px;
   color: var(--rb-muted);
   font-size: 11px;
 }
 .sms-thread-device {
-  margin-top: 3px;
+  line-height: 12px;
   color: var(--rb-muted);
   font-size: 9px;
 }
@@ -2577,6 +2596,7 @@ html.dark .reborn-topbar {
   color: var(--rb-muted);
   font-family: "JetBrains Mono", monospace;
   font-size: 9px;
+  line-height: 12px;
 }
 .sms-thread-delete-btn {
   right: 8px;

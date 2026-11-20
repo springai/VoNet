@@ -137,7 +137,7 @@ export function ContactList(props: ContactListProps) {
                     <span className="sms-thread-avatar">
                       {String(thread.peer || "").trim().startsWith("+") ? <PhoneRegular /> : <NumberSymbolRegular />}
                     </span>
-                    <div className="min-w-0">
+                    <div className="sms-thread-copy">
                       <div className="sms-thread-title">{thread.peer}</div>
                       <div className="sms-thread-preview">{thread.lastMessage}</div>
                       <div className="sms-thread-device">{thread.localPhone || thread.lastDeviceName || t("全部卡片")}</div>

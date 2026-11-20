@@ -13,6 +13,7 @@ import {
 } from "../components/call/callApi";
 import { activeCardDevice, listCards } from "../components/cards/cardApi";
 import type { SimCard } from "../types";
+import { compareNaturalCards } from "../lib/naturalSort";
 
 function CallHistoryItem({
   record,
@@ -90,7 +91,7 @@ export default function CallPage() {
 
   const loadCards = useCallback(async () => {
     try {
-      const list = await listCards();
+      const list = [...(await listCards())].sort(compareNaturalCards);
       setCards(list);
       if (list.length > 0) {
         const preferred =

@@ -6,6 +6,8 @@ import {
   ArrowUploadRegular,
   CardUiRegular,
   ChevronLeftRegular,
+  DeleteRegular,
+  SettingsRegular,
 } from "@fluentui/react-icons";
 import { SignalHigh, SignalLow, SignalMedium, Wifi, WifiLow, WifiOff } from "lucide-react";
 import { api, apiMessage } from "../api";
@@ -36,6 +38,7 @@ import { buildCardTransfer, cardTransferFilename, parseCardTransferFile } from "
 import { useMediaQuery } from "../lib/useMediaQuery";
 import { tf, useI18n } from "../lib/i18n";
 import { cx } from "../lib/utils";
+import { compareNaturalCards } from "../lib/naturalSort";
 import { displayICCID } from "../lib/sensitive";
 import { useShowSensitive } from "../components/devices/shared";
 import { WorkspaceSectionNav } from "../components/shell/WorkspaceSectionNav";
@@ -531,12 +534,12 @@ export default function CardsPage() {
 
   const filteredCards = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return cards;
-    return cards.filter((card) =>
+    const visible = !q ? cards : cards.filter((card) =>
       `${card.iccid} ${card.displayName || ""} ${card.carrier || ""} ${card.imsi || ""}`
         .toLowerCase()
         .includes(q),
     );
+    return [...visible].sort(compareNaturalCards);
   }, [cards, query]);
   const availableCandidates = useMemo(
     () => candidates.filter((candidate) => !candidate.registered),
@@ -681,20 +684,47 @@ export default function CardsPage() {
                 deleting={deleting}
               >
                 {!selectedCard.binding?.deviceId?.trim() ? (
-                  <div className="config-tab-surface">
-                    <CardConfigTab card={selectedCard} onSaved={() => void loadCards()} />
-                  </div>
+                  <>
+                    <div className="config-tab-surface">
+                      <CardConfigTab card={selectedCard} onSaved={() => void loadCards()} />
+                    </div>
+                    <section className="overview-quick-actions">
+                      <div className="overview-quick-header">
+                        <div>
+                          <strong><SettingsRegular /> {t("快捷操作")}</strong>
+                          <span>{t("连接与通话")}</span>
+                        </div>
+                        <small>{t("常用设备操作")}</small>
+                      </div>
+                      <div className="overview-quick-grid overview-quick-grid-single">
+                        <div className="overview-action-card overview-action-danger">
+                          <div>
+                            <strong>{t("删除卡片")}</strong>
+                            <span>{t("永久删除此 SIM 卡配置")}</span>
+                          </div>
+                          <Button
+                            variant="danger"
+                            className="overview-danger-button"
+                            loading={deleting}
+                            onClick={() => void removeSelectedCard()}
+                            icon={<DeleteRegular />}
+                          >
+                            {t("删除卡片")}
+                          </Button>
+                        </div>
+                      </div>
+                      <p>{t("快捷操作会按当前设备能力显示；执行危险操作前会弹出确认。")}</p>
+                    </section>
+                  </>
                 ) : activeTab === "card_config" ? (
                   <div className="config-tab-surface">
                     <CardConfigTab card={selectedCard} onSaved={() => void loadCards()} />
                   </div>
-                ) : null}
-                {activeTab === "config" ? (
+                ) : activeTab === "config" ? (
                   <div className="config-tab-surface">
                     <CardDeviceConfig card={selectedCard} onSaved={() => void loadCards()} />
                   </div>
-                ) : null}
-                {activeTab === "policy" ? (
+                ) : activeTab === "policy" ? (
                   <CardPolicyPanel
                     deviceId={selectedCard.binding?.deviceId || ""}
                     iccid={selectedCard.iccid}
@@ -703,8 +733,7 @@ export default function CardsPage() {
                     onPolicyChanged={() => loadPolicy(selectedCard.iccid)}
                     wifiCallingOnly={selectedReaderPolicy}
                   />
-                ) : null}
-                {activeTab === "at_ussd" ? (
+                ) : activeTab === "at_ussd" ? (
                   <CardAtUssdTab
                     key={`at-ussd:${selectedCard.iccid}`}
                     deviceId={selectedCard.binding?.deviceId || ""}

@@ -32,6 +32,7 @@ import { ContactList } from "../components/sms/ContactList";
 import { ThreadPanel } from "../components/sms/ThreadPanel";
 import { NewSmsModal, type NewSmsPayload } from "../components/sms/NewSmsModal";
 import { tf, tl, useI18n } from "../lib/i18n";
+import { compareNaturalCards } from "../lib/naturalSort";
 
 const THREAD_PAGE = 80;
 const MOBILE_BREAKPOINT = 980;
@@ -134,12 +135,14 @@ export default function SmsPage() {
   const showContactColumn = isDesktop || !selectedKey;
   const showDetailColumn = isDesktop || !!selectedKey;
   const devices = useMemo(
-    () => cards.map((card) => ({
-      id: card.iccid,
-      name: card.displayName || card.carrier || card.iccid,
-      healthy: card.status === "active",
-      card,
-    })),
+    () => cards
+      .map((card) => ({
+        id: card.iccid,
+        name: card.displayName || card.carrier || card.iccid,
+        healthy: card.status === "active",
+        card,
+      }))
+      .sort((left, right) => compareNaturalCards(left.card, right.card)),
     [cards],
   );
 

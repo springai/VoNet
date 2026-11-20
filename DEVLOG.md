@@ -368,3 +368,27 @@ npm run build
 - 修复：卡片未绑定设备时，在 SIM 概览顶部状态区下方直接展示完整的卡片配置，让用户可以修正卡片名称、类型、备注和保号配置；该区域只显示卡片配置，不混入设备配置、卡策略、AT/USSD 或其他设备内容。
 - 涉及文件：`web/src/components/cards/CardOverviewTab.tsx`、`web/src/pages/CardsPage.tsx`。
 - 验证：`npm test` 86 项通过，`npm run build` 通过。
+
+### 2026-11-20 离线卡片快捷操作
+
+- 修复：离线且未绑定设备的卡片在卡片配置下方新增快捷操作区域，目前只提供“删除卡片”按钮，不显示重连 VoWiFi、重启模组或其他设备操作。删除按钮继续使用原二次确认和 SIM 卡删除流程。
+- 涉及文件：`web/src/pages/CardsPage.tsx`、`web/src/reborn.css`。
+- 验证：`npm test` 86 项通过，`npm run build` 通过。
+
+### 2026-11-20 短信会话列表重叠修复
+
+- 修复：短信会话列表改为稳定 72px 行轨道，标题、消息预览和卡片名称分别使用固定行高及独立文本容器，长文本继续单行省略，避免窄屏或动态内容将相邻会话文字挤压重叠。短信加载、筛选、刷新、长按和删除逻辑不变。
+- 涉及文件：`web/src/components/sms/ContactList.tsx`、`web/src/reborn.css`。
+- 验证：`npm test` 86 项通过，`npm run build` 通过。
+
+### 2026-11-20 SIM 卡片列表自然排序
+
+- 修复：SIM 管理卡片列表不再依赖数据库 ICCID 顺序，改为稳定自然排序。字母开头的卡片优先，字母和数字分段按升序比较，数字按数值自然排序，例如 `ASDA-2` 排在 `ASDA-10` 前；同名卡片依次按运营商和 ICCID 排序。搜索前后的列表顺序保持一致。
+- 涉及文件：`web/src/lib/naturalSort.ts`、`web/src/pages/CardsPage.tsx`、`web/test/naturalSort.test.mjs`。
+- 验证：`npm test` 88 项通过，`npm run build` 通过。
+
+### 2026-11-20 全局设备与卡片列表自然排序
+
+- 修复：将 SIM 卡片自然排序扩展到监控页设备列表和卡片列表、设备管理设备列表、短信左侧卡片范围、通话线路列表。设备按名称自然排序并在同名时按设备 ID 排序；卡片继续按名称、运营商、ICCID 排序。设备管理中的信号排序保留，并在信号相同时使用设备自然顺序。
+- 涉及文件：`web/src/lib/naturalSort.ts`、`web/src/pages/DashboardPage.tsx`、`web/src/pages/DevicesPage.tsx`、`web/src/pages/SmsPage.tsx`、`web/src/pages/CallPage.tsx`、`web/test/naturalSort.test.mjs`。
+- 验证：`npm test` 89 项通过，`npm run build` 通过。

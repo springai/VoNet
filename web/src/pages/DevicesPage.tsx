@@ -17,6 +17,7 @@ import { copyText, isDeviceOnline, isQmiControl, isRecoveringPhase } from "../co
 import type { AddDeviceForm, LoadError } from "../components/devices/types";
 import { listCardCandidates, listCards } from "../components/cards/cardApi";
 import { tf, useI18n } from "../lib/i18n";
+import { compareNaturalDevices } from "../lib/naturalSort";
 
 const VALID_TABS = new Set(["esim", "config"]);
 const EMPTY_ADD: AddDeviceForm = {
@@ -468,14 +469,14 @@ export default function DevicesPage() {
     }
     d.sort((a, b) => {
       if (sortKey === "name") {
-        const an = (a.name || a.id || "").toLowerCase();
-        const bn = (b.name || b.id || "").toLowerCase();
-        return an < bn ? (sortDir === "asc" ? -1 : 1) : an > bn ? (sortDir === "asc" ? 1 : -1) : 0;
+        const compared = compareNaturalDevices(a, b);
+        return sortDir === "asc" ? compared : -compared;
       }
       if (sortKey === "signal") {
         const av = Number(a?.modem?.signalDbm ?? -999);
         const bv = Number(b?.modem?.signalDbm ?? -999);
-        return sortDir === "asc" ? av - bv : bv - av;
+        const compared = av - bv || compareNaturalDevices(a, b);
+        return sortDir === "asc" ? compared : -compared;
       }
       return 0;
     });

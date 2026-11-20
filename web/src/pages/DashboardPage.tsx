@@ -19,6 +19,7 @@ import { buildDashboardCardViews, moduleOnlineRate } from "../components/dashboa
 import { Tabs } from "../components/ui/Tabs";
 import { SensitiveInfoButton } from "../components/ui/SensitiveInfoButton";
 import { listCards } from "../components/cards/cardApi";
+import { compareNaturalCards, compareNaturalDevices } from "../lib/naturalSort";
 
 interface LoadError { message: string; status?: number; method?: string; url?: string }
 
@@ -95,6 +96,11 @@ export default function DashboardPage() {
 
   const moduleRate = useMemo(() => moduleOnlineRate(devices), [devices]);
   const dashboardCards = useMemo(() => buildDashboardCardViews(cards, devices), [cards, devices]);
+  const sortedDevices = useMemo(() => [...devices].sort(compareNaturalDevices), [devices]);
+  const sortedCards = useMemo(
+    () => [...dashboardCards].sort((left, right) => compareNaturalCards(left.card, right.card)),
+    [dashboardCards],
+  );
   const openDevice = (id: string) => navigate(`/devices?device=${encodeURIComponent(id)}&tab=config`);
   const openCard = (iccid: string) => navigate(`/cards?iccid=${encodeURIComponent(iccid)}&tab=overview`);
   const dashboardTabs = [
@@ -132,7 +138,7 @@ export default function DashboardPage() {
             <EmptyState title={t("暂无设备接入")} subtitle={t("请先在设备管理中添加或接管设备")} />
           ) : (
             <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-              {devices.map((device) => (
+              {sortedDevices.map((device) => (
                 <DeviceCard key={device.id} device={device} onOpen={openDevice} />
               ))}
             </div>
@@ -145,7 +151,7 @@ export default function DashboardPage() {
           ) : null}
           {cardsLoading && cards.length === 0 ? (
             <ListSkeleton rows={10} />
-          ) : dashboardCards.length === 0 ? (
+          ) : sortedCards.length === 0 ? (
             <EmptyState title={t("暂无卡片")} subtitle={t("请在 SIM 管理中保存当前识别到的卡片")} />
           ) : (
             <>
@@ -153,7 +159,7 @@ export default function DashboardPage() {
                 <SensitiveInfoButton showLabel />
               </div>
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-                {dashboardCards.map((item) => (
+                {sortedCards.map((item) => (
                   <DashboardCardCard key={item.card.iccid} item={item} onOpen={openCard} />
                 ))}
               </div>
