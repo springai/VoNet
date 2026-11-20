@@ -1,11 +1,11 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowSyncRegular, AddRegular, ChevronLeftRegular } from "@fluentui/react-icons";
+import { ArrowSyncRegular, AddRegular, RouterRegular } from "@fluentui/react-icons";
 import { api, apiMessage } from "../api";
 import type { DeviceConfig, DeviceListItem, DiscoveredDevice, SimCardCandidate } from "../types";
 import { usePolling } from "../lib/usePolling";
 import { useMediaQuery } from "../lib/useMediaQuery";
-import { Button, RefreshButton, ErrorState, ListSkeleton, Tabs, confirmDialog, message } from "../components/ui";
+import { Button, MobileListSelector, RefreshButton, ErrorState, ListSkeleton, Tabs, confirmDialog, message } from "../components/ui";
 import { DeviceListPanel, type StatusFilter, type SortDir, type SortKey } from "../components/devices/DeviceListPanel";
 import { AgentManager } from "../components/agents/AgentManager";
 import { WorkspaceSectionNav } from "../components/shell/WorkspaceSectionNav";
@@ -76,14 +76,6 @@ export default function DevicesPage() {
   const discoveryInFlightRef = useRef(false);
 
   const isMobile = useMediaQuery("(max-width: 767px)");
-
-  const handleBackToList = useCallback(() => {
-    setSelectedId("");
-    const p = new URLSearchParams(searchParamsRef.current);
-    p.delete("device");
-    p.delete("tab");
-    setSearchParams(p, { replace: true });
-  }, [setSearchParams]);
 
   const loadConfig = useCallback(async (id: string) => {
     if (!id) {
@@ -482,6 +474,17 @@ export default function DevicesPage() {
     });
     return d;
   }, [list, query, statusFilter, sortKey, sortDir]);
+  const deviceSelectorItems = useMemo(
+    () => filteredDevices.map((device) => ({
+      id: device.id,
+      title: device.name || device.id,
+      subtitle: device.interface || device.modem?.operator || device.id,
+      status: isDeviceOnline(device) ? t("在线") : t("离线"),
+      statusTone: isDeviceOnline(device) ? "success" as const : "danger" as const,
+      icon: <RouterRegular />,
+    })),
+    [filteredDevices, t],
+  );
 
   const selectedListItem = useMemo(() => list.find((d) => d.id === selectedId) || null, [list, selectedId]);
   const configDirty = editConfig && configSnapshot ? JSON.stringify(editConfig) !== configSnapshot : false;
@@ -521,7 +524,7 @@ export default function DevicesPage() {
           ) : null}
           {selectedAgentId ? (
             <div className={`devices-layout workspace-layout ${isMobile ? "is-mobile" : ""}`}>
-              {(!isMobile || !selectedId) && (
+              {!isMobile && (
                 <DeviceListPanel
                   embedded
                   title={t("设备管理")}
@@ -560,11 +563,39 @@ export default function DevicesPage() {
                   }
                 />
               )}
-              <div className={`workspace-detail-panel min-w-0 space-y-4 ${isMobile && selectedId ? "" : isMobile ? "hidden" : ""}`}>
-                {isMobile && selectedId && selectedListItem ? (
-                  <Button variant="text" onClick={handleBackToList} icon={<ChevronLeftRegular />}>
-                    {t("返回")}
-                  </Button>
+              <div className="workspace-detail-panel min-w-0 space-y-4">
+                {isMobile ? (
+                  <MobileListSelector
+                    items={deviceSelectorItems}
+                    selectedId={selectedId}
+                    onSelect={selectDevice}
+                    icon={<RouterRegular />}
+                    placeholder={t("选择设备")}
+                    ariaLabel={t("选择设备")}
+                    emptyText={t("暂无设备")}
+                    footer={
+                      <>
+                        <RefreshButton loading={listLoading} onClick={refreshAll} />
+                        <Button
+                          size="small"
+                          className="workspace-icon-button"
+                          loading={rescanning}
+                          onClick={handleRescan}
+                          icon={<ArrowSyncRegular />}
+                          title={t("重新扫描")}
+                          aria-label={t("重新扫描")}
+                        />
+                        <Button
+                          size="small"
+                          className="workspace-icon-button"
+                          onClick={openAddDialog}
+                          icon={<AddRegular />}
+                          title={t("添加设备")}
+                          aria-label={t("添加设备")}
+                        />
+                      </>
+                    }
+                  />
                 ) : null}
                 {selectedListItem ? (
                   <>

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   ArrowDownloadRegular,
@@ -46,11 +47,22 @@ function itemsForPath(pathname: string) {
 export function WorkspaceSectionNav() {
   const { pathname } = useLocation();
   const { t } = useI18n();
+  const navRef = useRef<HTMLElement | null>(null);
   const items = itemsForPath(pathname);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      navRef.current
+        ?.querySelector<HTMLElement>(".workspace-section-tab.is-active")
+        ?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [pathname, items]);
+
   if (!items) return null;
 
   return (
-    <nav className="workspace-section-tabs" aria-label={t("页面分类")}>
+    <nav ref={navRef} className="workspace-section-tabs" aria-label={t("页面分类")}>
       {items.map((item) => {
         const Icon = item.icon;
         return (

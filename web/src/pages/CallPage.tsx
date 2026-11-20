@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Delete, PhoneIncoming, PhoneMissed, PhoneOutgoing, Search } from "lucide-react";
-import { ErrorState, Input, Spinner } from "../components/ui";
+import { ErrorState, Input, MobileListSelector, Spinner } from "../components/ui";
 import { useI18n } from "../lib/i18n";
+import { useMediaQuery } from "../lib/useMediaQuery";
 import { usePolling } from "../lib/usePolling";
 import { cx } from "../lib/utils";
 import { CallPanel } from "../components/call/CallPanel";
@@ -74,6 +75,7 @@ export default function CallPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [dialNumber, setDialNumber] = useState("");
+  const isMobile = useMediaQuery("(max-width: 979px)");
 
   const selectedCard = cards.find((card) => card.iccid === selectedCardId) || null;
   const selectedDeviceId = activeCardDevice(selectedCard);
@@ -133,6 +135,20 @@ export default function CallPage() {
   usePolling(loadHistory, 10000);
 
   const readyCount = useMemo(() => cards.filter((card) => card.status === "active" && activeCardDevice(card)).length, [cards]);
+  const lineSelectorItems = useMemo(
+    () => cards.map((card) => {
+      const operable = card.status === "active" && !!activeCardDevice(card);
+      return {
+        id: card.iccid,
+        title: card.displayName || card.carrier || card.iccid,
+        subtitle: card.binding?.deviceName || card.binding?.deviceId || card.iccid,
+        status: operable ? t("在线") : t("离线"),
+        statusTone: operable ? "success" as const : "danger" as const,
+        icon: <PhoneOutgoing />,
+      };
+    }),
+    [cards, t],
+  );
 
   async function removeHistory(id: number) {
     if (!selectedDeviceId || !selectedCard) return;
@@ -148,6 +164,18 @@ export default function CallPage() {
   return (
     <div className="call-page workspace-page">
       <div className="call-reference-layout">
+        {isMobile ? (
+          <MobileListSelector
+            className="call-mobile-line-selector"
+            items={lineSelectorItems}
+            selectedId={selectedCardId}
+            onSelect={selectCard}
+            icon={<PhoneOutgoing />}
+            placeholder={t("选择通话线路")}
+            ariaLabel={t("选择通话线路")}
+            emptyText={t("暂无通话线路")}
+          />
+        ) : null}
         <aside className="call-lines-panel">
           <div className="call-lines-heading">
             <strong>{t("通话线路")}</strong>

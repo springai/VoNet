@@ -5,7 +5,6 @@ import {
   ArrowDownloadRegular,
   ArrowUploadRegular,
   CardUiRegular,
-  ChevronLeftRegular,
   DeleteRegular,
   SettingsRegular,
 } from "@fluentui/react-icons";
@@ -19,6 +18,7 @@ import {
   Input,
   ListSkeleton,
   Modal,
+  MobileListSelector,
   RefreshButton,
   Select,
   Tag,
@@ -541,6 +541,23 @@ export default function CardsPage() {
     );
     return [...visible].sort(compareNaturalCards);
   }, [cards, query]);
+  const cardSelectorItems = useMemo(
+    () => filteredCards.map((card) => {
+      const candidate = candidates.find((item) => normalizeICCID(item.iccid) === normalizeICCID(card.iccid));
+      const device = card.binding?.deviceId ? deviceSummaries[card.binding.deviceId] : undefined;
+      const connection = cardConnectionState(card, device, candidates);
+      return {
+        id: normalizeICCID(card.iccid),
+        title: card.displayName || t("未命名卡片"),
+        subtitle: cardCarrierDisplay(card, candidate, device),
+        status: t(connection.label),
+        statusTone: connection.tone,
+        badge: <CardExpiryIndicator card={card} />,
+        icon: <CardUiRegular />,
+      };
+    }),
+    [candidates, deviceSummaries, filteredCards, t],
+  );
   const availableCandidates = useMemo(
     () => candidates.filter((candidate) => !candidate.registered),
     [candidates],
@@ -574,7 +591,7 @@ export default function CardsPage() {
       ) : null}
 
       <div className={cx("workspace-layout", isMobile && "is-mobile")}>
-        {(!isMobile || !selectedCard) && (
+        {!isMobile && (
           <aside className="workspace-list-panel">
             <div className="workspace-list-header">
               <div className="min-w-0">
@@ -665,14 +682,24 @@ export default function CardsPage() {
         )}
 
         <section className="workspace-detail-panel min-w-0">
+          {isMobile ? (
+            <MobileListSelector
+              items={cardSelectorItems}
+              selectedId={requestedICCID}
+              onSelect={(iccid) => selectCard(iccid)}
+              icon={<CardUiRegular />}
+              placeholder={t("选择卡片")}
+              ariaLabel={t("选择卡片")}
+              emptyText={t("暂无卡片")}
+              footer={
+                <Button block variant="primary" icon={<AddRegular />} onClick={openAdd}>
+                  {t("添加卡片")}
+                </Button>
+              }
+            />
+          ) : null}
           {selectedCard ? (
             <>
-              {isMobile ? (
-                <Button variant="text" className="mb-2" icon={<ChevronLeftRegular />} onClick={() => setSearchParams({})}>
-                  {t("返回卡片列表")}
-                </Button>
-              ) : null}
-
               <CardOverviewTab
                 card={selectedCard}
                 tabs={tabs}

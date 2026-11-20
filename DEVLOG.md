@@ -392,3 +392,9 @@ npm run build
 - 修复：将 SIM 卡片自然排序扩展到监控页设备列表和卡片列表、设备管理设备列表、短信左侧卡片范围、通话线路列表。设备按名称自然排序并在同名时按设备 ID 排序；卡片继续按名称、运营商、ICCID 排序。设备管理中的信号排序保留，并在信号相同时使用设备自然顺序。
 - 涉及文件：`web/src/lib/naturalSort.ts`、`web/src/pages/DashboardPage.tsx`、`web/src/pages/DevicesPage.tsx`、`web/src/pages/SmsPage.tsx`、`web/src/pages/CallPage.tsx`、`web/test/naturalSort.test.mjs`。
 - 验证：`npm test` 89 项通过，`npm run build` 通过。
+
+### 2026-11-20 手机端设备与通话选择器
+
+- 修复：仅在手机端为 SIM 管理增加卡片选择器，为 Agent 设备管理增加设备选择器，为通话页增加通话线路选择器。选择器点击后展开可滚动列表，显示当前项、状态和必要操作，并自动定位选中项、避开底部 Dock；设备选择器保留刷新、重新扫描和添加设备入口。设置分类菜单支持触控横向滚动并自动将当前菜单居中。桌面端原布局和交互保持不变。
+- 涉及文件：`web/src/components/ui/MobileListSelector.tsx`、`web/src/components/ui/index.ts`、`web/src/components/shell/WorkspaceSectionNav.tsx`、`web/src/pages/CardsPage.tsx`、`web/src/pages/DevicesPage.tsx`、`web/src/pages/CallPage.tsx`、`web/src/lib/i18n-en.ts`、`web/src/reborn.css`。
+- 验证：`npm test` 89 项通过，`npm run build` 通过。
